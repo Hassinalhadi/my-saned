@@ -1,12 +1,3 @@
 <resources>
-    <string name="app_name">Saned Assistant</string>
-    <string name="title_active_orders">الطلبات النشطة (Active)</string>
-    <string name="title_settings">إعدادات القبول التلقائي</string>
-    <string name="pref_auto_accept">تفعيل القبول التلقائي (Auto Accept)</string>
-    <string name="pref_min_price">أدنى سعر للطلب (SAR):</string>
-    <string name="pref_max_rest_dist">أقصى مسافة للمطعم (كم):</string>
-    <string name="pref_max_cust_dist">أقصى مسافة للتوصيل (كم):</string>
-    <string name="pref_ignore_unknown_loc">قبول الطلب حتى لو كان الموقع غير معروف (تجاوز location unknown)</string>
-    <string name="btn_save">حفظ الإعدادات</string>
-    <string name="status_unlocked">الحالة: مفتوح بالكامل (بدون قيود ترخيص)</string>
+    <string name="app_name">Saned Assistant PRO</string>
 </resources>

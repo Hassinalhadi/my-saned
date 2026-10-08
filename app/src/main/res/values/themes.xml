@@ -1,6 +1,8 @@
 <resources>
-    <style name="Theme.SanedAssistant" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">#E53935</item>
-        <item name="colorSecondary">#43A047</item>
+    <style name="Theme.SanedAssistant" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#D32F2F</item>
+        <item name="colorPrimaryVariant">#B71C1C</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#388E3C</item>
     </style>
 </resources>
