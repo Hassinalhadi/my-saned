@@ -1,0 +1,166 @@
+name: Build Saned Replica APK (Unlocked)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-replica:
+    name: Decompile, Patch & Build Unlocked APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 & Python
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Build Tools & Apktool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zipalign apksigner wget curl python3
+          
+          # تحميل Apktool
+          curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest \
+            | grep "browser_download_url.*apktool_.*\.jar" \
+            | cut -d : -f 2,3 \
+            | tr -d \" \
+            | wget -qi - -O apktool.jar
+          chmod +x apktool.jar
+
+      - name: Locate Input APK
+        id: find_apk
+        run: |
+          APK_PATH=$(find . -maxdepth 2 -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "خطأ: لم يتم العثور على ملف APK!"
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
+      - name: Decompile APK
+        run: |
+          java -jar apktool.jar d "${{ steps.find_apk.outputs.apk_path }}" -o apk_source -f
+
+      - name: Patch License & Signature Checks (Bypass Lock)
+        run: |
+          echo "=== جاري تطبيق الباتش لتجاوز شاشة Locked ==="
+
+          # 1. تعديل ملف hk.smali (بوابات التحقق من الترخيص بالواجهة)
+          HK_FILE=$(find apk_source/smali* -name "hk.smali" | head -n 1)
+          if [ -f "$HK_FILE" ]; then
+            echo "تعديل: $HK_FILE"
+            python3 -c '
+          import re, sys
+          fpath = sys.argv[1]
+          with open(fpath, "r", encoding="utf-8") as f:
+              code = f.read()
+
+          # جعل دالة L تعيد true (1) دائماً
+          code = re.sub(
+              r"(\.method\s+public\s+static\s+final\s+L\(Landroid/content/Context;Lom0;\)Z[\s\S]*?\.end method)",
+              """.method public static final L(Landroid/content/Context;Lom0;)Z
+    .registers 3
+    const/4 v0, 0x1
+    return v0
+.end method""",
+              code
+          )
+
+          # جعل دالة M تعيد 0 دائماً
+          code = re.sub(
+              r"(\.method\s+public\s+static\s+final\s+M\(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;\)I[\s\S]*?\.end method)",
+              """.method public static final M(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)I
+    .registers 4
+    const/4 v0, 0x0
+    return v0
+.end method""",
+              code
+          )
+
+          with open(fpath, "w", encoding="utf-8") as f:
+              f.write(code)
+          ' "$HK_FILE"
+          fi
+
+          # 2. تعديل Native.smali (تجاوز فحص بصمة التوقيع الرقمي للمكتبة الأصلية)
+          NATIVE_FILE=$(find apk_source/smali* -path "*/dev/jing/sanedhook/util/Native.smali" | head -n 1)
+          if [ -f "$NATIVE_FILE" ]; then
+            echo "تعديل: $NATIVE_FILE"
+            python3 -c '
+          import re, sys
+          fpath = sys.argv[1]
+          with open(fpath, "r", encoding="utf-8") as f:
+              code = f.read()
+
+          # تعديل دالة a لتعيد true
+          code = re.sub(
+              r"\.method\s+public\s+final\s+native\s+a\(Ljava/lang/Object;Ljava/lang/String;\)Z",
+              """.method public final a(Ljava/lang/Object;Ljava/lang/String;)Z
+    .registers 4
+    const/4 v0, 0x1
+    return v0""",
+              code
+          )
+
+          # تعديل دالة c لتعيد 0
+          code = re.sub(
+              r"\.method\s+public\s+final\s+native\s+c\(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J\)I",
+              """.method public final c(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)I
+    .registers 7
+    const/4 v0, 0x0
+    return v0""",
+              code
+          )
+
+          with open(fpath, "w", encoding="utf-8") as f:
+              f.write(code)
+          ' "$NATIVE_FILE"
+          fi
+
+          echo "تم تطبيق الباتش بنجاح."
+
+      - name: Rebuild Replica APK
+        run: |
+          java -jar apktool.jar b apk_source -o unsigned_replica.apk --use-aapt2
+
+      - name: Align and Sign APK
+        run: |
+          zipalign -v -p 4 unsigned_replica.apk aligned_replica.apk
+          
+          keytool -genkeypair -v -keystore test.keystore -alias saned_key \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "saned123456" -keypass "saned123456" \
+            -dname "CN=SanedAssistant, OU=Testing, O=Dev, L=Riyadh, ST=Riyadh, C=SA"
+          
+          apksigner sign --ks test.keystore \
+            --ks-pass pass:"saned123456" \
+            --key-pass pass:"saned123456" \
+            --ks-key-alias saned_key \
+            --out SanedAssistant-Unlocked.apk aligned_replica.apk
+
+      - name: Upload Unlocked APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SanedAssistant-Unlocked-APK
+          path: SanedAssistant-Unlocked.apk
+          retention-days: 14
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: SanedAssistant-Unlocked.apk
+          tag_name: "v98-unlocked-${{ github.run_number }}"
+          name: "Saned Assistant Unlocked Build #${{ github.run_number }}"
+          body: |
+            نسخة Saned Assistant مفكوكة القفل وجاهزة للاختبار بدون قيود التوقيع أو الترخيص.
