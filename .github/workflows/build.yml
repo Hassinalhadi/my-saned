@@ -27,11 +27,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.5'
+          cache-disabled: true  # تعطيل الكاش لتجنب أخطاء سيرفرات جيت هاب المؤقتة
 
-      - name: Set up Android SDK Tools
+      - name: Configure AndroidX & Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y zipalign apksigner
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.nonTransitiveRClass=true" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
 
       - name: Build APK with Gradle
         run: gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
@@ -73,4 +77,4 @@ jobs:
           tag_name: "v1.0.0-build-${{ github.run_number }}"
           name: "Saned Assistant Clean Build #${{ github.run_number }}"
           body: |
-            نسخة نظيفة ومفتوحة المصدر من تطبيق Saned Assistant تم بناؤها آلياً عبر GitHub Actions.
+            نسخة نظيفة ومفتوحة المصدر من تطبيق Saned Assistant جاهزة للاستخدام.
