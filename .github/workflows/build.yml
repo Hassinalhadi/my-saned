@@ -23,32 +23,34 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Gradle 8.5
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
       - name: Set up Android SDK Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y zipalign apksigner
 
-      - name: Grant Execute Permission to Gradle
-        run: chmod +x gradlew
-
       - name: Build APK with Gradle
-        run: ./gradlew assembleRelease --stacktrace
+        run: gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
 
       - name: Sign APK
         run: |
-          UNSIGNED_APK=$(find app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
-          if [ -z "$UNSIGNED_APK" ]; then
-            echo "Building debug APK as fallback..."
-            ./gradlew assembleDebug
-            UNSIGNED_APK=$(find app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
+          if [ -z "$APK_FOUND" ]; then
+            echo "Error: No APK found after build!"
+            exit 1
           fi
+          echo "Found built APK: $APK_FOUND"
           
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass "saned123" -keypass "saned123" \
             -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
 
-          zipalign -v -p 4 "$UNSIGNED_APK" aligned.apk || cp "$UNSIGNED_APK" aligned.apk
+          zipalign -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
 
           apksigner sign --ks release.keystore \
             --ks-pass pass:"saned123" \
@@ -72,6 +74,3 @@ jobs:
           name: "Saned Assistant Clean Build #${{ github.run_number }}"
           body: |
             نسخة نظيفة ومفتوحة المصدر من تطبيق Saned Assistant تم بناؤها آلياً عبر GitHub Actions.
-            - بدون شاشات قفل أو تراخيص.
-            - معالجة ذكية للموقع لتفادي location unknown.
-            - جاهزة للعمل مع LSPosed.
