@@ -97,7 +97,7 @@ jobs:
 
       - name: Rebuild Replica APK
         run: |
-          java -jar apktool.jar b apk_source -o unsigned_replica.apk --use-aapt2
+          java -jar apktool.jar b apk_source -o unsigned_replica.apk
 
       - name: Align and Sign APK
         run: |
