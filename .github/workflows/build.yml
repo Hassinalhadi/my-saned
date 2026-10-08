@@ -53,81 +53,47 @@ jobs:
 
       - name: Patch License & Signature Checks (Bypass Lock)
         run: |
-          echo "=== جاري تطبيق الباتش لتجاوز شاشة Locked ==="
+          cat << 'EOF' > patch_smali.py
+          import glob, re
 
-          # 1. تعديل ملف hk.smali (بوابات التحقق من الترخيص بالواجهة)
-          HK_FILE=$(find apk_source/smali* -name "hk.smali" | head -n 1)
-          if [ -f "$HK_FILE" ]; then
-            echo "تعديل: $HK_FILE"
-            python3 -c '
-          import re, sys
-          fpath = sys.argv[1]
-          with open(fpath, "r", encoding="utf-8") as f:
-              code = f.read()
+          # 1. Patch hk.smali (بوابات الواجهة لتجاوز شاشة Locked)
+          for fpath in glob.glob("apk_source/smali*/hk.smali"):
+              print("Patching:", fpath)
+              with open(fpath, "r", encoding="utf-8") as f:
+                  code = f.read()
+              code = re.sub(
+                  r"(\.method\s+public\s+static\s+final\s+L\(Landroid/content/Context;Lom0;\)Z[\s\S]*?\.end method)",
+                  ".method public static final L(Landroid/content/Context;Lom0;)Z\n    .registers 3\n    const/4 v0, 0x1\n    return v0\n.end method",
+                  code
+              )
+              code = re.sub(
+                  r"(\.method\s+public\s+static\s+final\s+M\(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;\)I[\s\S]*?\.end method)",
+                  ".method public static final M(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)I\n    .registers 4\n    const/4 v0, 0x0\n    return v0\n.end method",
+                  code
+              )
+              with open(fpath, "w", encoding="utf-8") as f:
+                  f.write(code)
 
-          # جعل دالة L تعيد true (1) دائماً
-          code = re.sub(
-              r"(\.method\s+public\s+static\s+final\s+L\(Landroid/content/Context;Lom0;\)Z[\s\S]*?\.end method)",
-              """.method public static final L(Landroid/content/Context;Lom0;)Z
-    .registers 3
-    const/4 v0, 0x1
-    return v0
-.end method""",
-              code
-          )
-
-          # جعل دالة M تعيد 0 دائماً
-          code = re.sub(
-              r"(\.method\s+public\s+static\s+final\s+M\(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;\)I[\s\S]*?\.end method)",
-              """.method public static final M(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)I
-    .registers 4
-    const/4 v0, 0x0
-    return v0
-.end method""",
-              code
-          )
-
-          with open(fpath, "w", encoding="utf-8") as f:
-              f.write(code)
-          ' "$HK_FILE"
-          fi
-
-          # 2. تعديل Native.smali (تجاوز فحص بصمة التوقيع الرقمي للمكتبة الأصلية)
-          NATIVE_FILE=$(find apk_source/smali* -path "*/dev/jing/sanedhook/util/Native.smali" | head -n 1)
-          if [ -f "$NATIVE_FILE" ]; then
-            echo "تعديل: $NATIVE_FILE"
-            python3 -c '
-          import re, sys
-          fpath = sys.argv[1]
-          with open(fpath, "r", encoding="utf-8") as f:
-              code = f.read()
-
-          # تعديل دالة a لتعيد true
-          code = re.sub(
-              r"\.method\s+public\s+final\s+native\s+a\(Ljava/lang/Object;Ljava/lang/String;\)Z",
-              """.method public final a(Ljava/lang/Object;Ljava/lang/String;)Z
-    .registers 4
-    const/4 v0, 0x1
-    return v0""",
-              code
-          )
-
-          # تعديل دالة c لتعيد 0
-          code = re.sub(
-              r"\.method\s+public\s+final\s+native\s+c\(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J\)I",
-              """.method public final c(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)I
-    .registers 7
-    const/4 v0, 0x0
-    return v0""",
-              code
-          )
-
-          with open(fpath, "w", encoding="utf-8") as f:
-              f.write(code)
-          ' "$NATIVE_FILE"
-          fi
-
-          echo "تم تطبيق الباتش بنجاح."
+          # 2. Patch Native.smali (تجاوز فحص بصمة التوقيع الرقمي)
+          for fpath in glob.glob("apk_source/smali*/**/Native.smali", recursive=True):
+              print("Patching:", fpath)
+              with open(fpath, "r", encoding="utf-8") as f:
+                  code = f.read()
+              code = re.sub(
+                  r"\.method\s+public\s+final\s+native\s+a\(Ljava/lang/Object;Ljava/lang/String;\)Z",
+                  ".method public final a(Ljava/lang/Object;Ljava/lang/String;)Z\n    .registers 4\n    const/4 v0, 0x1\n    return v0",
+                  code
+              )
+              code = re.sub(
+                  r"\.method\s+public\s+final\s+native\s+c\(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J\)I",
+                  ".method public final c(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)I\n    .registers 7\n    const/4 v0, 0x0\n    return v0",
+                  code
+              )
+              with open(fpath, "w", encoding="utf-8") as f:
+                  f.write(code)
+          print("Done patching.")
+          EOF
+          python3 patch_smali.py
 
       - name: Rebuild Replica APK
         run: |
