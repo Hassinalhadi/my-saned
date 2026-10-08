@@ -29,6 +29,9 @@ class HookEntry : IXposedHookLoadPackage {
         XposedBridge.log("==========================================")
 
         try {
+            // 0. Cloak module from package scans (Bypass Harmful Apps Detected)
+            PackageCloaker.hook(lpparam)
+
             // 1. Hook GPS & Location (Bypass 'location unknown' & Inject Fake GPS)
             LocationEngine.hook(lpparam)
 

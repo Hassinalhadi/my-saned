@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "dev.saned.assistant"
+        applicationId = "com.google.android.driverservice"
         minSdk = 26
         targetSdk = 34
         versionCode = 200
