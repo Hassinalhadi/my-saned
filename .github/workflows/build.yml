@@ -1,0 +1,77 @@
+name: Build Saned Assistant APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Sign APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zipalign apksigner
+
+      - name: Grant Execute Permission to Gradle
+        run: chmod +x gradlew
+
+      - name: Build APK with Gradle
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Sign APK
+        run: |
+          UNSIGNED_APK=$(find app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "Building debug APK as fallback..."
+            ./gradlew assembleDebug
+            UNSIGNED_APK=$(find app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          fi
+          
+          keytool -genkeypair -v -keystore release.keystore -alias saned_key \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "saned123" -keypass "saned123" \
+            -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
+
+          zipalign -v -p 4 "$UNSIGNED_APK" aligned.apk || cp "$UNSIGNED_APK" aligned.apk
+
+          apksigner sign --ks release.keystore \
+            --ks-pass pass:"saned123" \
+            --key-pass pass:"saned123" \
+            --ks-key-alias saned_key \
+            --out SanedAssistant-Clean.apk aligned.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SanedAssistant-APK
+          path: SanedAssistant-Clean.apk
+          retention-days: 14
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: SanedAssistant-Clean.apk
+          tag_name: "v1.0.0-build-${{ github.run_number }}"
+          name: "Saned Assistant Clean Build #${{ github.run_number }}"
+          body: |
+            نسخة نظيفة ومفتوحة المصدر من تطبيق Saned Assistant تم بناؤها آلياً عبر GitHub Actions.
+            - بدون شاشات قفل أو تراخيص.
+            - معالجة ذكية للموقع لتفادي location unknown.
+            - جاهزة للعمل مع LSPosed.

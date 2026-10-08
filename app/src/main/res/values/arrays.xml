@@ -1,0 +1,5 @@
+<resources>
+    <string-array name="xposed_scope">
+        <item>net.jahez.fleets</item>
+    </string-array>
+</resources>
