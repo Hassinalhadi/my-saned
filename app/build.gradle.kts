@@ -4,6 +4,18 @@ plugins {
 }
 
 android {
+    sourceSets {
+        getByName("main") {
+            resources.srcDirs("src/main/resources")
+            assets.srcDirs("src/main/assets")
+        }
+    }
+    packaging {
+        resources {
+            merges += "META-INF/xposed/**"
+            pickFirsts += "META-INF/xposed/**"
+        }
+    }
     namespace = "dev.saned.assistant"
     compileSdk = 34
 

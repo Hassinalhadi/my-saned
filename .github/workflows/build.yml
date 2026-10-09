@@ -48,6 +48,22 @@ jobs:
             exit 1
           fi
           echo "Found built APK: $APK_FOUND"
+
+          # Fail-safe: Inject META-INF/xposed and assets/xposed_init directly into APK
+          mkdir -p apk_injector/META-INF/xposed apk_injector/assets
+          echo "dev.saned.assistant.HookEntry" > apk_injector/META-INF/xposed/java_init.list
+          echo -e "minApiVersion=100\ntargetApiVersion=102\nstaticScope=true" > apk_injector/META-INF/xposed/module.prop
+          echo "net.jahez.fleets" > apk_injector/META-INF/xposed/scope.list
+          echo "dev.saned.assistant.HookEntry" > apk_injector/assets/xposed_init
+
+          cd apk_injector
+          zip -u "../$APK_FOUND" META-INF/xposed/* assets/* || true
+          cd ..
+          if [ -z "$APK_FOUND" ]; then
+            echo "Error: No APK found after build!"
+            exit 1
+          fi
+          echo "Found built APK: $APK_FOUND"
           
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \

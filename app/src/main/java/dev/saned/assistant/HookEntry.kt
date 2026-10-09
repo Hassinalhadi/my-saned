@@ -1,10 +1,19 @@
 package dev.saned.assistant
 
+import android.app.Activity
+import android.content.Context
+import android.os.Bundle
+import android.widget.Toast
+import de.robv.android.xposed.IXposedHookLoadPackage
+import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XposedBridge
+import de.robv.android.xposed.XposedHelpers
+import de.robv.android.xposed.callbacks.XC_LoadPackage
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
-import de.robv.android.xposed.XposedBridge
+import java.util.concurrent.atomic.AtomicBoolean
 
-class HookEntry : XposedModule() {
+class HookEntry : XposedModule(), IXposedHookLoadPackage {
 
     companion object {
         @Volatile var isModuleEnabled: Boolean = true
@@ -16,34 +25,55 @@ class HookEntry : XposedModule() {
         @Volatile var maxDistCustomer: Double = 15.0
         @Volatile var isSoundEnabled: Boolean = true
         @Volatile var isShowToasts: Boolean = true
+
+        private val isInitialized = AtomicBoolean(false)
+
+        fun initAllHooks(classLoader: ClassLoader) {
+            if (!isInitialized.compareAndSet(false, true)) return
+
+            XposedBridge.log("==========================================")
+            XposedBridge.log("SanedAssistant PRO: Hooks Active in net.jahez.fleets!")
+            XposedBridge.log("==========================================")
+
+            try {
+                // Show a toast when Jahez opens so user knows 100% the hook is running!
+                XposedHelpers.findAndHookMethod(
+                    Activity::class.java,
+                    "onCreate",
+                    Bundle::class.java,
+                    object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            val act = param.thisObject as Activity
+                            if (act.packageName == "net.jahez.fleets") {
+                                Toast.makeText(act, "⚡ مساعد سند مفعل ويعمل بنجاح!", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                )
+            } catch (_: Throwable) {}
+
+            try {
+                PackageCloaker.hook(classLoader)
+                LocationEngine.hook(classLoader)
+                DeviceSpoofer.hook(classLoader)
+                OrderInterceptor.hook(classLoader)
+            } catch (t: Throwable) {
+                XposedBridge.log("SanedAssistant: Critical hook error: ${t.message}")
+            }
+        }
     }
 
+    // 1. Called by Modern LibXposed
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
-        val targetPkg = param.packageName
-        if (targetPkg != "net.jahez.fleets") return
+        if (param.packageName == "net.jahez.fleets") {
+            initAllHooks(param.defaultClassLoader ?: param.classLoader)
+        }
+    }
 
-        XposedBridge.log("==========================================")
-        XposedBridge.log("SanedAssistant PRO: Hooking net.jahez.fleets (Modern LibXposed)")
-        XposedBridge.log("==========================================")
-
-        val classLoader = param.defaultClassLoader ?: param.classLoader
-
-        try {
-            // 0. Cloak module from package scans
-            PackageCloaker.hook(classLoader)
-
-            // 1. Hook GPS & Location
-            LocationEngine.hook(classLoader)
-
-            // 2. Hook Device Identity (Android ID, IMEI, Hardware, TextView)
-            DeviceSpoofer.hook(classLoader)
-
-            // 3. Hook Orders & Auto-Accept
-            OrderInterceptor.hook(classLoader)
-
-            XposedBridge.log("SanedAssistant PRO: All hooks active via LibXposed!")
-        } catch (t: Throwable) {
-            XposedBridge.log("SanedAssistant PRO: Hook error: ${t.message}")
+    // 2. Called by Legacy Xposed
+    override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        if (lpparam.packageName == "net.jahez.fleets") {
+            initAllHooks(lpparam.classLoader)
         }
     }
 }
