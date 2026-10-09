@@ -56,10 +56,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 
-    // LibXposed official API & Service from Maven Central
+    // LibXposed official API
     compileOnly("io.github.libxposed:api:100-1.0.2")
-    implementation("io.github.libxposed:service:100-1.0.1")
 
-    // Classic Xposed (compileOnly, for compatibility if needed)
+    // Classic Xposed (compileOnly, for compatibility)
     compileOnly("de.robv.android.xposed:api:82")
 }
