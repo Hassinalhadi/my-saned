@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.google.android.driverservice"
+        applicationId = "dev.jing.sanedhook"
         minSdk = 26
         targetSdk = 34
         versionCode = 200
