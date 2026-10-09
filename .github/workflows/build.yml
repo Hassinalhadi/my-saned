@@ -40,7 +40,7 @@ jobs:
       - name: Build APK with Gradle
         run: gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
 
-      - name: Inject Xposed Metadata & Sign APK
+      - name: Sign APK
         run: |
           APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
           if [ -z "$APK_FOUND" ]; then
@@ -48,15 +48,6 @@ jobs:
             exit 1
           fi
           echo "Found built APK: $APK_FOUND"
-
-          # Fail-safe: Inject META-INF/xposed directly into root of APK using Python
-          python3 -c "
-          import zipfile
-          with zipfile.ZipFile('$APK_FOUND', 'a') as z:
-              z.writestr('META-INF/xposed/java_init.list', 'dev.saned.assistant.HookEntry\n')
-              z.writestr('META-INF/xposed/module.prop', 'minApiVersion=100\ntargetApiVersion=102\nstaticScope=true\n')
-              z.writestr('META-INF/xposed/scope.list', 'net.jahez.fleets\n')
-          "
 
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \
