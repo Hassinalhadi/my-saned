@@ -50,7 +50,7 @@ jobs:
           echo "Found built APK: $APK_FOUND"
 
           # Verify Xposed metadata is bundled by Gradle
-          unzip -l "" | grep "META-INF/xposed/" || echo "Xposed metadata checked"
+          unzip -l "$APK_FOUND" | grep "META-INF/xposed/" || echo "Xposed metadata checked"
 
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \
