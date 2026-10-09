@@ -13,7 +13,6 @@ import android.widget.Toast
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -22,8 +21,8 @@ object OrderInterceptor {
     private val isAccepting = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val classLoader = lpparam.classLoader
+    fun hook(classLoader: ClassLoader) {
+        // classLoader passed via parameter
 
         // Hook Activity lifecycle to detect order views and accept button
         try {

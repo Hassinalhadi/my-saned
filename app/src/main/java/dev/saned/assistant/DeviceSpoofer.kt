@@ -12,7 +12,6 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 
 object DeviceSpoofer {
@@ -48,8 +47,8 @@ object DeviceSpoofer {
         return "7a8b9c0d1e2f3456" // Default custom ID (never original)
     }
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val classLoader = lpparam.classLoader
+    fun hook(classLoader: ClassLoader) {
+        // classLoader passed via parameter
 
         // 1. Hook Settings.Secure.getString(ContentResolver, String)
         try {

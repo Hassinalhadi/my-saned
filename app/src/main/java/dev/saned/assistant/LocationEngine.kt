@@ -9,7 +9,6 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import kotlin.math.*
 
@@ -75,7 +74,7 @@ object LocationEngine {
         return r * c
     }
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
+    fun hook(classLoader: ClassLoader) {
         // 1. UNIVERSAL HOOK: Hook Location.getLatitude() & Location.getLongitude()
         try {
             XposedHelpers.findAndHookMethod(

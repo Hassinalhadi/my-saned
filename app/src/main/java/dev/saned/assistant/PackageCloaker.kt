@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 object PackageCloaker {
 
@@ -19,13 +18,10 @@ object PackageCloaker {
         "driverservice"
     )
 
-    fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val classLoader = lpparam.classLoader
-
+    fun hook(classLoader: ClassLoader) {
         try {
             val pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", classLoader)
 
-            // 1. Hook getInstalledPackages to remove blacklisted companion apps
             val getInstalledPackagesHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val list = param.result as? List<*> ?: return
@@ -43,7 +39,6 @@ object PackageCloaker {
                 }
             }
 
-            // 2. Hook getInstalledApplications
             val getInstalledAppsHook = object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val list = param.result as? List<*> ?: return
@@ -61,7 +56,6 @@ object PackageCloaker {
                 }
             }
 
-            // 3. Hook getPackageInfo
             val getPackageInfoHook = object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val pkg = param.args[0] as? String ?: return
@@ -77,23 +71,7 @@ object PackageCloaker {
                 }
             }
 
-            // 4. Hook getApplicationInfo
-            val getAppInfoHook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val pkg = param.args[0] as? String ?: return
-                    if (isHarmfulPackage(pkg)) {
-                        param.throwable = PackageManager.NameNotFoundException("Application $pkg not found")
-                    }
-                }
-            }
-
-            for (m in pmClass.declaredMethods) {
-                if (m.name == "getApplicationInfo") {
-                    XposedBridge.hookMethod(m, getAppInfoHook)
-                }
-            }
-
-            XposedBridge.log("SanedAssistant: PackageCloaker armed - All harmful package detections bypassed!")
+            XposedBridge.log("SanedAssistant: PackageCloaker armed!")
         } catch (t: Throwable) {
             XposedBridge.log("SanedAssistant: PackageCloaker error: ${t.message}")
         }
