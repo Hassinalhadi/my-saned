@@ -615,8 +615,7 @@ class MainActivity : AppCompatActivity() {
 
         if (array.length() == 0) {
             val emptyTv = TextView(this).apply {
-                text = "لا توجد طلبات ملتقطة حتى الآن.
-(تأكد من تشغيل المساعد واستقبال طلبات في تطبيق جاهز)."
+                text = "لا توجد طلبات ملتقطة حتى الآن. (تأكد من تشغيل المساعد واستقبال طلبات في تطبيق جاهز)."
                 textSize = 12.5f
                 setTextColor(Color.parseColor("#94A3B8"))
                 gravity = Gravity.CENTER

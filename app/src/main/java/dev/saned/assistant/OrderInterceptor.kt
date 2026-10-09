@@ -93,7 +93,7 @@ object OrderInterceptor {
         try {
             val realCallClass = Class.forName("okhttp3.RealCall", false, classLoader)
             for (m in realCallClass.declaredMethods) {
-                if (m.name == "getResponseWithInterceptorChain" || m.name == "getResponseWithInterceptorChain$okhttp") {
+                if (m.name.startsWith("getResponseWithInterceptorChain")) {
                     m.isAccessible = true
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
@@ -260,20 +260,20 @@ object OrderInterceptor {
         fun traverse(v: View) {
             if (v is TextView) {
                 val text = v.text.toString()
-                if (text.contains("SAR") || text.contains("﷼") || text.matches(Regex(".*\d+\.\d+.*"))) {
-                    val priceMatch = Regex("(\d+(?:\.\d+)?)").find(text)
+                if (text.contains("SAR") || text.contains("﷼") || text.matches(Regex(""".*\d+\.\d+.*"""))) {
+                    val priceMatch = Regex("""(\d+(?:\.\d+)?)""").find(text)
                     if (priceMatch != null && orderPrice == 0.0) {
                         orderPrice = priceMatch.value.toDoubleOrNull() ?: 0.0
                     }
                 }
                 if (text.contains("From You", ignoreCase = true) || text.contains("منك")) {
-                    val distMatch = Regex("(\d+(?:\.\d+)?)\s*Km").find(text)
+                    val distMatch = Regex("""(\d+(?:\.\d+)?)\s*Km""").find(text)
                     if (distMatch != null) {
                         distToRestaurant = distMatch.groupValues[1].toDoubleOrNull() ?: 0.0
                     }
                 }
-                if (text.contains("#") || text.matches(Regex(".*\d{7,}.*"))) {
-                    val idMatch = Regex("(#?\d{7,})").find(text)
+                if (text.contains("#") || text.matches(Regex(""".*\d{7,}.*"""))) {
+                    val idMatch = Regex("""(#?\d{7,})""").find(text)
                     if (idMatch != null) {
                         orderId = idMatch.value
                     }
