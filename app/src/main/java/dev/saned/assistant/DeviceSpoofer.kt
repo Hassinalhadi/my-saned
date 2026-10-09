@@ -27,11 +27,29 @@ object DeviceSpoofer {
         } catch (_: Throwable) {}
     }
 
-    fun syncSettings() {
+    fun syncSettings(resolver: ContentResolver? = null) {
+        if (resolver != null) {
+            try {
+                val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
+                val bundle = resolver.call(uri, "getSettings", null, null)
+                if (bundle != null && !bundle.isEmpty) {
+                    isMasterRunning = bundle.getBoolean("master_running", isMasterRunning)
+                    isSpoofAndroidId = bundle.getBoolean("spoof_android_id", isSpoofAndroidId)
+                    val sId = bundle.getString("spoofed_android_id")
+                    if (!sId.isNullOrEmpty()) {
+                        spoofedAndroidId = sId
+                    }
+                    return
+                }
+            } catch (_: Throwable) {}
+        }
         remotePrefs?.let { p ->
-            isMasterRunning = p.getBoolean("master_running", false)
-            isSpoofAndroidId = p.getBoolean("spoof_android_id", false)
-            spoofedAndroidId = p.getString("spoofed_android_id", "") ?: ""
+            isMasterRunning = p.getBoolean("master_running", isMasterRunning)
+            isSpoofAndroidId = p.getBoolean("spoof_android_id", isSpoofAndroidId)
+            val sId = p.getString("spoofed_android_id", "")
+            if (!sId.isNullOrEmpty()) {
+                spoofedAndroidId = sId
+            }
         }
     }
 
