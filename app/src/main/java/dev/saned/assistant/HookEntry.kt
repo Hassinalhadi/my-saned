@@ -14,14 +14,18 @@ class HookEntry : XposedModule() {
 
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
         if (param.packageName != "net.jahez.fleets") return
-        val classLoader = param.defaultClassLoader ?: param.classLoader
-        initAllHooks(classLoader)
+        val cl = param.defaultClassLoader
+        if (cl != null) {
+            initAllHooks(cl)
+        }
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         if (param.packageName != "net.jahez.fleets") return
-        val classLoader = param.classLoader
-        initAllHooks(classLoader)
+        val cl = param.classLoader
+        if (cl != null) {
+            initAllHooks(cl)
+        }
     }
 
     private fun initAllHooks(classLoader: ClassLoader) {
