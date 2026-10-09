@@ -192,7 +192,7 @@ class MainActivity : AppCompatActivity() {
             setTypeface(null, android.graphics.Typeface.BOLD)
             setPadding(0, 28, 0, 28)
             setOnClickListener {
-                val prefs = SettingsStore.getPrefs(this@MainActivity).edit()
+                                val prefs = SettingsStore.getPrefs(this@MainActivity).edit()
                 prefs.putBoolean(SettingsStore.KEY_AUTO_ACCEPT, chkAutoAccept.isChecked)
                 prefs.putBoolean(SettingsStore.KEY_AUTO_REJECT, chkAutoReject.isChecked)
                 prefs.putBoolean(SettingsStore.KEY_DRY_RUN, chkDryRun.isChecked)
@@ -207,23 +207,15 @@ class MainActivity : AppCompatActivity() {
 
                 prefs.putBoolean(SettingsStore.KEY_SPOOF_ANDROID_ID, chkSpoofId.isChecked)
                 prefs.putString(SettingsStore.KEY_SPOOFED_ANDROID_ID, edtAndroidId.text.toString())
-                prefs.putBoolean(SettingsStore.KEY_SPOOF_IMEI, chkSpoofImei.isChecked)
-                prefs.putString(SettingsStore.KEY_SPOOFED_IMEI, edtImei.text.toString())
-
-                prefs.putBoolean(SettingsStore.KEY_SHOW_OVERLAY, chkOverlay.isChecked)
-                prefs.putBoolean(SettingsStore.KEY_SOUND, chkSound.isChecked)
-                prefs.putBoolean(SettingsStore.KEY_SHOW_TOASTS, chkToasts.isChecked)
                 prefs.apply()
 
-                // Check overlay permission
-                if (chkOverlay.isChecked) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName))
-                        startActivity(intent)
-                    } else {
-                        startService(Intent(this@MainActivity, OverlayService::class.java))
-                    }
-                }
+                // Save direct config files to Download folder for 100% reliable cross-app sync
+                try {
+                    val dlDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    dlDir.mkdirs()
+                    java.io.File(dlDir, "saned_device_id.txt").writeText(edtAndroidId.text.toString().trim())
+                    java.io.File(dlDir, "saned_location.txt").writeText("${chkFakeLoc.isChecked},${edtLat.text},${edtLng.text}")
+                } catch (_: Throwable) {}
 
                 Toast.makeText(this@MainActivity, "✅ تم حفظ وتحديث الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
             }
