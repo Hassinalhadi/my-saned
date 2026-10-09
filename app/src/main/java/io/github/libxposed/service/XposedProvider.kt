@@ -2,8 +2,10 @@ package io.github.libxposed.service
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 
 class XposedProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -12,4 +14,22 @@ class XposedProvider : ContentProvider() {
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
+        val bundle = Bundle()
+        if (method == "get_settings") {
+            val ctx = context ?: return bundle
+            val sp = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            for ((key, value) in sp.all) {
+                when (value) {
+                    is Boolean -> bundle.putBoolean(key, value)
+                    is String -> bundle.putString(key, value)
+                    is Int -> bundle.putInt(key, value)
+                    is Float -> bundle.putFloat(key, value)
+                    is Long -> bundle.putLong(key, value)
+                }
+            }
+        }
+        return bundle
+    }
 }

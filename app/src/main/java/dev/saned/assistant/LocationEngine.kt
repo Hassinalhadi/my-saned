@@ -1,5 +1,6 @@
 package dev.saned.assistant
 
+import android.content.Context
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -17,13 +18,6 @@ object LocationEngine {
     @Volatile var isFakeLocationEnabled: Boolean = false
     @Volatile var isFixLocationUnknownEnabled: Boolean = true
 
-    fun setLocation(lat: Double, lng: Double) {
-        if (lat != 0.0 && lng != 0.0) {
-            currentLat = lat
-            currentLng = lng
-        }
-    }
-
     fun createAccurateLocation(provider: String = "gps"): Location {
         return Location(provider).apply {
             latitude = currentLat
@@ -31,7 +25,7 @@ object LocationEngine {
             altitude = 612.0
             time = System.currentTimeMillis()
             elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-            accuracy = 3.5f
+            accuracy = 3.0f
             speed = 0.0f
             bearing = 0.0f
         }
@@ -47,12 +41,58 @@ object LocationEngine {
     }
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val lmClass = LocationManager::class.java
+        val classLoader = lpparam.classLoader
 
-        // 1. Hook getLastKnownLocation to completely resolve "location unknown"
+        // 1. UNIVERSAL HOOK: Hook Location.getLatitude() & Location.getLongitude()
+        // This guarantees that ANY library (Google Maps SDK, FusedLocationProviderClient, Mapbox, or Jahez internal classes)
+        // reading coordinates will receive the exact spoofed coordinates!
         try {
             XposedHelpers.findAndHookMethod(
-                lmClass,
+                Location::class.java,
+                "getLatitude",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        if (isFakeLocationEnabled) {
+                            param.result = currentLat
+                        }
+                    }
+                }
+            )
+
+            XposedHelpers.findAndHookMethod(
+                Location::class.java,
+                "getLongitude",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        if (isFakeLocationEnabled) {
+                            param.result = currentLng
+                        }
+                    }
+                }
+            )
+
+            XposedHelpers.findAndHookMethod(
+                Location::class.java,
+                "getAccuracy",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        if (isFakeLocationEnabled || isFixLocationUnknownEnabled) {
+                            val acc = param.result as? Float ?: 0.0f
+                            if (acc <= 0.0f || acc > 15.0f) {
+                                param.result = 3.0f
+                            }
+                        }
+                    }
+                }
+            )
+        } catch (t: Throwable) {
+            XposedBridge.log("SanedAssistant: Error hooking Location getters: ${t.message}")
+        }
+
+        // 2. Hook LocationManager.getLastKnownLocation
+        try {
+            XposedHelpers.findAndHookMethod(
+                LocationManager::class.java,
                 "getLastKnownLocation",
                 String::class.java,
                 object : XC_MethodHook() {
@@ -60,13 +100,7 @@ object LocationEngine {
                         val provider = param.args[0] as? String ?: "gps"
                         if (isFakeLocationEnabled || (isFixLocationUnknownEnabled && param.result == null)) {
                             param.result = createAccurateLocation(provider)
-                            XposedBridge.log("SanedAssistant: Injected valid Location (Lat: $currentLat, Lng: $currentLng)")
-                        } else if (param.result != null) {
-                            val loc = param.result as Location
-                            if (!isFakeLocationEnabled) {
-                                currentLat = loc.latitude
-                                currentLng = loc.longitude
-                            }
+                            XposedBridge.log("SanedAssistant: Injected getLastKnownLocation -> Lat: $currentLat, Lng: $currentLng")
                         }
                     }
                 }
@@ -75,26 +109,27 @@ object LocationEngine {
             XposedBridge.log("SanedAssistant: Error hooking getLastKnownLocation: ${t.message}")
         }
 
-        // 2. Hook requestLocationUpdates to deliver continuous mock/safe locations
+        // 3. Hook LocationManager.requestLocationUpdates
         try {
-            XposedHelpers.findAndHookMethod(
-                lmClass,
-                "requestLocationUpdates",
-                String::class.java,
-                Long::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-                LocationListener::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val listener = param.args[3] as? LocationListener ?: return
-                        if (isFakeLocationEnabled || isFixLocationUnknownEnabled) {
-                            try {
-                                listener.onLocationChanged(createAccurateLocation(param.args[0] as? String ?: "gps"))
-                            } catch (_: Throwable) {}
+            val listenerHook = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    for (arg in param.args) {
+                        if (arg is LocationListener) {
+                            if (isFakeLocationEnabled || isFixLocationUnknownEnabled) {
+                                try {
+                                    arg.onLocationChanged(createAccurateLocation("gps"))
+                                } catch (_: Throwable) {}
+                            }
                         }
                     }
                 }
-            )
+            }
+
+            for (m in LocationManager::class.java.declaredMethods) {
+                if (m.name == "requestLocationUpdates") {
+                    XposedBridge.hookMethod(m, listenerHook)
+                }
+            }
         } catch (t: Throwable) {
             XposedBridge.log("SanedAssistant: Error hooking requestLocationUpdates: ${t.message}")
         }

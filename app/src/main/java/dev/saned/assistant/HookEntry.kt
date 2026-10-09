@@ -1,13 +1,16 @@
 package dev.saned.assistant
 
+import android.app.Application
+import android.content.Context
 import de.robv.android.xposed.IXposedHookLoadPackage
+import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
+import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 class HookEntry : IXposedHookLoadPackage {
 
     companion object {
-        // In-memory synced settings for zero-latency lookups
         @Volatile var isModuleEnabled: Boolean = true
         @Volatile var isAutoAccept: Boolean = true
         @Volatile var isAutoReject: Boolean = false
@@ -15,8 +18,6 @@ class HookEntry : IXposedHookLoadPackage {
         @Volatile var minOrderPrice: Double = 0.0
         @Volatile var maxDistToRestaurant: Double = 8.0
         @Volatile var maxDistCustomer: Double = 15.0
-        @Volatile var spoofedAndroidId: String = "d41d8cd98f00b204"
-        @Volatile var spoofedImei: String = "869402041234567"
         @Volatile var isSoundEnabled: Boolean = true
         @Volatile var isShowToasts: Boolean = true
     }
@@ -29,19 +30,33 @@ class HookEntry : IXposedHookLoadPackage {
         XposedBridge.log("==========================================")
 
         try {
-            // 0. Cloak module from package scans (Bypass Harmful Apps Detected)
+            // Hook Application.onCreate to immediately sync settings
+            try {
+                XposedHelpers.findAndHookMethod(
+                    Application::class.java,
+                    "onCreate",
+                    object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            val app = param.thisObject as Application
+                            SettingsSync.syncFromProvider(app.contentResolver)
+                        }
+                    }
+                )
+            } catch (_: Throwable) {}
+
+            // 0. Cloak module from package scans
             PackageCloaker.hook(lpparam)
 
-            // 1. Hook GPS & Location (Bypass 'location unknown' & Inject Fake GPS)
+            // 1. Hook GPS & Location
             LocationEngine.hook(lpparam)
 
-            // 2. Hook Device Identity (Spoof Android ID, IMEI, Hardware)
+            // 2. Hook Device Identity (Android ID, IMEI, Hardware)
             DeviceSpoofer.hook(lpparam)
 
-            // 3. Hook Orders & Auto-Accept (Instant 0ms parallel accept)
+            // 3. Hook Orders & Auto-Accept
             OrderInterceptor.hook(lpparam)
 
-            XposedBridge.log("SanedAssistant PRO: All hooks active with zero license restrictions!")
+            XposedBridge.log("SanedAssistant PRO: All hooks active with dynamic IPC settings sync!")
         } catch (t: Throwable) {
             XposedBridge.log("SanedAssistant PRO: Critical hook error: ${t.message}")
         }
