@@ -15,6 +15,8 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
 import dev.saned.assistant.SettingsStore
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Random
 
 class MainActivity : AppCompatActivity() {
@@ -40,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
+    private lateinit var ordersLogContainer: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +89,9 @@ class MainActivity : AppCompatActivity() {
 
         // ================= SECTION 3: AUTO ACCEPT & SMART FILTERS =================
         mainLayout.addView(createFiltersCard())
+
+        // ================= SECTION 4: ORDERS LIVE LOG =================
+        mainLayout.addView(createOrdersLogCard())
 
         // ================= SAVE BUTTON =================
         val btnSave = Button(this).apply {
@@ -538,4 +544,154 @@ class MainActivity : AppCompatActivity() {
             Toast.LENGTH_LONG
         ).show()
     }
+
+    private fun createOrdersLogCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+
+        val title = TextView(this).apply {
+            text = "📋 سجل الطلبات اللحظي (HTTP / WebSocket)"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(title)
+
+        val desc = TextView(this).apply {
+            text = "يتم رصد الطلبات الملتقطة فوراً عبر شبكة جاهز HTTP / WebSocket وعرضها هنا:"
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(desc)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 12)
+        }
+
+        val btnRefresh = Button(this).apply {
+            text = "🔄 تحديث السجل"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { refreshOrdersLogUI() }
+        }
+        btnRow.addView(btnRefresh)
+
+        val btnClear = Button(this).apply {
+            text = "🗑️ مسح السجل"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                SettingsStore.clearOrdersLog(this@MainActivity)
+                refreshOrdersLogUI()
+                Toast.makeText(this@MainActivity, "تم مسح سجل الطلبات", Toast.LENGTH_SHORT).show()
+            }
+        }
+        btnRow.addView(btnClear)
+        layout.addView(btnRow)
+
+        ordersLogContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        layout.addView(ordersLogContainer)
+
+        refreshOrdersLogUI()
+
+        card.addView(layout)
+        return card
+    }
+
+    private fun refreshOrdersLogUI() {
+        if (!::ordersLogContainer.isInitialized) return
+        ordersLogContainer.removeAllViews()
+
+        val jsonStr = SettingsStore.getOrdersLog(this)
+        val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
+
+        if (array.length() == 0) {
+            val emptyTv = TextView(this).apply {
+                text = "لا توجد طلبات ملتقطة حتى الآن.
+(تأكد من تشغيل المساعد واستقبال طلبات في تطبيق جاهز)."
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#94A3B8"))
+                gravity = Gravity.CENTER
+                setPadding(0, 20, 0, 20)
+            }
+            ordersLogContainer.addView(emptyTv)
+            return
+        }
+
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val id = item.optString("id", "#--")
+            val price = item.optDouble("price", 0.0)
+            val dist = item.optDouble("distance", 0.0)
+            val rest = item.optString("restaurant", "")
+            val status = item.optString("status", "")
+            val time = item.optString("time", "")
+
+            val itemCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(16, 14, 16, 14)
+                setBackgroundColor(Color.parseColor(if (i % 2 == 0) "#F8FAFC" else "#FFFFFF"))
+                val params = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                params.setMargins(0, 0, 0, 8)
+                layoutParams = params
+            }
+
+            val topRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            val idTv = TextView(this).apply {
+                text = "طلب: "
+                textSize = 13.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#1E293B"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val timeTv = TextView(this).apply {
+                text = time
+                textSize = 11.5f
+                setTextColor(Color.parseColor("#64748B"))
+            }
+            topRow.addView(idTv)
+            topRow.addView(timeTv)
+            itemCard.addView(topRow)
+
+            val detailsText = StringBuilder()
+            if (price > 0.0) detailsText.append("السعر: ").append(price).append(" ر.س  ")
+            if (dist > 0.0) detailsText.append("المسافة: ").append(dist).append(" كم  ")
+            if (rest.isNotEmpty()) detailsText.append("(").append(rest).append(")")
+
+            if (detailsText.isNotEmpty()) {
+                val detailsTv = TextView(this).apply {
+                    text = detailsText.toString()
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#334155"))
+                    setPadding(0, 4, 0, 2)
+                }
+                itemCard.addView(detailsTv)
+            }
+
+            val statusTv = TextView(this).apply {
+                text = status
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (status.contains("رفض")) Color.parseColor("#DC2626") else Color.parseColor("#059669"))
+                setPadding(0, 2, 0, 0)
+            }
+            itemCard.addView(statusTv)
+
+            ordersLogContainer.addView(itemCard)
+        }
+    }
+
 }

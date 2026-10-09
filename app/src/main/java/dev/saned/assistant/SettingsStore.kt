@@ -60,4 +60,7 @@ object SettingsStore {
 
     fun isShowToasts(context: Context): Boolean = getPrefs(context).getBoolean("show_toasts", false)
     fun setShowToasts(context: Context, value: Boolean) = getPrefs(context).edit().putBoolean("show_toasts", value).apply()
+    // Orders Log
+    fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
+    fun clearOrdersLog(context: Context) = getPrefs(context).edit().putString("orders_log_json", "[]").apply()
 }
