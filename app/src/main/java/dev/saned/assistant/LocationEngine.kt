@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Bundle
 import android.os.SystemClock
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -19,7 +20,8 @@ object LocationEngine {
 
     private var remotePrefs: SharedPreferences? = null
 
-    fun initRemotePrefs(prefs: SharedPreferences) {
+    fun initRemotePrefs(prefs: SharedPreferences?) {
+        if (prefs == null) return
         remotePrefs = prefs
         syncLocationSettings()
         try {
@@ -29,7 +31,20 @@ object LocationEngine {
         } catch (_: Throwable) {}
     }
 
+    fun updateFromBundle(bundle: Bundle) {
+        isMasterRunning = bundle.getBoolean("master_running", isMasterRunning)
+        isFakeLocationEnabled = bundle.getBoolean("fake_location_enabled", isFakeLocationEnabled)
+        isFixLocationUnknownEnabled = bundle.getBoolean("fix_location_unknown", isFixLocationUnknownEnabled)
+        val lat = bundle.getString("fake_lat", "0.0")?.toDoubleOrNull()
+        val lng = bundle.getString("fake_lng", "0.0")?.toDoubleOrNull()
+        if (lat != null && lat != 0.0) currentLat = lat
+        if (lng != null && lng != 0.0) currentLng = lng
+    }
+
     fun syncLocationSettings() {
+        if (remotePrefs == null) {
+            HookEntry.appContext?.let { HookEntry.syncAllFromProvider(it) }
+        }
         remotePrefs?.let { p ->
             isMasterRunning = p.getBoolean("master_running", false)
             isFakeLocationEnabled = p.getBoolean("fake_location_enabled", false)
@@ -108,7 +123,22 @@ object LocationEngine {
             })
         } catch (_: Throwable) {}
 
-        // 4. Hook LocationManager.getLastKnownLocation(String)
+        // 4. Hook Location.isFromMockProvider & Location.isMock
+        try {
+            val mMock = Location::class.java.getDeclaredMethod("isFromMockProvider")
+            module.hook(mMock).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? = false
+            })
+        } catch (_: Throwable) {}
+
+        try {
+            val mMock = Location::class.java.getDeclaredMethod("isMock")
+            module.hook(mMock).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? = false
+            })
+        } catch (_: Throwable) {}
+
+        // 5. Hook LocationManager.getLastKnownLocation(String)
         try {
             val mLastLoc = LocationManager::class.java.getDeclaredMethod("getLastKnownLocation", String::class.java)
             module.hook(mLastLoc).intercept(object : XposedInterface.Hooker {
@@ -124,7 +154,7 @@ object LocationEngine {
             })
         } catch (_: Throwable) {}
 
-        // 5. Hook LocationManager.requestLocationUpdates
+        // 6. Hook LocationManager.requestLocationUpdates
         try {
             for (m in LocationManager::class.java.declaredMethods) {
                 if (m.name == "requestLocationUpdates") {
