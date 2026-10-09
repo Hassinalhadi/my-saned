@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.ToneGenerator
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -32,8 +31,7 @@ object OrderInterceptor {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var remotePrefs: SharedPreferences? = null
 
-    fun initRemotePrefs(prefs: SharedPreferences?) {
-        if (prefs == null) return
+    fun initRemotePrefs(prefs: SharedPreferences) {
         remotePrefs = prefs
         syncSettings()
         try {
@@ -43,25 +41,7 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    fun updateFromBundle(bundle: Bundle) {
-        isMasterRunning = bundle.getBoolean("master_running", isMasterRunning)
-        isAutoAccept = bundle.getBoolean("auto_accept", isAutoAccept)
-        isAutoReject = bundle.getBoolean("auto_reject", isAutoReject)
-        isDryRun = bundle.getBoolean("dry_run", isDryRun)
-        val p = bundle.getString("min_price", "0.0")?.toDoubleOrNull()
-        if (p != null) minOrderPrice = p
-        val dRest = bundle.getString("max_dist_rest", "0.0")?.toDoubleOrNull()
-        if (dRest != null) maxDistToRestaurant = dRest
-        val dCust = bundle.getString("max_dist_cust", "0.0")?.toDoubleOrNull()
-        if (dCust != null) maxDistCustomer = dCust
-        isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
-        isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
-    }
-
     fun syncSettings() {
-        if (remotePrefs == null) {
-            HookEntry.appContext?.let { HookEntry.syncAllFromProvider(it) }
-        }
         remotePrefs?.let { p ->
             isMasterRunning = p.getBoolean("master_running", false)
             isAutoAccept = p.getBoolean("auto_accept", false)

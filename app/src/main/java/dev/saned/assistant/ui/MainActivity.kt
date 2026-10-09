@@ -129,6 +129,7 @@ class MainActivity : AppCompatActivity() {
             isChecked = SettingsStore.isMasterRunning(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 updateMasterStatusUI(isChecked)
+                SettingsStore.setMasterRunning(this@MainActivity, isChecked)
             }
         }
         layout.addView(swMaster)
@@ -176,6 +177,9 @@ class MainActivity : AppCompatActivity() {
         chkAndroidId = CheckBox(this).apply {
             text = "تفعيل تغيير معرف الجهاز (Android ID Spoofing)"
             isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
+            setOnCheckedChangeListener { _, isChecked ->
+                SettingsStore.setSpoofAndroidId(this@MainActivity, isChecked)
+            }
         }
         layout.addView(chkAndroidId)
 
@@ -352,7 +356,7 @@ class MainActivity : AppCompatActivity() {
                     var lat = $initialLat;
                     var lng = $initialLng;
                     var map = L.map('map').setView([lat, lng], 14);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                         maxZoom: 19
                     }).addTo(map);
 

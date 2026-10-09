@@ -32,7 +32,7 @@ jobs:
       - name: Configure AndroidX & Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y zipalign apksigner
+          sudo apt-get install -y zipalign apksigner zip
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.nonTransitiveRClass=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
@@ -40,7 +40,7 @@ jobs:
       - name: Build APK with Gradle
         run: gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
 
-      - name: Sign APK
+      - name: Inject Xposed Metadata & Sign APK
         run: |
           APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
           if [ -z "$APK_FOUND" ]; then
@@ -49,12 +49,22 @@ jobs:
           fi
           echo "Found built APK: $APK_FOUND"
 
+          # Fail-safe: Ensure META-INF/xposed is always injected into the root of APK
+          mkdir -p apk_injector/META-INF/xposed
+          echo "dev.saned.assistant.HookEntry" > apk_injector/META-INF/xposed/java_init.list
+          printf "minApiVersion=100\ntargetApiVersion=102\nstaticScope=true\n" > apk_injector/META-INF/xposed/module.prop
+          echo "net.jahez.fleets" > apk_injector/META-INF/xposed/scope.list
+
+          cd apk_injector
+          zip -u "../$APK_FOUND" META-INF/xposed/* || true
+          cd ..
+
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass "saned123" -keypass "saned123" \
             -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
 
-          zipalign -f -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
+          zipalign -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
 
           apksigner sign --ks release.keystore \
             --ks-pass pass:"saned123" \
@@ -71,7 +81,7 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: success()
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         with:
           files: SanedAssistant-PRO.apk
           tag_name: "v3.0.0-build-${{ github.run_number }}"
@@ -83,4 +93,4 @@ jobs:
             - تصفير جميع القيم والخيارات افتراضياً (Zero Defaults).
             - نظام خريطة تفاعلية Leaflet متصلة بنظام الإحداثيات مع أزرار مواقع سريعة لشمال الرياض.
             - تزييف معرف الجهاز Android ID حصرياً مع إلغاء حقل IMEI غير الضروري.
-            - مزامنة الإعدادات لحظياً ومزدوجاً عبر ContentProvider و LibXposed IPC.
+            - إصلاح جذري لمشكلة عدم تفعيل الهوك ومزامنة الإعدادات عبر XposedProvider.

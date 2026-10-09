@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.SharedPreferences
-import android.os.Bundle
 import android.provider.Settings
 import android.widget.TextView
 import io.github.libxposed.api.XposedInterface
@@ -18,8 +17,7 @@ object DeviceSpoofer {
 
     private var remotePrefs: SharedPreferences? = null
 
-    fun initRemotePrefs(prefs: SharedPreferences?) {
-        if (prefs == null) return
+    fun initRemotePrefs(prefs: SharedPreferences) {
         remotePrefs = prefs
         syncSettings()
         try {
@@ -29,19 +27,7 @@ object DeviceSpoofer {
         } catch (_: Throwable) {}
     }
 
-    fun updateFromBundle(bundle: Bundle) {
-        isMasterRunning = bundle.getBoolean("master_running", isMasterRunning)
-        isSpoofAndroidId = bundle.getBoolean("spoof_android_id", isSpoofAndroidId)
-        val id = bundle.getString("spoofed_android_id", "") ?: ""
-        if (id.isNotEmpty()) {
-            spoofedAndroidId = id
-        }
-    }
-
     fun syncSettings() {
-        if (remotePrefs == null) {
-            HookEntry.appContext?.let { HookEntry.syncAllFromProvider(it) }
-        }
         remotePrefs?.let { p ->
             isMasterRunning = p.getBoolean("master_running", false)
             isSpoofAndroidId = p.getBoolean("spoof_android_id", false)
@@ -67,8 +53,9 @@ object DeviceSpoofer {
             )
             module.hook(mGetString).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val resolver = chain.args[0] as? ContentResolver
                     val name = chain.args[1] as? String
-                    syncSettings()
+                    syncSettings(resolver)
                     if (name == Settings.Secure.ANDROID_ID && isMasterRunning && isSpoofAndroidId) {
                         return getEffectiveAndroidId()
                     }
