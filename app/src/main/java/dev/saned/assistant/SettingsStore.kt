@@ -14,9 +14,9 @@ object SettingsStore {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
     }
 
-    // Master Switch - Default FALSE
+    // Master Switch - Default TRUE (Active)
     fun isMasterRunning(context: Context): Boolean = 
-        getPrefs(context).getBoolean("master_running", getPrefs(context).getBoolean("enabled", false))
+        getPrefs(context).getBoolean("master_running", getPrefs(context).getBoolean("enabled", true))
     
     fun setMasterRunning(context: Context, value: Boolean) {
         getPrefs(context).edit()
@@ -26,8 +26,8 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    // Auto Accept & Filters - Defaults FALSE / 0.0
-    fun isAutoAccept(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept", false)
+    // Auto Accept & Filters - Default TRUE for auto_accept
+    fun isAutoAccept(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept", true)
     fun setAutoAccept(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("auto_accept", value).apply()
         broadcastSettings(context)
@@ -81,7 +81,7 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    // Location & GPS - Defaults FALSE / 0.0
+    // Location & GPS
     fun isFixLocation(context: Context): Boolean = getPrefs(context).getBoolean("fix_location_unknown", false)
     fun setFixLocation(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("fix_location_unknown", value).apply()
@@ -136,22 +136,32 @@ object SettingsStore {
     fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
     fun clearOrdersLog(context: Context) {
         getPrefs(context).edit().putString("orders_log_json", "[]").apply()
+        try {
+            val f = File("/data/local/tmp/saned_orders.json")
+            if (f.exists()) f.writeText("[]")
+        } catch (_: Throwable) {}
     }
 
     fun broadcastSettings(context: Context) {
+        val master = isMasterRunning(context)
+        val autoAccept = isAutoAccept(context)
+        val autoReject = isAutoReject(context)
+        val dryRun = isDryRun(context)
+        val minPrice = getMinPrice(context)
+        val maxRest = getMaxDistRest(context)
+        val maxCust = getMaxDistCust(context)
+
+        // 1. Explicit broadcast to Jahez app
         try {
             val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                putExtra("master_running", isMasterRunning(context))
-                putExtra("auto_accept", isAutoAccept(context))
-                putExtra("auto_reject", isAutoReject(context))
-                putExtra("dry_run", isDryRun(context))
-                putExtra("min_price", getMinPrice(context))
-                putExtra("max_dist_rest", getMaxDistRest(context))
-                putExtra("max_dist_cust", getMaxDistCust(context))
-                putExtra("fix_location_unknown", isFixLocation(context))
-                putExtra("fake_location_enabled", isFakeLocation(context))
-                putExtra("fake_lat", getFakeLat(context))
-                putExtra("fake_lng", getFakeLng(context))
+                setPackage("net.jahez.fleets")
+                putExtra("master_running", master)
+                putExtra("auto_accept", autoAccept)
+                putExtra("auto_reject", autoReject)
+                putExtra("dry_run", dryRun)
+                putExtra("min_price", minPrice)
+                putExtra("max_dist_rest", maxRest)
+                putExtra("max_dist_cust", maxCust)
                 putExtra("spoof_android_id", isSpoofAndroidId(context))
                 putExtra("spoofed_android_id", getSpoofedAndroidId(context))
                 putExtra("sound_enabled", isSoundEnabled(context))
@@ -160,22 +170,37 @@ object SettingsStore {
             context.sendBroadcast(intent)
         } catch (_: Throwable) {}
 
-        // Fallback root config file
+        // 2. Global broadcast for dynamic receivers
+        try {
+            val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
+                putExtra("master_running", master)
+                putExtra("auto_accept", autoAccept)
+                putExtra("auto_reject", autoReject)
+                putExtra("dry_run", dryRun)
+                putExtra("min_price", minPrice)
+                putExtra("max_dist_rest", maxRest)
+                putExtra("max_dist_cust", maxCust)
+            }
+            context.sendBroadcast(gIntent)
+        } catch (_: Throwable) {}
+
+        // 3. Write world-readable shared config in /data/local/tmp/
         try {
             val json = JSONObject().apply {
-                put("master_running", isMasterRunning(context))
-                put("auto_accept", isAutoAccept(context))
-                put("auto_reject", isAutoReject(context))
-                put("dry_run", isDryRun(context))
-                put("min_price", getMinPrice(context))
-                put("max_dist_rest", getMaxDistRest(context))
-                put("max_dist_cust", getMaxDistCust(context))
+                put("master_running", master)
+                put("auto_accept", autoAccept)
+                put("auto_reject", autoReject)
+                put("dry_run", dryRun)
+                put("min_price", minPrice)
+                put("max_dist_rest", maxRest)
+                put("max_dist_cust", maxCust)
                 put("spoof_android_id", isSpoofAndroidId(context))
                 put("spoofed_android_id", getSpoofedAndroidId(context))
             }
             val file = File("/data/local/tmp/saned_config.json")
             file.writeText(json.toString())
             file.setReadable(true, false)
+            file.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 }

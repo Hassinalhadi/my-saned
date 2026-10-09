@@ -3,4 +3,7 @@
     <string-array name="scope">
         <item>net.jahez.fleets</item>
     </string-array>
+    <string-array name="xposedscope">
+        <item>net.jahez.fleets</item>
+    </string-array>
 </resources>

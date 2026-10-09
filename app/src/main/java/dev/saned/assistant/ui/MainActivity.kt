@@ -19,6 +19,7 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
 import dev.saned.assistant.SettingsStore
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Random
@@ -616,6 +617,29 @@ class MainActivity : AppCompatActivity() {
 
         val jsonStr = SettingsStore.getOrdersLog(this)
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
+
+        // Fallback: Also merge from shared orders file if available
+        try {
+            val f = File("/data/local/tmp/saned_orders.json")
+            if (f.exists()) {
+                val fArray = JSONArray(f.readText())
+                val seenIds = mutableSetOf<String>()
+                for (idx in 0 until array.length()) {
+                    val itm = array.optJSONObject(idx)
+                    if (itm != null) seenIds.add(itm.optString("id"))
+                }
+                for (jdx in 0 until fArray.length()) {
+                    val fItm = fArray.optJSONObject(jdx)
+                    if (fItm != null) {
+                        val fId = fItm.optString("id")
+                        if (fId.isNotEmpty() && !seenIds.contains(fId)) {
+                            array.put(fItm)
+                            seenIds.add(fId)
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
 
         if (array.length() == 0) {
             val emptyTv = TextView(this).apply {

@@ -20,6 +20,20 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SanedAssistant">
 
+        <!-- Xposed Module Metadata (Recognized by all LSPosed / EdXposed flavors) -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Saned Assistant Pro - High Speed Auto Accept &amp; Filter" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposedscope" />
+
         <!-- Modern LibXposed Provider -->
         <provider
             android:name="io.github.libxposed.service.XposedProvider"

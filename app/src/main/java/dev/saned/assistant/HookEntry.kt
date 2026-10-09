@@ -16,12 +16,15 @@ class HookEntry : XposedModule() {
     private val isAppHooked = AtomicBoolean(false)
 
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
-        if (param.packageName != "net.jahez.fleets") return
+        if (!param.packageName.contains("jahez") && param.packageName != "net.jahez.fleets") return
         hookSystemLifecycle()
+        param.defaultClassLoader?.let { cl ->
+            initAppHooks(cl)
+        }
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-        if (param.packageName != "net.jahez.fleets") return
+        if (!param.packageName.contains("jahez") && param.packageName != "net.jahez.fleets") return
         val cl = param.classLoader
         if (cl != null) {
             initAppHooks(cl)
@@ -31,14 +34,14 @@ class HookEntry : XposedModule() {
     private fun hookSystemLifecycle() {
         if (!isSystemHooked.compareAndSet(false, true)) return
 
-        // 1. Hook Application.onCreate to get Application context
+        // 1. Hook Application.onCreate
         try {
             val mAppCreate = Application::class.java.getDeclaredMethod("onCreate")
             hook(mAppCreate).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
                     val app = chain.thisObject as? Application
-                    if (app != null) {
+                    if (app != null && (app.packageName == "net.jahez.fleets" || app.packageName.contains("jahez"))) {
                         try {
                             OrderInterceptor.initAppContext(app)
                             initAppHooks(app.classLoader)
@@ -56,15 +59,13 @@ class HookEntry : XposedModule() {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
                     val act = chain.thisObject as? Activity
-                    if (act != null && act.packageName == "net.jahez.fleets") {
+                    if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
                         OrderInterceptor.initAppContext(act.applicationContext)
                         OrderInterceptor.currentActivity = act
                         initAppHooks(act.classLoader)
-                        if (OrderInterceptor.isMasterRunning) {
-                            try {
-                                Toast.makeText(act, "⚡ مساعد سند مفعل ويعمل بنجاح!", Toast.LENGTH_SHORT).show()
-                            } catch (_: Throwable) {}
-                        }
+                        try {
+                            Toast.makeText(act, "⚡ مساعد جاهز/سند يعمل بنجاح!", Toast.LENGTH_SHORT).show()
+                        } catch (_: Throwable) {}
                     }
                     return res
                 }
