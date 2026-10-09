@@ -4,18 +4,6 @@ plugins {
 }
 
 android {
-    sourceSets {
-        getByName("main") {
-            resources.srcDirs("src/main/resources")
-            assets.srcDirs("src/main/assets")
-        }
-    }
-    packaging {
-        resources {
-            merges += "META-INF/xposed/**"
-            pickFirsts += "META-INF/xposed/**"
-        }
-    }
     namespace = "dev.saned.assistant"
     compileSdk = 34
 
@@ -23,8 +11,8 @@ android {
         applicationId = "dev.jing.sanedhook"
         minSdk = 26
         targetSdk = 34
-        versionCode = 200
-        versionName = "2.0.0-PRO"
+        versionCode = 300
+        versionName = "3.0.0-PRO"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,6 +33,18 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    sourceSets {
+        getByName("main") {
+            resources.srcDirs("src/main/resources")
+            assets.srcDirs("src/main/assets")
+        }
+    }
+    packaging {
+        resources {
+            merges += "META-INF/xposed/**"
+            pickFirsts += "META-INF/xposed/**"
+        }
+    }
 }
 
 dependencies {
@@ -56,6 +56,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 
-    // Xposed API
+    // LibXposed official API & Service from Maven Central
+    compileOnly("io.github.libxposed:api:100-1.0.2")
+    implementation("io.github.libxposed:service:100-1.0.1")
+
+    // Classic Xposed (compileOnly, for compatibility if needed)
     compileOnly("de.robv.android.xposed:api:82")
 }

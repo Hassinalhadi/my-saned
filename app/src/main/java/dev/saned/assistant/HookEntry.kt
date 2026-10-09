@@ -1,79 +1,67 @@
 package dev.saned.assistant
 
 import android.app.Activity
-import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
-import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
-class HookEntry : XposedModule(), IXposedHookLoadPackage {
+class HookEntry : XposedModule() {
 
-    companion object {
-        @Volatile var isModuleEnabled: Boolean = true
-        @Volatile var isAutoAccept: Boolean = true
-        @Volatile var isAutoReject: Boolean = false
-        @Volatile var isDryRun: Boolean = false
-        @Volatile var minOrderPrice: Double = 0.0
-        @Volatile var maxDistToRestaurant: Double = 8.0
-        @Volatile var maxDistCustomer: Double = 15.0
-        @Volatile var isSoundEnabled: Boolean = true
-        @Volatile var isShowToasts: Boolean = true
+    private val isInitialized = AtomicBoolean(false)
 
-        private val isInitialized = AtomicBoolean(false)
+    override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
+        if (param.packageName != "net.jahez.fleets") return
+        val classLoader = param.defaultClassLoader ?: param.classLoader
+        initAllHooks(classLoader)
+    }
 
-        fun initAllHooks(classLoader: ClassLoader) {
-            if (!isInitialized.compareAndSet(false, true)) return
+    override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
+        if (param.packageName != "net.jahez.fleets") return
+        val classLoader = param.classLoader
+        initAllHooks(classLoader)
+    }
 
-            XposedBridge.log("==========================================")
-            XposedBridge.log("SanedAssistant PRO: Hooks Active in net.jahez.fleets!")
-            XposedBridge.log("==========================================")
+    private fun initAllHooks(classLoader: ClassLoader) {
+        if (!isInitialized.compareAndSet(false, true)) return
 
-            try {
-                // Show a toast when Jahez opens so user knows 100% the hook is running!
-                XposedHelpers.findAndHookMethod(
-                    Activity::class.java,
-                    "onCreate",
-                    Bundle::class.java,
-                    object : XC_MethodHook() {
-                        override fun afterHookedMethod(param: MethodHookParam) {
-                            val act = param.thisObject as Activity
-                            if (act.packageName == "net.jahez.fleets") {
+        // 1. Connect Remote Preferences via LibXposed IPC
+        try {
+            val remotePrefs = getRemotePreferences("sanedhook_settings")
+            DeviceSpoofer.initRemotePrefs(remotePrefs)
+            LocationEngine.initRemotePrefs(remotePrefs)
+            OrderInterceptor.initRemotePrefs(remotePrefs)
+        } catch (_: Throwable) {}
+
+        // 2. Hook Activity.onCreate for notification toast
+        try {
+            val mOnCreate = Activity::class.java.getDeclaredMethod("onCreate", Bundle::class.java)
+            hook(mOnCreate).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val res = chain.proceed()
+                    val act = chain.thisObject as? Activity
+                    if (act != null && act.packageName == "net.jahez.fleets") {
+                        DeviceSpoofer.syncSettings()
+                        LocationEngine.syncLocationSettings()
+                        if (DeviceSpoofer.isMasterRunning) {
+                            try {
                                 Toast.makeText(act, "⚡ مساعد سند مفعل ويعمل بنجاح!", Toast.LENGTH_SHORT).show()
-                            }
+                            } catch (_: Throwable) {}
                         }
                     }
-                )
-            } catch (_: Throwable) {}
+                    return res
+                }
+            })
+        } catch (_: Throwable) {}
 
-            try {
-                PackageCloaker.hook(classLoader)
-                LocationEngine.hook(classLoader)
-                DeviceSpoofer.hook(classLoader)
-                OrderInterceptor.hook(classLoader)
-            } catch (t: Throwable) {
-                XposedBridge.log("SanedAssistant: Critical hook error: ${t.message}")
-            }
-        }
-    }
-
-    // 1. Called by Modern LibXposed
-    override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
-        if (param.packageName == "net.jahez.fleets") {
-            initAllHooks(param.defaultClassLoader ?: param.classLoader)
-        }
-    }
-
-    // 2. Called by Legacy Xposed
-    override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName == "net.jahez.fleets") {
-            initAllHooks(lpparam.classLoader)
-        }
+        // 3. Register All Feature Hooks
+        try {
+            PackageCloaker.hook(this, classLoader)
+            LocationEngine.hook(this, classLoader)
+            DeviceSpoofer.hook(this, classLoader)
+            OrderInterceptor.hook(this, classLoader)
+        } catch (_: Throwable) {}
     }
 }

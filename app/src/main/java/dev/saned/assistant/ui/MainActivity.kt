@@ -1,265 +1,537 @@
 package dev.saned.assistant.ui
 
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
-import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
-import dev.saned.assistant.OverlayService
 import dev.saned.assistant.SettingsStore
-import java.util.UUID
+import java.util.Random
 
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var swMaster: Switch
+    private lateinit var tvMasterStatus: TextView
+
+    // Android ID
+    private lateinit var chkAndroidId: CheckBox
+    private lateinit var edtAndroidId: EditText
+
+    // Location
+    private lateinit var chkFakeLoc: CheckBox
+    private lateinit var chkFixLoc: CheckBox
+    private lateinit var edtLat: EditText
+    private lateinit var edtLng: EditText
+    private lateinit var mapWebView: WebView
+
+    // Auto Accept & Filters
+    private lateinit var chkAutoAccept: CheckBox
+    private lateinit var chkAutoReject: CheckBox
+    private lateinit var chkDryRun: CheckBox
+    private lateinit var edtMinPrice: EditText
+    private lateinit var edtMaxDistRest: EditText
+    private lateinit var edtMaxDistCust: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#F4F6F9"))
+        }
+
         val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 40, 36, 48)
-            setBackgroundColor(0xFFF5F5F5.toInt())
+            setPadding(32, 40, 32, 60)
         }
         scroll.addView(mainLayout)
+        setContentView(scroll)
 
-        // Header Title
+        // ================= HEADER =================
         val header = TextView(this).apply {
-            text = "🚀 Saned Assistant PRO"
-            textSize = 24f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setTextColor(0xFFD32F2F.toInt())
+            text = "⚡ مساعد جاهز الذكي - Saned Assistant"
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#1E293B"))
+            gravity = Gravity.CENTER
             setPadding(0, 0, 0, 8)
         }
         mainLayout.addView(header)
 
         val subHeader = TextView(this).apply {
-            text = "نسخة مفتوحة المصدر فائقة الأداء - بدون قيود أو قفل ترخيص"
-            textSize = 13f
-            setTextColor(0xFF616161.toInt())
-            setPadding(0, 0, 0, 28)
+            text = "النسخة البرمجية المطابقة للمساعد الأصلي - مفتوحة المصدر وبدون قيود"
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 24)
         }
         mainLayout.addView(subHeader)
 
-        // ================= SECTION 1: AUTO ACCEPT & FILTERS =================
-        val cardFilters = createCard("⚡ إعدادات القبول والفلاتر الذكية")
-        val filterLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // ================= MASTER SWITCH CARD =================
+        mainLayout.addView(createMasterSwitchCard())
 
-        val chkAutoAccept = CheckBox(this).apply {
-            text = "تفعيل القبول التلقائي الفوري (0ms Instant)"
-            isChecked = SettingsStore.isAutoAccept(this@MainActivity)
+        // ================= SECTION 1: ANDROID ID SPOOFER =================
+        mainLayout.addView(createAndroidIdCard())
+
+        // ================= SECTION 2: INTERACTIVE MAP & GPS =================
+        mainLayout.addView(createLocationMapCard())
+
+        // ================= SECTION 3: AUTO ACCEPT & SMART FILTERS =================
+        mainLayout.addView(createFiltersCard())
+
+        // ================= SAVE BUTTON =================
+        val btnSave = Button(this).apply {
+            text = "💾 حفظ جميع الإعدادات وتطبيقها فوراً"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#059669"))
+            setPadding(24, 28, 24, 28)
+            setOnClickListener { saveAllSettings() }
         }
-        filterLayout.addView(chkAutoAccept)
+        mainLayout.addView(btnSave)
+    }
 
-        val chkAutoReject = CheckBox(this).apply {
-            text = "تفعيل الرفض التلقائي للطلبات غير المطابقة (لتفريغ الشاشة فوراً)"
-            isChecked = SettingsStore.isAutoReject(this@MainActivity)
+    private fun createMasterSwitchCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#FFFFFF"))
         }
-        filterLayout.addView(chkAutoReject)
 
-        val chkDryRun = CheckBox(this).apply {
-            text = "وضع التجربة (Dry-Run: فحص الطلب وإظهار النتيجة دون قبوله فعلياً)"
-            isChecked = SettingsStore.isDryRun(this@MainActivity)
+        val title = TextView(this).apply {
+            text = "🔘 زر التشغيل والتحكم الرئيسي"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
         }
-        filterLayout.addView(chkDryRun)
+        layout.addView(title)
 
-        filterLayout.addView(createLabel("الحد الأدنى لسعر الطلب (SAR):"))
-        val edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
-        filterLayout.addView(edtMinPrice)
+        tvMasterStatus = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 0, 0, 16)
+        }
 
-        filterLayout.addView(createLabel("أقصى مسافة للمطعم من موقعك (كم):"))
-        val edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).toString())
-        filterLayout.addView(edtMaxDistRest)
+        swMaster = Switch(this).apply {
+            text = "تشغيل المساعد بالكامل (Master ON / OFF)"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = SettingsStore.isMasterRunning(this@MainActivity)
+            setOnCheckedChangeListener { _, isChecked ->
+                updateMasterStatusUI(isChecked)
+            }
+        }
+        layout.addView(swMaster)
+        layout.addView(tvMasterStatus)
 
-        filterLayout.addView(createLabel("أقصى مسافة توصيل للعميل (كم):"))
-        val edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
-        filterLayout.addView(edtMaxDistCust)
+        updateMasterStatusUI(swMaster.isChecked)
+        card.addView(layout)
+        return card
+    }
 
-        cardFilters.addView(filterLayout)
-        mainLayout.addView(cardFilters)
+    private fun updateMasterStatusUI(isRunning: Boolean) {
+        if (isRunning) {
+            tvMasterStatus.text = "الحالة: 🟢 المساعد قيد التشغيل والجاهزية للعمل مع جاهز"
+            tvMasterStatus.setTextColor(Color.parseColor("#059669"))
+        } else {
+            tvMasterStatus.text = "الحالة: 🔴 المساعد متوقف بالكامل (كل الوظائف معطلة حالياً)"
+            tvMasterStatus.setTextColor(Color.parseColor("#DC2626"))
+        }
+    }
 
-        // ================= SECTION 2: LOCATION & GPS =================
-        val cardLocation = createCard("📍 نظام الموقع وتجاوز مشكلة location unknown")
-        val locLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    private fun createAndroidIdCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
 
-        val chkFixLoc = CheckBox(this).apply {
+        val title = TextView(this).apply {
+            text = "📱 معرف الجهاز (Android ID)"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
+        }
+        layout.addView(title)
+
+        val note = TextView(this).apply {
+            text = "ملاحظة: تطبيق جاهز يعتمد على Android ID ويسميه في واجهة الدخول IMEI. تعديل هذا المعرف يغير رقم الجهاز الظاهر في جاهز."
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(note)
+
+        chkAndroidId = CheckBox(this).apply {
+            text = "تفعيل تغيير معرف الجهاز (Android ID Spoofing)"
+            isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
+        }
+        layout.addView(chkAndroidId)
+
+        edtAndroidId = EditText(this).apply {
+            hint = "أدخل 16 خانة سداسية عشرية (مثال: a1b2c3d4e5f67890)"
+            setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))
+            textSize = 14f
+            typeface = Typeface.MONOSPACE
+            setSingleLine(true)
+        }
+        layout.addView(edtAndroidId)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 8, 0, 0)
+        }
+
+        val btnGen = Button(this).apply {
+            text = "🎲 توليد عشوائي (16 خانة)"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                edtAndroidId.setText(generateRandomAndroidId())
+                chkAndroidId.isChecked = true
+            }
+        }
+        btnRow.addView(btnGen)
+
+        val btnCopy = Button(this).apply {
+            text = "📋 نسخ المعرف"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("Android ID", edtAndroidId.text.toString().trim()))
+                Toast.makeText(this@MainActivity, "تم نسخ المعرف إلى الحافظة", Toast.LENGTH_SHORT).show()
+            }
+        }
+        btnRow.addView(btnCopy)
+
+        layout.addView(btnRow)
+        card.addView(layout)
+        return card
+    }
+
+    private fun createLocationMapCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+
+        val title = TextView(this).apply {
+            text = "🗺️ الخريطة التفاعلية ونظام تحديد المواقع (GPS)"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
+        }
+        layout.addView(title)
+
+        chkFixLoc = CheckBox(this).apply {
             text = "حل مشكلة location unknown (حقن موقع دقيق دائماً)"
             isChecked = SettingsStore.isFixLocation(this@MainActivity)
         }
-        locLayout.addView(chkFixLoc)
+        layout.addView(chkFixLoc)
 
-        val chkFakeLoc = CheckBox(this).apply {
-            text = "تفعيل تزييف الموقع المباشر (Fake GPS)"
+        chkFakeLoc = CheckBox(this).apply {
+            text = "تفعيل الموقع المخصص المحدد على الخريطة (Fake GPS)"
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
         }
-        locLayout.addView(chkFakeLoc)
+        layout.addView(chkFakeLoc)
 
-        locLayout.addView(createLabel("خط العرض المخصص (Latitude):"))
-        val edtLat = createInput(SettingsStore.getFakeLat(this).toString())
-        locLayout.addView(edtLat)
-
-        locLayout.addView(createLabel("خط الطول المخصص (Longitude):"))
-        val edtLng = createInput(SettingsStore.getFakeLng(this).toString())
-        locLayout.addView(edtLng)
-
-        // Presets Button
-        val btnPresets = Button(this).apply {
-            text = "📍 اختيار موقع سريع (الملقا / حطين / الياسمين)"
-            setOnClickListener {
-                // Set to Al Malqa Riyadh
-                edtLat.setText("24.774265")
-                edtLng.setText("46.638527")
-                Toast.makeText(this@MainActivity, "تم تعيين الموقع: حي الملقا، الرياض", Toast.LENGTH_SHORT).show()
-            }
+        val coordsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 8, 0, 12)
         }
-        locLayout.addView(btnPresets)
 
-        cardLocation.addView(locLayout)
-        mainLayout.addView(cardLocation)
-
-        // ================= SECTION 3: DEVICE IDENTITY & IMEI SPOOFING =================
-        val cardDevice = createCard("🛡️ تزييف هوية الجهاز (IMEI & Android ID)")
-        val devLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-
-        val chkSpoofId = CheckBox(this).apply {
-            text = "تفعيل تزييف معرّف الجهاز (Android ID)"
-            isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
+        edtLat = EditText(this).apply {
+            hint = "خط العرض (Lat)"
+            val savedLat = SettingsStore.getFakeLat(this@MainActivity)
+            setText(if (savedLat != 0.0) savedLat.toString() else "")
+            textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        devLayout.addView(chkSpoofId)
+        coordsRow.addView(edtLat)
 
-        devLayout.addView(createLabel("معرّف الجهاز المخصص (Android ID):"))
-        val edtAndroidId = createInput(SettingsStore.getSpoofedAndroidId(this))
-        devLayout.addView(edtAndroidId)
-
-        val chkSpoofImei = CheckBox(this).apply {
-            text = "تفعيل تزييف رقم الـ IMEI"
-            isChecked = SettingsStore.isSpoofImei(this@MainActivity)
+        edtLng = EditText(this).apply {
+            hint = "خط الطول (Lng)"
+            val savedLng = SettingsStore.getFakeLng(this@MainActivity)
+            setText(if (savedLng != 0.0) savedLng.toString() else "")
+            textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        devLayout.addView(chkSpoofImei)
+        coordsRow.addView(edtLng)
+        layout.addView(coordsRow)
 
-        devLayout.addView(createLabel("رقم الـ IMEI المخصص:"))
-        val edtImei = createInput(SettingsStore.getSpoofedImei(this))
-        devLayout.addView(edtImei)
-
-        val btnGenRandom = Button(this).apply {
-            text = "🎲 توليد هوية جديدة بضغطة زر (New Identity)"
-            setOnClickListener {
-                val newId = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
-                val newImei = "86" + (1000000000000L + (Math.random() * 8999999999999L).toLong()).toString()
-                edtAndroidId.setText(newId)
-                edtImei.setText(newImei)
-                Toast.makeText(this@MainActivity, "تم توليد معرّفات جديدة للجهاز بنجاح!", Toast.LENGTH_SHORT).show()
-            }
+        // Hotspots Buttons (Riyadh)
+        val hotspotsLabel = TextView(this).apply {
+            text = "⚡ مواقع سريعة (شمال الرياض):"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#475569"))
+            setPadding(0, 4, 0, 4)
         }
-        devLayout.addView(btnGenRandom)
+        layout.addView(hotspotsLabel)
 
-        cardDevice.addView(devLayout)
-        mainLayout.addView(cardDevice)
-
-        // ================= SECTION 4: FLOATING HUD & AUDIO =================
-        val cardHud = createCard("🖥️ الشاشة العائمة والتنبيهات")
-        val hudLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-
-        val chkOverlay = CheckBox(this).apply {
-            text = "إظهار شاشة المساعد العائمة فوق تطبيق جاهز (Floating HUD)"
-            isChecked = SettingsStore.isShowOverlay(this@MainActivity)
+        val hotspotsRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
         }
-        hudLayout.addView(chkOverlay)
+        hotspotsRow1.addView(createHotspotBtn("الملقا", 24.7925, 46.6189))
+        hotspotsRow1.addView(createHotspotBtn("حطين", 24.7648, 46.6022))
+        layout.addView(hotspotsRow1)
 
-        val chkSound = CheckBox(this).apply {
-            text = "تشغيل نغمة تنبيه خاصة عند قبول الطلب تلقائياً"
-            isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+        val hotspotsRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 4, 0, 12)
         }
-        hudLayout.addView(chkSound)
+        hotspotsRow2.addView(createHotspotBtn("الياسمين", 24.8193, 46.6437))
+        hotspotsRow2.addView(createHotspotBtn("العليا", 24.6987, 46.6842))
+        layout.addView(hotspotsRow2)
 
-        val chkToasts = CheckBox(this).apply {
-            text = "إظهار رسائل سريعة (Toasts) بتفاصيل وسرعة كل طلب"
-            isChecked = SettingsStore.isShowToasts(this@MainActivity)
+        // Leaflet Interactive Map WebView
+        mapWebView = WebView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                700
+            )
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient = WebViewClient()
+            addJavascriptInterface(WebAppInterface(), "AndroidBridge")
         }
-        hudLayout.addView(chkToasts)
+        layout.addView(mapWebView)
 
-        cardHud.addView(hudLayout)
-        mainLayout.addView(cardHud)
-
-        // Save Button
-        val btnSave = Button(this).apply {
-            text = "💾 حفظ جميع الإعدادات وتطبيقها فوراً"
-            setBackgroundColor(0xFFD32F2F.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(0, 28, 0, 28)
-            setOnClickListener {
-                                val prefs = SettingsStore.getPrefs(this@MainActivity).edit()
-                prefs.putBoolean(SettingsStore.KEY_AUTO_ACCEPT, chkAutoAccept.isChecked)
-                prefs.putBoolean(SettingsStore.KEY_AUTO_REJECT, chkAutoReject.isChecked)
-                prefs.putBoolean(SettingsStore.KEY_DRY_RUN, chkDryRun.isChecked)
-                prefs.putString(SettingsStore.KEY_MIN_PRICE, edtMinPrice.text.toString())
-                prefs.putString(SettingsStore.KEY_MAX_DIST_REST, edtMaxDistRest.text.toString())
-                prefs.putString(SettingsStore.KEY_MAX_DIST_CUST, edtMaxDistCust.text.toString())
-
-                prefs.putBoolean(SettingsStore.KEY_FIX_LOCATION, chkFixLoc.isChecked)
-                prefs.putBoolean(SettingsStore.KEY_FAKE_LOCATION, chkFakeLoc.isChecked)
-                prefs.putString(SettingsStore.KEY_FAKE_LAT, edtLat.text.toString())
-                prefs.putString(SettingsStore.KEY_FAKE_LNG, edtLng.text.toString())
-
-                prefs.putBoolean(SettingsStore.KEY_SPOOF_ANDROID_ID, chkSpoofId.isChecked)
-                prefs.putString(SettingsStore.KEY_SPOOFED_ANDROID_ID, edtAndroidId.text.toString())
-                prefs.apply()
-
-                // Save direct config files to Download folder for 100% reliable cross-app sync
-                try {
-                    val dlDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                    dlDir.mkdirs()
-                    java.io.File(dlDir, "saned_device_id.txt").writeText(edtAndroidId.text.toString().trim())
-                    java.io.File(dlDir, "saned_location.txt").writeText("${chkFakeLoc.isChecked},${edtLat.text},${edtLng.text}")
-                } catch (_: Throwable) {}
-
-                Toast.makeText(this@MainActivity, "✅ تم حفظ وتحديث الإعدادات بنجاح!", Toast.LENGTH_SHORT).show()
-            }
-        }
-        mainLayout.addView(btnSave)
-
-        setContentView(scroll)
+        loadMapContent()
+        card.addView(layout)
+        return card
     }
 
-    private fun createCard(titleText: String): CardView {
-        val card = CardView(this).apply {
-            radius = 16f
-            cardElevation = 6f
-            setCardBackgroundColor(0xFFFFFFFF.toInt())
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.setMargins(0, 0, 0, 32)
-            layoutParams = lp
-            setContentPadding(28, 24, 28, 28)
+    private fun createHotspotBtn(name: String, lat: Double, lng: Double): Button {
+        return Button(this).apply {
+            text = name
+            textSize = 11f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                edtLat.setText(lat.toString())
+                edtLng.setText(lng.toString())
+                chkFakeLoc.isChecked = true
+                mapWebView.evaluateJavascript("setPin($lat, $lng);", null)
+            }
         }
+    }
+
+    private fun loadMapContent() {
+        val initialLat = edtLat.text.toString().toDoubleOrNull() ?: 24.7925
+        val initialLng = edtLng.text.toString().toDoubleOrNull() ?: 46.6189
+
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                <style>
+                    body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
+                </style>
+            </head>
+            <body>
+                <div id="map"></div>
+                <script>
+                    var lat = $initialLat;
+                    var lng = $initialLng;
+                    var map = L.map('map').setView([lat, lng], 14);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 19
+                    }).addTo(map);
+
+                    var marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+
+                    function notifyAndroid(lt, lg) {
+                        if (window.AndroidBridge && window.AndroidBridge.onLocationMoved) {
+                            window.AndroidBridge.onLocationMoved(lt, lg);
+                        }
+                    }
+
+                    marker.on('dragend', function (e) {
+                        var pos = marker.getLatLng();
+                        notifyAndroid(pos.lat, pos.lng);
+                    });
+
+                    map.on('click', function(e) {
+                        marker.setLatLng(e.latlng);
+                        notifyAndroid(e.latlng.lat, e.latlng.lng);
+                    });
+
+                    function setPin(newLat, newLng) {
+                        marker.setLatLng([newLat, newLng]);
+                        map.panTo([newLat, newLng]);
+                    }
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+
+        mapWebView.loadDataWithBaseURL("https://openstreetmap.org", html, "text/html", "UTF-8", null)
+    }
+
+    inner class WebAppInterface {
+        @JavascriptInterface
+        fun onLocationMoved(lat: Double, lng: Double) {
+            runOnUiThread {
+                val roundLat = String.format("%.6f", lat)
+                val roundLng = String.format("%.6f", lng)
+                edtLat.setText(roundLat)
+                edtLng.setText(roundLng)
+                chkFakeLoc.isChecked = true
+            }
+        }
+    }
+
+    private fun createFiltersCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+
         val title = TextView(this).apply {
-            text = titleText
+            text = "⚡ إعدادات القبول والفلاتر الذكية"
             textSize = 16f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setTextColor(0xFFD32F2F.toInt())
-            setPadding(0, 0, 0, 16)
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
         }
-        card.addView(title)
+        layout.addView(title)
+
+        chkAutoAccept = CheckBox(this).apply {
+            text = "تفعيل القبول التلقائي الفوري للطلبات"
+            isChecked = SettingsStore.isAutoAccept(this@MainActivity)
+        }
+        layout.addView(chkAutoAccept)
+
+        chkAutoReject = CheckBox(this).apply {
+            text = "تفعيل الرفض التلقائي للطلبات غير المطابقة"
+            isChecked = SettingsStore.isAutoReject(this@MainActivity)
+        }
+        layout.addView(chkAutoReject)
+
+        chkDryRun = CheckBox(this).apply {
+            text = "وضع التجربة (Dry-Run: فحص الطلب دون قبوله فعلياً)"
+            isChecked = SettingsStore.isDryRun(this@MainActivity)
+        }
+        layout.addView(chkDryRun)
+
+        layout.addView(createLabel("الحد الأدنى لسعر الطلب (SAR) - اتركه 0 لإلغاء القيد:"))
+        edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
+        layout.addView(edtMinPrice)
+
+        layout.addView(createLabel("أقصى مسافة للمطعم (كم) - اتركه 0 لإلغاء القيد:"))
+        edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).toString())
+        layout.addView(edtMaxDistRest)
+
+        layout.addView(createLabel("أقصى مسافة توصيل للعميل (كم) - اتركه 0 لإلغاء القيد:"))
+        edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
+        layout.addView(edtMaxDistCust)
+
+        card.addView(layout)
         return card
+    }
+
+    private fun createStyledCard(): CardView {
+        return CardView(this).apply {
+            radius = 16f
+            cardElevation = 4f
+            setCardBackgroundColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 24)
+            }
+        }
     }
 
     private fun createLabel(text: String): TextView {
         return TextView(this).apply {
             this.text = text
-            textSize = 13f
-            setTextColor(0xFF424242.toInt())
-            setPadding(0, 16, 0, 4)
+            textSize = 12f
+            setTextColor(Color.parseColor("#475569"))
+            setPadding(0, 12, 0, 4)
         }
     }
 
-    private fun createInput(defaultVal: String): EditText {
+    private fun createInput(initialValue: String): EditText {
         return EditText(this).apply {
-            setText(defaultVal)
+            setText(if (initialValue == "0.0") "0" else initialValue)
             textSize = 14f
-            setBackgroundResource(android.R.drawable.edit_text)
+            setSingleLine(true)
         }
+    }
+
+    private fun generateRandomAndroidId(): String {
+        val chars = "0123456789abcdef"
+        val rnd = Random()
+        val sb = StringBuilder(16)
+        for (i in 0 until 16) {
+            sb.append(chars[rnd.nextInt(chars.length)])
+        }
+        return sb.toString()
+    }
+
+    private fun saveAllSettings() {
+        val master = swMaster.isChecked
+
+        // Android ID
+        val spoofId = chkAndroidId.isChecked
+        val customId = edtAndroidId.text.toString().trim()
+
+        // Location
+        val fixLoc = chkFixLoc.isChecked
+        val fakeLoc = chkFakeLoc.isChecked
+        val lat = edtLat.text.toString().toDoubleOrNull() ?: 0.0
+        val lng = edtLng.text.toString().toDoubleOrNull() ?: 0.0
+
+        // Filters
+        val autoAccept = chkAutoAccept.isChecked
+        val autoReject = chkAutoReject.isChecked
+        val dryRun = chkDryRun.isChecked
+        val minPrice = edtMinPrice.text.toString().toDoubleOrNull() ?: 0.0
+        val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
+        val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
+
+        // Persist to SettingsStore & SharedPreferences
+        SettingsStore.setMasterRunning(this, master)
+        SettingsStore.setSpoofAndroidId(this, spoofId)
+        SettingsStore.setSpoofedAndroidId(this, customId)
+
+        SettingsStore.setFixLocation(this, fixLoc)
+        SettingsStore.setFakeLocation(this, fakeLoc)
+        SettingsStore.setFakeLat(this, lat)
+        SettingsStore.setFakeLng(this, lng)
+
+        SettingsStore.setAutoAccept(this, autoAccept)
+        SettingsStore.setAutoReject(this, autoReject)
+        SettingsStore.setDryRun(this, dryRun)
+        SettingsStore.setMinPrice(this, minPrice)
+        SettingsStore.setMaxDistRest(this, maxRest)
+        SettingsStore.setMaxDistCust(this, maxCust)
+
+        Toast.makeText(
+            this,
+            "✅ تم حفظ وتطبيق الإعدادات بنجاح!\nقم بعمل إيقاف إجباري لتطبيق جاهز وأعد فتحه لتطبيق التغييرات.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 }

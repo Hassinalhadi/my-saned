@@ -16,7 +16,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SanedAssistant">
 
-        <!-- Modern LibXposed Provider (Completely invisible to third-party scanners) -->
+        <!-- Modern LibXposed Provider (Completely invisible to third-party anti-fraud scanners) -->
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
             android:authorities="dev.jing.sanedhook.XposedService"

@@ -1,2 +1,4 @@
+-keep class io.github.libxposed.** { *; }
+-keep interface io.github.libxposed.** { *; }
 -keep class dev.saned.assistant.** { *; }
--dontobfuscate
+-keepclassmembers class dev.saned.assistant.** { *; }

@@ -1,61 +1,52 @@
 package dev.saned.assistant
 
+import android.content.SharedPreferences
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.os.Environment
 import android.os.SystemClock
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import java.io.File
+import io.github.libxposed.api.XposedInterface
+import io.github.libxposed.api.XposedModule
 import kotlin.math.*
 
 object LocationEngine {
 
-    @Volatile var currentLat: Double = 24.774265 // Default Riyadh (Al Malqa)
-    @Volatile var currentLng: Double = 46.638527
+    @Volatile var isMasterRunning: Boolean = false
     @Volatile var isFakeLocationEnabled: Boolean = false
-    @Volatile var isFixLocationUnknownEnabled: Boolean = true
+    @Volatile var isFixLocationUnknownEnabled: Boolean = false
+    @Volatile var currentLat: Double = 0.0
+    @Volatile var currentLng: Double = 0.0
 
-    fun syncLocationSettings() {
-        // Priority 1: Direct file sync from Download folder
-        try {
-            val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "saned_location.txt")
-            if (file.exists()) {
-                val parts = file.readText().trim().split(",")
-                if (parts.size >= 3) {
-                    isFakeLocationEnabled = parts[0].toBoolean()
-                    val lat = parts[1].toDoubleOrNull()
-                    val lng = parts[2].toDoubleOrNull()
-                    if (lat != null && lng != null && lat != 0.0) {
-                        currentLat = lat
-                        currentLng = lng
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
+    private var remotePrefs: SharedPreferences? = null
 
-        // Priority 2: XSharedPreferences
+    fun initRemotePrefs(prefs: SharedPreferences) {
+        remotePrefs = prefs
+        syncLocationSettings()
         try {
-            val pref = XSharedPreferences("dev.jing.sanedhook", "sanedhook_settings")
-            if (pref.hasFileChanged()) pref.reload()
-            isFakeLocationEnabled = pref.getBoolean("fake_location_enabled", isFakeLocationEnabled)
-            val lat = pref.getString("fake_lat", "")?.toDoubleOrNull()
-            val lng = pref.getString("fake_lng", "")?.toDoubleOrNull()
-            if (lat != null && lng != null && lat != 0.0) {
-                currentLat = lat
-                currentLng = lng
+            prefs.registerOnSharedPreferenceChangeListener { _, _ ->
+                syncLocationSettings()
             }
         } catch (_: Throwable) {}
     }
 
+    fun syncLocationSettings() {
+        remotePrefs?.let { p ->
+            isMasterRunning = p.getBoolean("master_running", false)
+            isFakeLocationEnabled = p.getBoolean("fake_location_enabled", false)
+            isFixLocationUnknownEnabled = p.getBoolean("fix_location_unknown", false)
+            currentLat = p.getString("fake_lat", "0.0")?.toDoubleOrNull() ?: 0.0
+            currentLng = p.getString("fake_lng", "0.0")?.toDoubleOrNull() ?: 0.0
+        }
+    }
+
     fun createAccurateLocation(provider: String = "gps"): Location {
         syncLocationSettings()
+        val lat = if (currentLat != 0.0) currentLat else 24.7925
+        val lng = if (currentLng != 0.0) currentLng else 46.6189
+
         return Location(provider).apply {
-            latitude = currentLat
-            longitude = currentLng
+            latitude = lat
+            longitude = lng
             altitude = 612.0
             time = System.currentTimeMillis()
             elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
@@ -74,88 +65,84 @@ object LocationEngine {
         return r * c
     }
 
-    fun hook(classLoader: ClassLoader) {
-        // 1. UNIVERSAL HOOK: Hook Location.getLatitude() & Location.getLongitude()
+    fun hook(module: XposedModule, classLoader: ClassLoader) {
+        // 1. Hook Location.getLatitude()
         try {
-            XposedHelpers.findAndHookMethod(
-                Location::class.java,
-                "getLatitude",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        syncLocationSettings()
-                        if (isFakeLocationEnabled) {
-                            param.result = currentLat
-                        }
+            val mLat = Location::class.java.getDeclaredMethod("getLatitude")
+            module.hook(mLat).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    syncLocationSettings()
+                    if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0) {
+                        return currentLat
                     }
+                    return chain.proceed()
                 }
-            )
-
-            XposedHelpers.findAndHookMethod(
-                Location::class.java,
-                "getLongitude",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        syncLocationSettings()
-                        if (isFakeLocationEnabled) {
-                            param.result = currentLng
-                        }
-                    }
-                }
-            )
-
-            XposedHelpers.findAndHookMethod(
-                Location::class.java,
-                "getAccuracy",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (isFakeLocationEnabled || isFixLocationUnknownEnabled) {
-                            param.result = 3.0f
-                        }
-                    }
-                }
-            )
-        } catch (t: Throwable) {
-            XposedBridge.log("SanedAssistant: Error hooking Location getters: ${t.message}")
-        }
-
-        // 2. Hook LocationManager.getLastKnownLocation
-        try {
-            XposedHelpers.findAndHookMethod(
-                LocationManager::class.java,
-                "getLastKnownLocation",
-                String::class.java,
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        syncLocationSettings()
-                        val provider = param.args[0] as? String ?: "gps"
-                        if (isFakeLocationEnabled || (isFixLocationUnknownEnabled && param.result == null)) {
-                            param.result = createAccurateLocation(provider)
-                        }
-                    }
-                }
-            )
+            })
         } catch (_: Throwable) {}
 
-        // 3. Hook LocationManager.requestLocationUpdates
+        // 2. Hook Location.getLongitude()
         try {
-            val listenerHook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            val mLng = Location::class.java.getDeclaredMethod("getLongitude")
+            module.hook(mLng).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
                     syncLocationSettings()
-                    for (arg in param.args) {
-                        if (arg is LocationListener) {
-                            if (isFakeLocationEnabled || isFixLocationUnknownEnabled) {
-                                try {
-                                    arg.onLocationChanged(createAccurateLocation("gps"))
-                                } catch (_: Throwable) {}
-                            }
-                        }
+                    if (isMasterRunning && isFakeLocationEnabled && currentLng != 0.0) {
+                        return currentLng
                     }
+                    return chain.proceed()
                 }
-            }
+            })
+        } catch (_: Throwable) {}
 
+        // 3. Hook Location.getAccuracy()
+        try {
+            val mAcc = Location::class.java.getDeclaredMethod("getAccuracy")
+            module.hook(mAcc).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    syncLocationSettings()
+                    if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                        return 3.0f
+                    }
+                    return chain.proceed()
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 4. Hook LocationManager.getLastKnownLocation(String)
+        try {
+            val mLastLoc = LocationManager::class.java.getDeclaredMethod("getLastKnownLocation", String::class.java)
+            module.hook(mLastLoc).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    syncLocationSettings()
+                    val orig = chain.proceed() as? Location
+                    if (isMasterRunning && (isFakeLocationEnabled || (isFixLocationUnknownEnabled && orig == null))) {
+                        val provider = chain.args[0] as? String ?: "gps"
+                        return createAccurateLocation(provider)
+                    }
+                    return orig
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 5. Hook LocationManager.requestLocationUpdates
+        try {
             for (m in LocationManager::class.java.declaredMethods) {
                 if (m.name == "requestLocationUpdates") {
-                    XposedBridge.hookMethod(m, listenerHook)
+                    module.hook(m).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            syncLocationSettings()
+                            if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                                for (arg in chain.args) {
+                                    if (arg is LocationListener) {
+                                        try {
+                                            arg.onLocationChanged(createAccurateLocation("gps"))
+                                        } catch (_: Throwable) {}
+                                    }
+                                }
+                            }
+                            return chain.proceed()
+                        }
+                    })
                 }
             }
         } catch (_: Throwable) {}
