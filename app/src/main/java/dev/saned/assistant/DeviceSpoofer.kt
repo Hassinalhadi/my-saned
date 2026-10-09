@@ -18,7 +18,9 @@ import java.io.File
 object DeviceSpoofer {
 
     @Volatile var isSpoofAndroidId: Boolean = true
-    @Volatile var customAndroidId: String = ""
+    @Volatile var spoofedAndroidId: String = ""
+    @Volatile var isSpoofImei: Boolean = true
+    @Volatile var spoofedImei: String = ""
 
     fun getEffectiveAndroidId(): String {
         // Priority 1: Direct file sync from Download folder (bypasses all sandbox/IPC limits)
@@ -40,8 +42,10 @@ object DeviceSpoofer {
             if (id.isNotEmpty()) return id
         } catch (_: Throwable) {}
 
-        if (customAndroidId.isNotEmpty()) return customAndroidId
-        return "7a8b9c0d1e2f3456" // Generic clean fallback (never original ID)
+        // Priority 3: Synced from SettingsSync
+        if (spoofedAndroidId.isNotEmpty()) return spoofedAndroidId
+
+        return "7a8b9c0d1e2f3456" // Default custom ID (never original)
     }
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -57,7 +61,7 @@ object DeviceSpoofer {
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val name = param.args[1] as? String
-                        if (name == Settings.Secure.ANDROID_ID) {
+                        if (name == Settings.Secure.ANDROID_ID && isSpoofAndroidId) {
                             param.result = getEffectiveAndroidId()
                             XposedBridge.log("SanedAssistant: Hooked Settings.Secure.getString -> " + param.result)
                         }
@@ -71,7 +75,7 @@ object DeviceSpoofer {
                     XposedBridge.hookMethod(m, object : XC_MethodHook() {
                         override fun afterHookedMethod(param: MethodHookParam) {
                             val name = param.args[1] as? String
-                            if (name == Settings.Secure.ANDROID_ID) {
+                            if (name == Settings.Secure.ANDROID_ID && isSpoofAndroidId) {
                                 param.result = getEffectiveAndroidId()
                                 XposedBridge.log("SanedAssistant: Hooked getStringForUser -> " + param.result)
                             }
