@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <queries>
+        <package android:name="net.jahez.fleets" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
@@ -16,11 +20,21 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SanedAssistant">
 
-        <!-- Modern LibXposed Provider (Completely invisible to third-party anti-fraud scanners) -->
+        <!-- Modern LibXposed Provider -->
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
             android:authorities="dev.jing.sanedhook.XposedService"
             android:exported="true" />
+
+        <!-- High-Speed Inter-Process Broadcast Receiver for Settings & Orders -->
+        <receiver
+            android:name=".SanedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.saned.assistant.ACTION_LOG_ORDER" />
+                <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".ui.MainActivity"

@@ -1,5 +1,9 @@
 package dev.saned.assistant.ui
 
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -362,7 +366,7 @@ class MainActivity : AppCompatActivity() {
                     var lat = $initialLat;
                     var lng = $initialLng;
                     var map = L.map('map').setView([lat, lng], 14);
-                    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
                         maxZoom: 19
                     }).addTo(map);
 
@@ -693,4 +697,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-}
+
+    private val ordersUpdateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "dev.saned.assistant.UI_REFRESH_ORDERS") {
+                refreshOrdersLogUI()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshOrdersLogUI()
+        SettingsStore.broadcastSettings(this)
+        try {
+            val filter = IntentFilter("dev.saned.assistant.UI_REFRESH_ORDERS")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(ordersUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(ordersUpdateReceiver, filter)
+            }
+        } catch (_: Throwable) {}
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(ordersUpdateReceiver)
+        } catch (_: Throwable) {}
+        saveAllSettings()
+    }
+

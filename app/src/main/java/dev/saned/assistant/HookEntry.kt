@@ -12,47 +12,36 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class HookEntry : XposedModule() {
 
-    private val isInitialized = AtomicBoolean(false)
+    private val isSystemHooked = AtomicBoolean(false)
+    private val isAppHooked = AtomicBoolean(false)
 
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
         if (param.packageName != "net.jahez.fleets") return
-        val cl = param.defaultClassLoader
-        if (cl != null) {
-            initAllHooks(cl)
-        }
+        hookSystemLifecycle()
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         if (param.packageName != "net.jahez.fleets") return
         val cl = param.classLoader
         if (cl != null) {
-            initAllHooks(cl)
+            initAppHooks(cl)
         }
     }
 
-    private fun initAllHooks(classLoader: ClassLoader) {
-        // 1. Connect Remote Preferences via LibXposed IPC
-        try {
-            val remotePrefs = getRemotePreferences("sanedhook_settings")
-            DeviceSpoofer.initRemotePrefs(remotePrefs)
-            LocationEngine.initRemotePrefs(remotePrefs)
-            OrderInterceptor.initRemotePrefs(remotePrefs)
-        } catch (_: Throwable) {}
+    private fun hookSystemLifecycle() {
+        if (!isSystemHooked.compareAndSet(false, true)) return
 
-        if (!isInitialized.compareAndSet(false, true)) return
-
-        // 2. Hook Application.onCreate to ensure secondary Dex and components are ready
+        // 1. Hook Application.onCreate to get Application context
         try {
             val mAppCreate = Application::class.java.getDeclaredMethod("onCreate")
             hook(mAppCreate).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
-                    val app = chain.thisObject as? Context
+                    val app = chain.thisObject as? Application
                     if (app != null) {
                         try {
-                            DeviceSpoofer.syncSettings(app.contentResolver)
-                            LocationEngine.syncLocationSettings()
-                            OrderInterceptor.syncSettings(app.contentResolver)
+                            OrderInterceptor.initAppContext(app)
+                            initAppHooks(app.classLoader)
                         } catch (_: Throwable) {}
                     }
                     return res
@@ -60,7 +49,7 @@ class HookEntry : XposedModule() {
             })
         } catch (_: Throwable) {}
 
-        // 3. Hook Activity.onCreate for notification toast
+        // 2. Hook Activity.onCreate
         try {
             val mOnCreate = Activity::class.java.getDeclaredMethod("onCreate", Bundle::class.java)
             hook(mOnCreate).intercept(object : XposedInterface.Hooker {
@@ -68,11 +57,10 @@ class HookEntry : XposedModule() {
                     val res = chain.proceed()
                     val act = chain.thisObject as? Activity
                     if (act != null && act.packageName == "net.jahez.fleets") {
-                        DeviceSpoofer.syncSettings(act.contentResolver)
-                        LocationEngine.syncLocationSettings()
-                        OrderInterceptor.syncSettings(act.contentResolver)
+                        OrderInterceptor.initAppContext(act.applicationContext)
                         OrderInterceptor.currentActivity = act
-                        if (DeviceSpoofer.isMasterRunning) {
+                        initAppHooks(act.classLoader)
+                        if (OrderInterceptor.isMasterRunning) {
                             try {
                                 Toast.makeText(act, "⚡ مساعد سند مفعل ويعمل بنجاح!", Toast.LENGTH_SHORT).show()
                             } catch (_: Throwable) {}
@@ -82,8 +70,18 @@ class HookEntry : XposedModule() {
                 }
             })
         } catch (_: Throwable) {}
+    }
 
-        // 4. Register All Feature Hooks
+    private fun initAppHooks(classLoader: ClassLoader) {
+        try {
+            val remotePrefs = getRemotePreferences("sanedhook_settings")
+            DeviceSpoofer.initRemotePrefs(remotePrefs)
+            LocationEngine.initRemotePrefs(remotePrefs)
+            OrderInterceptor.initRemotePrefs(remotePrefs)
+        } catch (_: Throwable) {}
+
+        if (!isAppHooked.compareAndSet(false, true)) return
+
         try {
             PackageCloaker.hook(this, classLoader)
             LocationEngine.hook(this, classLoader)

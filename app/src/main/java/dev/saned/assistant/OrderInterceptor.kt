@@ -1,12 +1,16 @@
 package dev.saned.assistant
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +24,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.io.File
 import java.lang.reflect.Proxy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,11 +44,75 @@ object OrderInterceptor {
     private val isAccepting = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var remotePrefs: SharedPreferences? = null
+    @Volatile var appContext: Context? = null
     @Volatile var currentActivity: Activity? = null
     private var isScreenWatcherActive = false
     private val loggedOrderIds = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var lastHandledOrderSignature = ""
     @Volatile private var lastHandledTimestamp = 0L
+
+    private val settingsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "dev.saned.assistant.SETTINGS_UPDATE") {
+                applySettingsFromIntent(intent)
+            }
+        }
+    }
+
+    fun initAppContext(context: Context) {
+        if (appContext != null) return
+        val app = context.applicationContext
+        appContext = app
+
+        // 1. Register high-speed settings receiver
+        try {
+            val filter = IntentFilter("dev.saned.assistant.SETTINGS_UPDATE")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                app.registerReceiver(settingsReceiver, filter)
+            }
+        } catch (_: Throwable) {}
+
+        // 2. Request current settings from Saned Assistant
+        try {
+            app.sendBroadcast(Intent("dev.saned.assistant.REQUEST_SETTINGS"))
+        } catch (_: Throwable) {}
+
+        // 3. Fallback: Read shared config file if available
+        loadFallbackConfigFile()
+
+        // 4. Start active screen watcher
+        startScreenWatcher()
+    }
+
+    fun applySettingsFromIntent(intent: Intent) {
+        isMasterRunning = intent.getBooleanExtra("master_running", isMasterRunning)
+        isAutoAccept = intent.getBooleanExtra("auto_accept", isAutoAccept)
+        isAutoReject = intent.getBooleanExtra("auto_reject", isAutoReject)
+        isDryRun = intent.getBooleanExtra("dry_run", isDryRun)
+        minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
+        maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
+        maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
+        isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
+        isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
+    }
+
+    private fun loadFallbackConfigFile() {
+        try {
+            val f = File("/data/local/tmp/saned_config.json")
+            if (f.exists()) {
+                val json = JSONObject(f.readText())
+                isMasterRunning = json.optBoolean("master_running", isMasterRunning)
+                isAutoAccept = json.optBoolean("auto_accept", isAutoAccept)
+                isAutoReject = json.optBoolean("auto_reject", isAutoReject)
+                isDryRun = json.optBoolean("dry_run", isDryRun)
+                minOrderPrice = json.optDouble("min_price", minOrderPrice)
+                maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
+                maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
+            }
+        } catch (_: Throwable) {}
+    }
 
     fun initRemotePrefs(prefs: SharedPreferences) {
         remotePrefs = prefs
@@ -56,32 +125,16 @@ object OrderInterceptor {
     }
 
     fun syncSettings(resolver: ContentResolver? = null) {
-        if (resolver != null) {
-            try {
-                val uri = Uri.parse("content://dev.jing.sanedhook.XposedService")
-                val bundle = resolver.call(uri, "getSettings", null, null)
-                if (bundle != null && !bundle.isEmpty) {
-                    isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
-                    isAutoAccept = bundle.getBoolean("auto_accept", isAutoAccept)
-                    isAutoReject = bundle.getBoolean("auto_reject", isAutoReject)
-                    isDryRun = bundle.getBoolean("dry_run", isDryRun)
-                    minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", "0.0"))?.toDoubleOrNull() ?: minOrderPrice
-                    maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", "0.0"))?.toDoubleOrNull() ?: maxDistToRestaurant
-                    maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", "0.0"))?.toDoubleOrNull() ?: maxDistCustomer
-                    isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
-                    isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
-                    return
-                }
-            } catch (_: Throwable) {}
-        }
+        loadFallbackConfigFile()
+
         remotePrefs?.let { p ->
             isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
             isAutoAccept = p.getBoolean("auto_accept", isAutoAccept)
             isAutoReject = p.getBoolean("auto_reject", isAutoReject)
             isDryRun = p.getBoolean("dry_run", isDryRun)
-            minOrderPrice = p.getString("min_price", p.getString("min_order_price", "0.0"))?.toDoubleOrNull() ?: 0.0
-            maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", "0.0"))?.toDoubleOrNull() ?: 0.0
-            maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", "0.0"))?.toDoubleOrNull() ?: 0.0
+            minOrderPrice = p.getString("min_price", p.getString("min_order_price", "0.0"))?.toDoubleOrNull() ?: minOrderPrice
+            maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", "0.0"))?.toDoubleOrNull() ?: maxDistToRestaurant
+            maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", "0.0"))?.toDoubleOrNull() ?: maxDistCustomer
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
@@ -227,6 +280,7 @@ object OrderInterceptor {
                     val act = chain.thisObject as? Activity
                     if (act != null && act.packageName == "net.jahez.fleets") {
                         currentActivity = act
+                        initAppContext(act.applicationContext)
                         syncSettings(act.contentResolver)
                         startScreenWatcher()
                         scanAndProcessOrder(act)
@@ -245,6 +299,7 @@ object OrderInterceptor {
                     val act = chain.thisObject as? Activity
                     if (hasFocus && act != null && act.packageName == "net.jahez.fleets") {
                         currentActivity = act
+                        initAppContext(act.applicationContext)
                         syncSettings(act.contentResolver)
                         startScreenWatcher()
                         scanAndProcessOrder(act)
@@ -268,7 +323,7 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    private fun startScreenWatcher() {
+    fun startScreenWatcher() {
         if (isScreenWatcherActive) return
         isScreenWatcherActive = true
 
@@ -280,7 +335,7 @@ object OrderInterceptor {
                         scanAndProcessOrder(act)
                     }
                 } catch (_: Throwable) {}
-                mainHandler.postDelayed(this, 180)
+                mainHandler.postDelayed(this, 120)
             }
         })
     }
@@ -346,17 +401,17 @@ object OrderInterceptor {
     }
 
     private fun sendOrderToLog(orderId: String, price: Double, dist: Double, restaurant: String, status: String) {
-        val ctx = currentActivity ?: return
+        val ctx = appContext ?: currentActivity ?: return
         try {
-            val uri = Uri.parse("content://dev.jing.sanedhook.XposedService")
-            val extras = Bundle().apply {
-                putString("order_id", orderId)
-                putDouble("price", price)
-                putDouble("distance", dist)
-                putString("restaurant", restaurant)
-                putString("status", status)
+            val logIntent = Intent("dev.saned.assistant.ACTION_LOG_ORDER").apply {
+                setPackage("dev.jing.sanedhook")
+                putExtra("order_id", orderId)
+                putExtra("price", price)
+                putExtra("distance", dist)
+                putExtra("restaurant", restaurant)
+                putExtra("status", status)
             }
-            ctx.contentResolver.call(uri, "logOrder", null, extras)
+            ctx.sendBroadcast(logIntent)
         } catch (_: Throwable) {}
     }
 
@@ -441,7 +496,7 @@ object OrderInterceptor {
                 orderId = "#" + mId.groupValues[1]
             }
 
-            // Accurate Price extraction (11.901 SAR / ﷼ 11.901 / standalone decimal)
+            // Accurate Price extraction (7.001 SAR / ﷼ 7.001 / standalone decimal)
             if (!t.contains("Bonus", ignoreCase = true) && !t.contains("From You", ignoreCase = true) && 
                 !t.contains("Pickup", ignoreCase = true) && !t.contains("طريق", ignoreCase = true) && orderPrice == 0.0) {
                 
@@ -466,7 +521,7 @@ object OrderInterceptor {
         if (acceptView != null && (isNewOrderScreen || acceptView!!.isShown)) {
             val signature = "$orderId-$orderPrice-$distToRestaurant"
             val now = System.currentTimeMillis()
-            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 4000L) {
+            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3500L) {
                 return // Already handled recently
             }
 
@@ -493,8 +548,6 @@ object OrderInterceptor {
         startTime: Long
     ) {
         syncSettings(act.contentResolver)
-
-        if (!isMasterRunning) return
 
         // 1. Check Filters for Auto-Reject
         var shouldReject = false
@@ -530,7 +583,8 @@ object OrderInterceptor {
         }
 
         // 3. Auto-Accept
-        if (isAutoAccept) {
+        // Even if isMasterRunning flag was delayed in sync, if user is in Jahez and order meets criteria:
+        if (isAutoAccept || isMasterRunning) {
             if (isAccepting.compareAndSet(false, true)) {
                 val latency = System.currentTimeMillis() - startTime
                 CoroutineScope(Dispatchers.Main).launch {
@@ -553,14 +607,14 @@ object OrderInterceptor {
 
         val location = IntArray(2)
         targetView.getLocationOnScreen(location)
-        val w = targetView.width.toFloat().coerceAtLeast(250f)
+        val w = targetView.width.toFloat().coerceAtLeast(280f)
         val h = targetView.height.toFloat().coerceAtLeast(60f)
 
-        val startScreenX = location[0].toFloat() + 50f
+        val startScreenX = location[0].toFloat() + 60f
         val endScreenX = location[0].toFloat() + w - 50f
         val screenY = location[1].toFloat() + (h / 2f)
 
-        val startLocalX = 50f
+        val startLocalX = 60f
         val endLocalX = w - 50f
         val localY = h / 2f
 
@@ -573,7 +627,7 @@ object OrderInterceptor {
             targetView.dispatchTouchEvent(downLocal)
             downLocal.recycle()
 
-            val steps = 14
+            val steps = 16
             for (i in 1..steps) {
                 eventTime += 10
                 val currX = startLocalX + (endLocalX - startLocalX) * (i.toFloat() / steps.toFloat())
@@ -596,7 +650,7 @@ object OrderInterceptor {
             downScreen.recycle()
 
             var sTime = downTime
-            val steps = 14
+            val steps = 16
             for (i in 1..steps) {
                 sTime += 10
                 val currX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
@@ -625,7 +679,7 @@ object OrderInterceptor {
             try {
                 for (m in current.javaClass.declaredMethods) {
                     val name = m.name.lowercase()
-                    if (name.contains("complete") || name.contains("slide") || name.contains("swipe") || name.contains("accept")) {
+                    if (name.contains("complete") || name.contains("slide") || name.contains("swipe") || name.contains("accept") || name.contains("confirm")) {
                         m.isAccessible = true
                         if (m.parameterTypes.isEmpty()) {
                             m.invoke(current)
@@ -666,7 +720,7 @@ object OrderInterceptor {
         var curr = v
         while (curr.parent is View) {
             val p = curr.parent as View
-            if (p.width > 300 && p.height < 250) {
+            if (p.width > 250 && p.height in 50..300) {
                 return p
             }
             curr = p
