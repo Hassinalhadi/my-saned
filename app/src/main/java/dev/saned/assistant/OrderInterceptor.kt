@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -72,12 +73,22 @@ object OrderInterceptor {
     @Volatile var lastInterceptedUrl: String = "None yet"
     @Volatile var lastHttpResponseCode: Int = 0
     @Volatile var lastOrderEvent: String = "Listening for orders..."
-    @Volatile var isOkHttpHooked: Boolean = true
+    @Volatile var isOkHttpHooked: Boolean = false
 
     // Network & Session Cache
     @Volatile var cachedAuthToken: String = ""
     @Volatile var cachedApiHost: String = ""
     private val cachedHeaders = ConcurrentHashMap<String, String>()
+
+    // Candidate hosts verified for Jahez platform
+    val candidateApiHosts = listOf(
+        "https://api.jahez.net",
+        "https://fleet-api.jahez.net",
+        "https://integration-api.jahez.net",
+        "https://portal.jahez.net",
+        "https://app.jahez.net",
+        "https://mobile-api.jahez.net"
+    )
 
     // Resilient SSL-Bypassing OkHttpClient for direct Jahez API calls
     private val httpClient: OkHttpClient by lazy {
@@ -124,6 +135,9 @@ object OrderInterceptor {
                 scanAllSharedPreferencesForTokens(app)
             }
         }
+        if (cachedApiHost.isEmpty()) {
+            readPersistedHost()
+        }
 
         try {
             val pongIntent = Intent("dev.saned.assistant.ACTION_PONG").apply {
@@ -133,7 +147,7 @@ object OrderInterceptor {
                 putExtra("hook_active", true)
                 putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
                 putExtra("orders_count", loggedOrderIds.size)
-                putExtra("api_host", cachedApiHost)
+                putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
                 putExtra("http_requests_count", httpRequestsCount.get())
                 putExtra("polling_hits", pollingHits.get())
                 putExtra("last_http_url", lastInterceptedUrl)
@@ -151,7 +165,7 @@ object OrderInterceptor {
                 putExtra("hook_active", true)
                 putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
                 putExtra("orders_count", loggedOrderIds.size)
-                putExtra("api_host", cachedApiHost)
+                putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
                 putExtra("http_requests_count", httpRequestsCount.get())
                 putExtra("polling_hits", pollingHits.get())
                 putExtra("last_http_url", lastInterceptedUrl)
@@ -164,29 +178,49 @@ object OrderInterceptor {
     }
 
     private fun performLiveApiProbe() {
-        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
-        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val app = appContext ?: currentActivity ?: return
+        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
 
         CoroutineScope(Dispatchers.IO).launch {
             val startTime = System.currentTimeMillis()
             var code = -1
             var snippet = ""
-            var targetUrl = if (lastOrdersListUrl.isNotEmpty()) lastOrdersListUrl else "$host/api/fleets/orders/available"
+            var resolvedHost = ""
+            var targetUrl = ""
 
-            try {
-                val reqBuilder = Request.Builder().url(targetUrl).get()
-                if (token.isNotEmpty()) reqBuilder.header("Authorization", token)
-                for ((k, v) in cachedHeaders) {
-                    if (k != "Authorization" && k != "Content-Length") reqBuilder.header(k, v)
+            // Build list of hosts to probe
+            val probeHosts = mutableListOf<String>()
+            if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
+            if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
+            probeHosts.addAll(candidateApiHosts)
+
+            for (h in probeHosts.distinct()) {
+                val candidateUrl = if (h.startsWith("http") && h.contains("/api")) h else "$h/api/fleets/orders/available"
+                try {
+                    val reqBuilder = Request.Builder().url(candidateUrl).get()
+                    if (token.isNotEmpty()) reqBuilder.header("Authorization", token)
+                    for ((k, v) in cachedHeaders) {
+                        if (k != "Authorization" && k != "Content-Length") reqBuilder.header(k, v)
+                    }
+                    val resp = httpClient.newCall(reqBuilder.build()).execute()
+                    code = resp.code
+                    val rawBody = resp.body?.string() ?: ""
+                    resp.close()
+
+                    targetUrl = candidateUrl
+                    snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                    if (code in 200..499) { // Host successfully resolved!
+                        val uri = java.net.URI(candidateUrl)
+                        resolvedHost = "${uri.scheme}://${uri.host}"
+                        cachedApiHost = resolvedHost
+                        persistHost(resolvedHost)
+                        break
+                    }
+                } catch (e: Throwable) {
+                    if (snippet.isEmpty()) {
+                        snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
+                    }
                 }
-                val resp = httpClient.newCall(reqBuilder.build()).execute()
-                code = resp.code
-                val rawBody = resp.body?.string() ?: ""
-                resp.close()
-                snippet = if (rawBody.length > 200) rawBody.substring(0, 200) + "..." else rawBody
-            } catch (e: Throwable) {
-                snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
             }
 
             val latency = System.currentTimeMillis() - startTime
@@ -194,7 +228,7 @@ object OrderInterceptor {
                 component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
                 putExtra("status_code", code)
                 putExtra("latency_ms", latency)
-                putExtra("url", targetUrl)
+                putExtra("url", if (targetUrl.isNotEmpty()) targetUrl else resolvedHost)
                 putExtra("body_snippet", snippet)
                 putExtra("has_token", token.isNotEmpty())
             }
@@ -204,7 +238,7 @@ object OrderInterceptor {
                 val gIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
                     putExtra("status_code", code)
                     putExtra("latency_ms", latency)
-                    putExtra("url", targetUrl)
+                    putExtra("url", if (targetUrl.isNotEmpty()) targetUrl else resolvedHost)
                     putExtra("body_snippet", snippet)
                     putExtra("has_token", token.isNotEmpty())
                 }
@@ -232,7 +266,6 @@ object OrderInterceptor {
         val app = context.applicationContext
         appContext = app
 
-        // 1. Register high-speed settings & ping receiver
         try {
             val filter = IntentFilter().apply {
                 addAction("dev.saned.assistant.SETTINGS_UPDATE")
@@ -250,6 +283,7 @@ object OrderInterceptor {
         requestSettingsFromAssistant()
         loadFallbackConfigFile()
         readPersistedToken()
+        readPersistedHost()
         scanAllSharedPreferencesForTokens(app)
         startScreenWatcher()
         startActiveServerPolling()
@@ -351,6 +385,7 @@ object OrderInterceptor {
                 if (t.isNotEmpty()) {
                     cachedAuthToken = t
                     cachedHeaders["Authorization"] = t
+                    extractHostFromJwt(t)
                     return t
                 }
             }
@@ -358,17 +393,62 @@ object OrderInterceptor {
         return ""
     }
 
+    fun persistHost(host: String) {
+        if (host.isEmpty()) return
+        try {
+            val f = File("/data/local/tmp/saned_api_host.txt")
+            f.writeText(host.trim())
+            f.setReadable(true, false)
+            f.setWritable(true, false)
+        } catch (_: Throwable) {}
+    }
+
+    fun readPersistedHost(): String {
+        try {
+            val f = File("/data/local/tmp/saned_api_host.txt")
+            if (f.exists()) {
+                val h = f.readText().trim()
+                if (h.isNotEmpty()) {
+                    cachedApiHost = h
+                    return h
+                }
+            }
+        } catch (_: Throwable) {}
+        return ""
+    }
+
+    private fun extractHostFromJwt(token: String) {
+        try {
+            val clean = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+            val parts = clean.split(".")
+            if (parts.size >= 2) {
+                val payloadB64 = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
+                val jsonStr = String(Base64.decode(payloadB64, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+                val json = JSONObject(jsonStr)
+
+                val iss = json.optString("iss", "")
+                val aud = json.optString("aud", "")
+                for (candidate in listOf(iss, aud)) {
+                    if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+                        val uri = java.net.URI(candidate)
+                        cachedApiHost = "${uri.scheme}://${uri.host}"
+                        persistHost(cachedApiHost)
+                        break
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
     fun scanAllSharedPreferencesForTokens(context: Context) {
-        if (cachedAuthToken.isNotEmpty()) return
         readPersistedToken()
-        if (cachedAuthToken.isNotEmpty()) return
+        readPersistedHost()
 
         val dataDir = context.applicationInfo?.dataDir ?: return
         val prefsDir = File(dataDir, "shared_prefs")
         if (prefsDir.exists() && prefsDir.isDirectory) {
             val files = prefsDir.listFiles() ?: return
             for (file in files) {
-                if (cachedAuthToken.isNotEmpty()) break
                 val name = file.nameWithoutExtension
                 try {
                     val content = if (file.canRead()) file.readText() else ""
@@ -377,7 +457,15 @@ object OrderInterceptor {
                     } else {
                         val sp = context.getSharedPreferences(name, Context.MODE_PRIVATE)
                         for ((k, v) in sp.all) {
-                            checkAndSetToken(v?.toString())
+                            val strVal = v?.toString() ?: ""
+                            checkAndSetToken(strVal)
+                            if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
+                                if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
+                                    val uri = java.net.URI(strVal)
+                                    cachedApiHost = "${uri.scheme}://${uri.host}"
+                                    persistHost(cachedApiHost)
+                                }
+                            }
                         }
                     }
                 } catch (_: Throwable) {}
@@ -398,7 +486,15 @@ object OrderInterceptor {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
             for ((k, v) in encPrefs.all) {
-                checkAndSetToken(v?.toString())
+                val strVal = v?.toString() ?: ""
+                checkAndSetToken(strVal)
+                if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
+                    if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
+                        val uri = java.net.URI(strVal)
+                        cachedApiHost = "${uri.scheme}://${uri.host}"
+                        persistHost(cachedApiHost)
+                    }
+                }
             }
         } catch (_: Throwable) {}
     }
@@ -410,11 +506,13 @@ object OrderInterceptor {
             cachedAuthToken = str
             cachedHeaders["Authorization"] = str
             persistToken(str)
+            extractHostFromJwt(str)
         } else if (str.startsWith("ey", ignoreCase = false) && str.contains(".") && str.length > 30) {
             val t = "Bearer $str"
             cachedAuthToken = t
             cachedHeaders["Authorization"] = t
             persistToken(t)
+            extractHostFromJwt(str)
         } else if (str.length > 32 && str.matches(Regex("^[a-zA-Z0-9_\\-\\.]+$"))) {
             if (cachedAuthToken.isEmpty()) {
                 val t = "Bearer $str"
@@ -426,18 +524,39 @@ object OrderInterceptor {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        hookOkHttp(module, classLoader)
+        var hookCount = 0
+
+        // 1. Hook OkHttpClient across all possible class names
+        hookCount += hookOkHttp(module, classLoader)
+
+        // 2. WebSocket Listeners & Readers
         hookWebSocket(module, classLoader)
+
+        // 3. SharedPreferences Editor & getString hooks
         hookSharedPreferences(module, classLoader)
+
+        // 4. Firebase Cloud Messaging (FCM Push Notifications)
         hookFirebase(module, classLoader)
+
+        // 5. SQLite Database (Room & raw SQLite order inserts)
         hookSQLite(module)
+
+        // 6. Hook javax.crypto.Cipher.doFinal
         hookCipher(module)
+
+        // 7. Universal JSON constructors
         hookJsonConstructors(module)
+
+        // 8. Dialog show & UI Lifecycle
         hookDialogShow(module)
         hookUI(module, classLoader)
+
+        isOkHttpHooked = (hookCount > 0)
     }
 
-    private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader) {
+    private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader): Int {
+        var hooksInstalled = 0
+
         // Hook OkHttpClient.newCall(Request)
         try {
             val clientClass = Class.forName("okhttp3.OkHttpClient", false, classLoader)
@@ -452,6 +571,7 @@ object OrderInterceptor {
                             return chain.proceed()
                         }
                     })
+                    hooksInstalled++
                 }
             }
         } catch (_: Throwable) {}
@@ -475,6 +595,7 @@ object OrderInterceptor {
                                 return resp
                             }
                         })
+                        hooksInstalled++
                     }
                     if (m.name.startsWith("getResponseWithInterceptorChain")) {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -486,6 +607,7 @@ object OrderInterceptor {
                                 return resp
                             }
                         })
+                        hooksInstalled++
                     }
                 }
             } catch (_: Throwable) {}
@@ -507,6 +629,7 @@ object OrderInterceptor {
                             return resp
                         }
                     })
+                    hooksInstalled++
                 }
             }
         } catch (_: Throwable) {}
@@ -549,7 +672,10 @@ object OrderInterceptor {
                     return chain.proceed()
                 }
             })
+            hooksInstalled++
         } catch (_: Throwable) {}
+
+        return hooksInstalled
     }
 
     private fun captureRequestMetadata(request: Any) {
@@ -562,6 +688,7 @@ object OrderInterceptor {
             if (url.startsWith("http")) {
                 val uri = java.net.URI(url)
                 cachedApiHost = "${uri.scheme}://${uri.host}"
+                persistHost(cachedApiHost)
 
                 val lowerUrl = url.lowercase()
                 if (lowerUrl.contains("order") || lowerUrl.contains("fleet") || lowerUrl.contains("dispatch")) {
@@ -922,21 +1049,16 @@ object OrderInterceptor {
     }
 
     private fun pollServerForAvailableOrders() {
-        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
         val token = cachedAuthToken
         if (token.isEmpty()) return
 
-        val targetUrls = mutableListOf<String>()
-        if (lastOrdersListUrl.isNotEmpty()) {
-            targetUrls.add(lastOrdersListUrl)
-        }
-        targetUrls.add("$host/api/fleets/orders/available")
-        targetUrls.add("$host/api/fleets/orders")
-        targetUrls.add("$host/api/driver/orders/available")
-        targetUrls.add("$host/api/driver/orders")
-        targetUrls.add("$host/api/fleets/orders/unassigned")
+        val probeHosts = mutableListOf<String>()
+        if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
+        if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
+        probeHosts.addAll(candidateApiHosts)
 
-        for (url in targetUrls) {
+        for (h in probeHosts.distinct()) {
+            val url = if (h.startsWith("http") && h.contains("/api")) h else "$h/api/fleets/orders/available"
             try {
                 pollingHits.incrementAndGet()
                 val reqBuilder = Request.Builder().url(url).get()
@@ -953,6 +1075,11 @@ object OrderInterceptor {
                 resp.close()
 
                 if (code in 200..299 && body.isNotEmpty()) {
+                    if (cachedApiHost.isEmpty()) {
+                        val uri = java.net.URI(url)
+                        cachedApiHost = "${uri.scheme}://${uri.host}"
+                        persistHost(cachedApiHost)
+                    }
                     if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
                         findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
                         break
@@ -1094,7 +1221,7 @@ object OrderInterceptor {
         }
 
         if (shouldReject) {
-            lastOrderEvent = "Order $orderId Auto-Rejected: $rejectReason"
+            lastOrderEvent = "Order $orderId auto-rejected ($rejectReason)"
             currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected Order $orderId: $rejectReason") }
             sendOrderToLog(orderId, price, dist, restaurant, "Auto-Rejected ❌ ($rejectReason)")
             executeDirectApiCall(rawId, "REJECT")
@@ -1102,7 +1229,7 @@ object OrderInterceptor {
         }
 
         if (isDryRun) {
-            lastOrderEvent = "Order $orderId evaluated (Dry-Run: would accept)"
+            lastOrderEvent = "Order $orderId dry-run (would accept)"
             currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: Would accept Order $orderId (API)") }
             sendOrderToLog(orderId, price, dist, restaurant, "Dry-Run (Would Accept) 🔍")
             return
@@ -1118,54 +1245,60 @@ object OrderInterceptor {
     }
 
     private fun executeDirectApiCall(orderIdNum: String, action: String) {
-        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
         val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val burstCount = if (action == "ACCEPT") parallelRequests.coerceIn(1, 5) else 1
 
+        val probeHosts = mutableListOf<String>()
+        if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
+        probeHosts.addAll(candidateApiHosts)
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val endpoints = if (action == "ACCEPT") {
-                    listOf(
-                        "$host/api/fleets/orders/$orderIdNum/accept",
-                        "$host/api/driver/orders/$orderIdNum/accept",
-                        "$host/api/orders/$orderIdNum/accept",
-                        "$host/api/v1/orders/$orderIdNum/accept",
-                        "$host/api/v2/fleets/orders/$orderIdNum/accept"
-                    )
-                } else {
-                    listOf(
-                        "$host/api/fleets/orders/$orderIdNum/reject",
-                        "$host/api/driver/orders/$orderIdNum/reject",
-                        "$host/api/orders/$orderIdNum/reject"
-                    )
-                }
-
                 val body = "{\"order_id\":\"$orderIdNum\"}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
                 for (burst in 0 until burstCount) {
                     launch {
-                        for (url in endpoints) {
-                            for (method in listOf("POST", "PUT")) {
-                                try {
-                                    val reqBuilder = Request.Builder().url(url)
-                                    if (method == "POST") reqBuilder.post(body) else reqBuilder.put(body)
+                        for (host in probeHosts.distinct()) {
+                            val endpoints = if (action == "ACCEPT") {
+                                listOf(
+                                    "$host/api/fleets/orders/$orderIdNum/accept",
+                                    "$host/api/driver/orders/$orderIdNum/accept",
+                                    "$host/api/orders/$orderIdNum/accept",
+                                    "$host/api/v1/orders/$orderIdNum/accept"
+                                )
+                            } else {
+                                listOf(
+                                    "$host/api/fleets/orders/$orderIdNum/reject",
+                                    "$host/api/driver/orders/$orderIdNum/reject",
+                                    "$host/api/orders/$orderIdNum/reject"
+                                )
+                            }
 
-                                    if (token.isNotEmpty()) {
-                                        reqBuilder.header("Authorization", token)
-                                    }
-                                    for ((k, v) in cachedHeaders) {
-                                        if (k != "Authorization" && k != "Content-Length") {
-                                            reqBuilder.header(k, v)
+                            for (url in endpoints) {
+                                for (method in listOf("POST", "PUT")) {
+                                    try {
+                                        val reqBuilder = Request.Builder().url(url)
+                                        if (method == "POST") reqBuilder.post(body) else reqBuilder.put(body)
+
+                                        if (token.isNotEmpty()) {
+                                            reqBuilder.header("Authorization", token)
                                         }
-                                    }
+                                        for ((k, v) in cachedHeaders) {
+                                            if (k != "Authorization" && k != "Content-Length") {
+                                                reqBuilder.header(k, v)
+                                            }
+                                        }
 
-                                    val resp = httpClient.newCall(reqBuilder.build()).execute()
-                                    val code = resp.code
-                                    resp.close()
-                                    if (code in 200..299) {
-                                        return@launch
-                                    }
-                                } catch (_: Throwable) {}
+                                        val resp = httpClient.newCall(reqBuilder.build()).execute()
+                                        val code = resp.code
+                                        resp.close()
+                                        if (code in 200..299) {
+                                            cachedApiHost = host
+                                            persistHost(host)
+                                            return@launch
+                                        }
+                                    } catch (_: Throwable) {}
+                                }
                             }
                         }
                     }
