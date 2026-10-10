@@ -222,9 +222,7 @@ object OrderInterceptor {
 
         CoroutineScope(Dispatchers.IO).launch {
             if (token.isEmpty()) {
-                val hint = "Waiting for Live Session Token ⏳
-
-👉 Please open Jahez Fleets app, go to Orders tab and pull down to refresh. Saned Assistant will automatically capture your active session token from live network traffic!"
+                val hint = "Waiting for Live Session Token ⏳\n\n👉 Please open Jahez Fleets app, go to Orders tab and pull down to refresh. Saned Assistant will automatically capture your active session token from live network traffic!"
                 val noTokenIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
                     component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
                     putExtra("status_code", 0)
