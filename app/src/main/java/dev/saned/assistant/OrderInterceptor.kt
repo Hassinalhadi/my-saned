@@ -20,6 +20,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import android.widget.Toast
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import kotlinx.coroutines.*
@@ -97,6 +99,14 @@ object OrderInterceptor {
     private fun respondToPing(intent: Intent) {
         val app = appContext ?: currentActivity ?: return
         val pingTimestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
+
+        if (cachedAuthToken.isEmpty()) {
+            readPersistedToken()
+            if (cachedAuthToken.isEmpty()) {
+                scanAllSharedPreferencesForTokens(app)
+            }
+        }
+
         try {
             val pongIntent = Intent("dev.saned.assistant.ACTION_PONG").apply {
                 component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
@@ -147,8 +157,9 @@ object OrderInterceptor {
         // 3. Fallback: Read shared config file if available
         loadFallbackConfigFile()
 
-        // 4. Proactive: Scan Jahez SharedPreferences for auth tokens
-        scanSharedPreferencesForAuth(app)
+        // 4. Proactive: Read persisted token and scan SharedPreferences / EncryptedSharedPreferences
+        readPersistedToken()
+        scanAllSharedPreferencesForTokens(app)
 
         // 5. Start active screen watcher
         startScreenWatcher()
@@ -235,27 +246,96 @@ object OrderInterceptor {
         }
     }
 
-    fun scanSharedPreferencesForAuth(context: Context) {
+    fun persistToken(token: String) {
+        if (token.isEmpty()) return
         try {
-            val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
-            if (prefsDir.exists() && prefsDir.isDirectory) {
-                prefsDir.listFiles()?.forEach { file ->
-                    val prefName = file.nameWithoutExtension
-                    try {
-                        val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                        for ((k, v) in sp.all) {
-                            val strVal = v?.toString() ?: ""
-                            if (strVal.startsWith("Bearer ", ignoreCase = true) || 
-                                ((k.contains("token", ignoreCase = true) || k.contains("auth", ignoreCase = true)) && strVal.length > 20)) {
-                                val token = if (strVal.startsWith("Bearer ", ignoreCase = true)) strVal else "Bearer $strVal"
-                                cachedAuthToken = token
-                                cachedHeaders["Authorization"] = token
-                            }
-                        }
-                    } catch (_: Throwable) {}
+            val f = File("/data/local/tmp/saned_auth_token.txt")
+            f.writeText(token.trim())
+            f.setReadable(true, false)
+            f.setWritable(true, false)
+        } catch (_: Throwable) {}
+    }
+
+    fun readPersistedToken(): String {
+        try {
+            val f = File("/data/local/tmp/saned_auth_token.txt")
+            if (f.exists()) {
+                val t = f.readText().trim()
+                if (t.isNotEmpty()) {
+                    cachedAuthToken = t
+                    cachedHeaders["Authorization"] = t
+                    return t
                 }
             }
         } catch (_: Throwable) {}
+        return ""
+    }
+
+    fun scanAllSharedPreferencesForTokens(context: Context) {
+        if (cachedAuthToken.isNotEmpty()) return
+        readPersistedToken()
+        if (cachedAuthToken.isNotEmpty()) return
+
+        val dataDir = context.applicationInfo?.dataDir ?: return
+        val prefsDir = File(dataDir, "shared_prefs")
+        if (prefsDir.exists() && prefsDir.isDirectory) {
+            val files = prefsDir.listFiles() ?: return
+            for (file in files) {
+                if (cachedAuthToken.isNotEmpty()) break
+                val name = file.nameWithoutExtension
+                try {
+                    val content = if (file.canRead()) file.readText() else ""
+                    if (content.contains("__androidx_security_crypto")) {
+                        tryDecryptEncryptedSharedPreferences(context, name)
+                    } else {
+                        val sp = context.getSharedPreferences(name, Context.MODE_PRIVATE)
+                        for ((k, v) in sp.all) {
+                            checkAndSetToken(v?.toString())
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    private fun tryDecryptEncryptedSharedPreferences(context: Context, fileName: String) {
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val encPrefs = EncryptedSharedPreferences.create(
+                context,
+                fileName,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            for ((k, v) in encPrefs.all) {
+                checkAndSetToken(v?.toString())
+            }
+        } catch (_: Throwable) {}
+    }
+
+    fun checkAndSetToken(value: String?) {
+        if (value.isNullOrEmpty()) return
+        val str = value.trim()
+        if (str.startsWith("Bearer ", ignoreCase = true)) {
+            cachedAuthToken = str
+            cachedHeaders["Authorization"] = str
+            persistToken(str)
+        } else if (str.startsWith("ey", ignoreCase = false) && str.contains(".") && str.length > 30) {
+            val t = "Bearer $str"
+            cachedAuthToken = t
+            cachedHeaders["Authorization"] = t
+            persistToken(t)
+        } else if (str.length > 32 && str.matches(Regex("^[a-zA-Z0-9_\\-\\.]+$"))) {
+            if (cachedAuthToken.isEmpty()) {
+                val t = "Bearer $str"
+                cachedAuthToken = t
+                cachedHeaders["Authorization"] = t
+                persistToken(t)
+            }
+        }
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
@@ -265,8 +345,8 @@ object OrderInterceptor {
         // 2. WebSocket Listeners & Readers
         hookWebSocket(module, classLoader)
 
-        // 3. SharedPreferences Editor (Captures Auth token upon login)
-        hookSharedPreferences(module)
+        // 3. SharedPreferences Editor & getString hooks
+        hookSharedPreferences(module, classLoader)
 
         // 4. Firebase Cloud Messaging (FCM Push Notifications)
         hookFirebase(module, classLoader)
@@ -437,8 +517,7 @@ object OrderInterceptor {
 
             val auth = getMethod.invoke(headersObj, "Authorization") as? String
             if (!auth.isNullOrEmpty()) {
-                cachedAuthToken = auth
-                cachedHeaders["Authorization"] = auth
+                checkAndSetToken(auth)
             }
 
             val cookie = getMethod.invoke(headersObj, "Cookie") as? String
@@ -498,22 +577,34 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    private fun hookSharedPreferences(module: XposedModule) {
+    private fun hookSharedPreferences(module: XposedModule, classLoader: ClassLoader) {
+        // Hook SharedPreferences.Editor.putString to catch tokens as they are saved
         try {
             val editorClass = Class.forName("android.content.SharedPreferences\$Editor")
             for (m in editorClass.declaredMethods) {
                 if (m.name == "putString") {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val key = chain.args.getOrNull(0) as? String ?: ""
-                            val value = chain.args.getOrNull(1) as? String ?: ""
-                            if (value.startsWith("Bearer ", ignoreCase = true) || 
-                                ((key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true)) && value.length > 20)) {
-                                val token = if (value.startsWith("Bearer ", ignoreCase = true)) value else "Bearer $value"
-                                cachedAuthToken = token
-                                cachedHeaders["Authorization"] = token
-                            }
+                            val value = chain.args.getOrNull(1) as? String
+                            checkAndSetToken(value)
                             return chain.proceed()
+                        }
+                    })
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // Hook SharedPreferencesImpl.getString to catch tokens as they are read
+        try {
+            val spImplClass = Class.forName("android.app.SharedPreferencesImpl")
+            for (m in spImplClass.declaredMethods) {
+                if (m.name == "getString" && m.parameterTypes.size == 2) {
+                    module.hook(m).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            val result = chain.proceed()
+                            val s = result as? String
+                            checkAndSetToken(s)
+                            return result
                         }
                     })
                 }
@@ -654,7 +745,7 @@ object OrderInterceptor {
                     if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
                         currentActivity = act
                         initAppContext(act.applicationContext)
-                        scanSharedPreferencesForAuth(act.applicationContext)
+                        scanAllSharedPreferencesForTokens(act.applicationContext)
                         requestSettingsFromAssistant()
                         startScreenWatcher()
                         startActiveServerPolling()
@@ -675,7 +766,7 @@ object OrderInterceptor {
                     if (hasFocus && act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
                         currentActivity = act
                         initAppContext(act.applicationContext)
-                        scanSharedPreferencesForAuth(act.applicationContext)
+                        scanAllSharedPreferencesForTokens(act.applicationContext)
                         requestSettingsFromAssistant()
                         startScreenWatcher()
                         startActiveServerPolling()
@@ -760,7 +851,12 @@ object OrderInterceptor {
             while (true) {
                 try {
                     if (isMasterRunning && isActivePolling) {
-                        pollServerForAvailableOrders()
+                        if (cachedAuthToken.isEmpty()) {
+                            readPersistedToken()
+                        }
+                        if (cachedAuthToken.isNotEmpty()) {
+                            pollServerForAvailableOrders()
+                        }
                     }
                 } catch (_: Throwable) {}
                 val delayMs = ((pollIntervalSec.coerceIn(0.2f, 10.0f)) * 1000).toLong()
@@ -957,7 +1053,7 @@ object OrderInterceptor {
 
     private fun executeDirectApiCall(orderIdNum: String, action: String) {
         val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
-        val token = cachedAuthToken
+        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val burstCount = if (action == "ACCEPT") parallelRequests.coerceIn(1, 5) else 1
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -966,7 +1062,9 @@ object OrderInterceptor {
                     listOf(
                         "$host/api/fleets/orders/$orderIdNum/accept",
                         "$host/api/driver/orders/$orderIdNum/accept",
-                        "$host/api/orders/$orderIdNum/accept"
+                        "$host/api/orders/$orderIdNum/accept",
+                        "$host/api/v1/orders/$orderIdNum/accept",
+                        "$host/api/v2/fleets/orders/$orderIdNum/accept"
                     )
                 } else {
                     listOf(
@@ -981,27 +1079,28 @@ object OrderInterceptor {
                 for (burst in 0 until burstCount) {
                     launch {
                         for (url in endpoints) {
-                            try {
-                                val reqBuilder = Request.Builder()
-                                    .url(url)
-                                    .post(body)
+                            for (method in listOf("POST", "PUT")) {
+                                try {
+                                    val reqBuilder = Request.Builder().url(url)
+                                    if (method == "POST") reqBuilder.post(body) else reqBuilder.put(body)
 
-                                if (token.isNotEmpty()) {
-                                    reqBuilder.header("Authorization", token)
-                                }
-                                for ((k, v) in cachedHeaders) {
-                                    if (k != "Authorization" && k != "Content-Length") {
-                                        reqBuilder.header(k, v)
+                                    if (token.isNotEmpty()) {
+                                        reqBuilder.header("Authorization", token)
                                     }
-                                }
+                                    for ((k, v) in cachedHeaders) {
+                                        if (k != "Authorization" && k != "Content-Length") {
+                                            reqBuilder.header(k, v)
+                                        }
+                                    }
 
-                                val resp = httpClient.newCall(reqBuilder.build()).execute()
-                                val code = resp.code
-                                resp.close()
-                                if (code in 200..299) {
-                                    break
-                                }
-                            } catch (_: Throwable) {}
+                                    val resp = httpClient.newCall(reqBuilder.build()).execute()
+                                    val code = resp.code
+                                    resp.close()
+                                    if (code in 200..299) {
+                                        return@launch
+                                    }
+                                } catch (_: Throwable) {}
+                            }
                         }
                     }
                 }
@@ -1082,20 +1181,23 @@ object OrderInterceptor {
             if (text.isNotEmpty()) allTexts.add(text)
             if (desc.isNotEmpty()) allTexts.add(desc)
 
-            val combined = (text + " " + desc).trim()
+            val combined = (text + " " + desc).trim().lowercase()
 
-            if (combined.contains("Accept", ignoreCase = true) || combined.contains("قبول") || combined.contains(">>")) {
-                if (acceptView == null || combined.contains("Accept", ignoreCase = true)) {
+            if (combined.contains("accept") || combined.contains("قبول") || 
+                combined.contains("تأكيد") || combined.contains("confirm") || 
+                combined.contains("slide") || combined.contains("swipe") ||
+                combined.contains(">>") || combined.contains("اسحب")) {
+                if (acceptView == null || combined.contains("accept")) {
                     acceptView = v
                 }
             }
 
-            if (combined.equals("Reject", ignoreCase = true) || combined.equals("رفض", ignoreCase = true)) {
+            if (combined.equals("reject") || combined.equals("رفض") || combined.equals("dismiss") || combined.equals("تجاهل")) {
                 rejectView = v
             }
 
-            if (combined.equals("Confirm", ignoreCase = true) || combined.equals("Yes", ignoreCase = true) ||
-                combined.equals("تأكيد", ignoreCase = true) || combined.equals("نعم", ignoreCase = true)) {
+            if (combined.equals("confirm") || combined.equals("yes") ||
+                combined.equals("تأكيد") || combined.equals("نعم")) {
                 confirmDialogBtn = v
             }
 
@@ -1114,7 +1216,9 @@ object OrderInterceptor {
 
         for (raw in allTexts) {
             val t = normalizeArabicNumerals(raw).trim()
-            if (t.contains("New Order", ignoreCase = true) || t.contains("طلب جديد", ignoreCase = true)) {
+            if (t.contains("New Order", ignoreCase = true) || t.contains("طلب جديد", ignoreCase = true) ||
+                t.contains("New Offer", ignoreCase = true) || t.contains("عرض جديد", ignoreCase = true) ||
+                t.contains("Pick-up", ignoreCase = true) || t.contains("استلام", ignoreCase = true)) {
                 isNewOrderScreen = true
             }
 
@@ -1128,7 +1232,7 @@ object OrderInterceptor {
                 distToCustomer = mDistCust.groupValues[1].toDoubleOrNull() ?: 0.0
             }
 
-            val mStore = Regex("""Pick-up from\s*([^,\n]+)""", RegexOption.IGNORE_CASE).find(t)
+            val mStore = Regex("""(?:Pick-up from|استلام من)\s*([^,\n]+)""", RegexOption.IGNORE_CASE).find(t)
             if (mStore != null && storeName.isEmpty()) {
                 storeName = mStore.groupValues[1].trim()
             }
@@ -1146,7 +1250,7 @@ object OrderInterceptor {
                 val mPrice = Regex("""(?:[#﷼\$€£]|SAR|رس|ر\.س|ريال)?\s*(\d+(?:\.\d+)?)\s*(?:[#﷼\$€£]|SAR|رس|ر\.س|ريال)?""", RegexOption.IGNORE_CASE).find(t)
                 if (mPrice != null) {
                     val p = mPrice.groupValues[1].toDoubleOrNull() ?: 0.0
-                    if (p in 2.0..500.0 && p != distToRestaurant && p != distToCustomer) {
+                    if (p in 1.0..500.0 && p != distToRestaurant && p != distToCustomer) {
                         orderPrice = p
                     }
                 }
@@ -1189,7 +1293,8 @@ object OrderInterceptor {
             val desc = v.contentDescription?.toString() ?: ""
             val combined = "$text $desc".trim()
 
-            if (combined.equals("New", ignoreCase = true) || combined.equals("جديد", ignoreCase = true)) {
+            if (combined.equals("New", ignoreCase = true) || combined.equals("جديد", ignoreCase = true) ||
+                combined.contains("طلب متاح", ignoreCase = true)) {
                 var parent = v.parent as? View
                 while (parent != null) {
                     if (parent.width > 300 && parent.height in 80..600) {
@@ -1292,7 +1397,9 @@ object OrderInterceptor {
                 val latency = System.currentTimeMillis() - startTime
                 CoroutineScope(Dispatchers.Main).launch {
                     try {
+                        // 1. Direct hardware-level screen touch swipe
                         simulateSwipe(btnAccept, dialogRoot, act)
+                        // 2. Direct OkHttp HTTP accept API call
                         executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
 
                         showToast(act, "⚡ Accepted Order $orderId in ${latency}ms!")
@@ -1312,77 +1419,58 @@ object OrderInterceptor {
 
         val location = IntArray(2)
         targetView.getLocationOnScreen(location)
-        val w = targetView.width.toFloat().coerceAtLeast(320f)
-        val h = targetView.height.toFloat().coerceAtLeast(65f)
 
-        val startScreenX = location[0].toFloat() + 70f
-        val endScreenX = location[0].toFloat() + w - 40f
-        val screenY = location[1].toFloat() + (h / 2f)
+        val displayMetrics = activity.resources.displayMetrics
+        val screenW = displayMetrics.widthPixels.toFloat()
+        val screenH = displayMetrics.heightPixels.toFloat()
 
-        val startLocalX = 70f
-        val endLocalX = w - 40f
-        val localY = h / 2f
+        val viewW = targetView.width.toFloat()
+        val viewH = targetView.height.toFloat()
 
-        val downTime = SystemClock.uptimeMillis()
-        var eventTime = downTime
+        val startScreenX: Float
+        val endScreenX: Float
+        val screenY: Float
 
+        if (viewW > 200f && location[0] >= 0) {
+            startScreenX = location[0].toFloat() + 60f
+            endScreenX = location[0].toFloat() + viewW - 50f
+            screenY = location[1].toFloat() + (viewH / 2f)
+        } else {
+            // Screen bottom default coordinates
+            startScreenX = 140f
+            endScreenX = screenW - 140f
+            screenY = screenH * 0.88f
+        }
+
+        // 1. Dispatch full hardware touch sequence directly to Activity Window
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val downTime = SystemClock.uptimeMillis()
+                val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
+                activity.dispatchTouchEvent(downEvent)
+                downEvent.recycle()
+
+                val steps = 25
+                for (i in 1..steps) {
+                    val eventTime = downTime + (i * 7L)
+                    val curX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
+                    val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, curX, screenY, 0)
+                    activity.dispatchTouchEvent(moveEvent)
+                    moveEvent.recycle()
+                }
+
+                val upTime = downTime + (steps * 7L) + 15L
+                val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
+                activity.dispatchTouchEvent(upEvent)
+                upEvent.recycle()
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Also click views directly
         triggerClick(view)
         triggerClick(targetView)
 
-        try {
-            val downLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, startLocalX, localY, 0)
-            targetView.dispatchTouchEvent(downLocal)
-            downLocal.recycle()
-
-            val steps = 25
-            for (i in 1..steps) {
-                eventTime += 6
-                val currX = startLocalX + (endLocalX - startLocalX) * (i.toFloat() / steps.toFloat())
-                val moveLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, currX, localY, 0)
-                targetView.dispatchTouchEvent(moveLocal)
-                moveLocal.recycle()
-            }
-
-            eventTime += 6
-            val upLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, endLocalX, localY, 0)
-            targetView.dispatchTouchEvent(upLocal)
-            upLocal.recycle()
-        } catch (_: Throwable) {}
-
-        try {
-            var sTime = downTime
-            val downScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
-            dialogRoot.dispatchTouchEvent(downScreen)
-            downScreen.recycle()
-
-            val steps = 25
-            for (i in 1..steps) {
-                sTime += 6
-                val currX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
-                val moveScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_MOVE, currX, screenY, 0)
-                dialogRoot.dispatchTouchEvent(moveScreen)
-                moveScreen.recycle()
-            }
-
-            sTime += 6
-            val upScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
-            dialogRoot.dispatchTouchEvent(upScreen)
-            upScreen.recycle()
-        } catch (_: Throwable) {}
-
-        try {
-            val decor = activity.window.decorView
-            if (decor != dialogRoot) {
-                val downScreen = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
-                decor.dispatchTouchEvent(downScreen)
-                downScreen.recycle()
-
-                val upScreen = MotionEvent.obtain(downTime, downTime + 80, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
-                decor.dispatchTouchEvent(upScreen)
-                upScreen.recycle()
-            }
-        } catch (_: Throwable) {}
-
+        // 3. Reflective methods
         var current: View? = targetView
         while (current != null) {
             try {
