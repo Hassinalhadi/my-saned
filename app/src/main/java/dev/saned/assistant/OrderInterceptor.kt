@@ -82,13 +82,56 @@ object OrderInterceptor {
 
     // Candidate hosts verified for Jahez platform
     val candidateApiHosts = listOf(
-        "https://api.jahez.net",
         "https://fleet-api.jahez.net",
+        "https://api.jahez.net",
         "https://integration-api.jahez.net",
         "https://portal.jahez.net",
         "https://app.jahez.net",
-        "https://mobile-api.jahez.net"
+        "https://mobile-api.jahez.net",
+        "https://gateway.jahez.net",
+        "https://driver.jahez.net"
     )
+
+    @Volatile var capturedAppHttpClient: OkHttpClient? = null
+
+    fun buildCandidateUrl(baseOrFull: String, endpointPath: String): String {
+        val clean = baseOrFull.trim().removeSuffix("/")
+        if (clean.contains("/api/fleets/") || clean.contains("/api/orders/") || clean.contains("/api/driver/")) {
+            return clean
+        }
+        val uri = try { java.net.URI(clean) } catch (_: Throwable) { null }
+        val base = if (uri != null && !uri.host.isNullOrEmpty()) {
+            val portPart = if (uri.port > 0 && uri.port != 80 && uri.port != 443) ":${uri.port}" else ""
+            "${uri.scheme}://${uri.host}$portPart"
+        } else {
+            clean
+        }
+        val cleanPath = if (endpointPath.startsWith("/")) endpointPath else "/$endpointPath"
+        return "$base$cleanPath"
+    }
+
+    fun applyJahezHeaders(reqBuilder: Request.Builder, token: String) {
+        if (token.isNotEmpty()) {
+            val authVal = if (token.startsWith("Bearer ", ignoreCase = true)) token else "Bearer $token"
+            reqBuilder.header("Authorization", authVal)
+        }
+        val defaultUa = "Jahez/6.1.0 (Linux; U; Android ${Build.VERSION.RELEASE ?: "14"}; ${Build.MODEL ?: "Device"}; Build/${Build.ID ?: "BUILD"}) okhttp/4.12.0"
+        val ua = cachedHeaders["User-Agent"] ?: defaultUa
+        reqBuilder.header("User-Agent", ua)
+        reqBuilder.header("Accept", "application/json, text/plain, */*")
+        reqBuilder.header("Accept-Language", cachedHeaders["accept-language"] ?: "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7")
+        reqBuilder.header("Connection", "keep-alive")
+        reqBuilder.header("x-app-version", "6.1.0")
+        reqBuilder.header("x-platform", "android")
+        reqBuilder.header("x-device-type", "mobile")
+
+        for ((k, v) in cachedHeaders) {
+            val lower = k.lowercase()
+            if (lower != "authorization" && lower != "content-length" && lower != "user-agent" && lower != "host") {
+                reqBuilder.header(k, v)
+            }
+        }
+    }
 
     // Resilient SSL-Bypassing OkHttpClient for direct Jahez API calls
     private val httpClient: OkHttpClient by lazy {
@@ -188,37 +231,68 @@ object OrderInterceptor {
             var resolvedHost = ""
             var targetUrl = ""
 
+            val candidateEndpoints = listOf(
+                "/api/fleets/orders/available",
+                "/api/v1/fleets/orders/available",
+                "/api/fleets/driver/profile",
+                "/api/fleets/profile",
+                "/api/fleets/orders"
+            )
+
             // Build list of hosts to probe
             val probeHosts = mutableListOf<String>()
             if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
             if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
             probeHosts.addAll(candidateApiHosts)
 
-            for (h in probeHosts.distinct()) {
-                val candidateUrl = if (h.startsWith("http") && h.contains("/api")) h else "$h/api/fleets/orders/available"
-                try {
-                    val reqBuilder = Request.Builder().url(candidateUrl).get()
-                    if (token.isNotEmpty()) reqBuilder.header("Authorization", token)
-                    for ((k, v) in cachedHeaders) {
-                        if (k != "Authorization" && k != "Content-Length") reqBuilder.header(k, v)
-                    }
-                    val resp = httpClient.newCall(reqBuilder.build()).execute()
-                    code = resp.code
-                    val rawBody = resp.body?.string() ?: ""
-                    resp.close()
+            val clientToUse = capturedAppHttpClient ?: httpClient
+            var successFound = false
 
-                    targetUrl = candidateUrl
-                    snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
-                    if (code in 200..499) { // Host successfully resolved!
-                        val uri = java.net.URI(candidateUrl)
-                        resolvedHost = "${uri.scheme}://${uri.host}"
-                        cachedApiHost = resolvedHost
-                        persistHost(resolvedHost)
-                        break
-                    }
-                } catch (e: Throwable) {
-                    if (snippet.isEmpty()) {
-                        snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
+            for (h in probeHosts.distinct()) {
+                if (successFound) break
+                for (endpoint in candidateEndpoints) {
+                    val candidateUrl = buildCandidateUrl(h, endpoint)
+                    try {
+                        val reqBuilder = Request.Builder().url(candidateUrl).get()
+                        applyJahezHeaders(reqBuilder, token)
+
+                        val resp = clientToUse.newCall(reqBuilder.build()).execute()
+                        val currentCode = resp.code
+                        val rawBody = resp.body?.string() ?: ""
+                        resp.close()
+
+                        val isCloudflareBlock = (currentCode == 403 || currentCode == 503) &&
+                            (rawBody.contains("Just a moment", ignoreCase = true) || rawBody.contains("cloudflare", ignoreCase = true))
+
+                        if (currentCode in 200..299 || (currentCode in 400..499 && !isCloudflareBlock && (rawBody.trim().startsWith("{") || rawBody.trim().startsWith("[")))) {
+                            code = currentCode
+                            targetUrl = candidateUrl
+                            val uri = java.net.URI(candidateUrl)
+                            resolvedHost = "${uri.scheme}://${uri.host}"
+                            cachedApiHost = resolvedHost
+                            persistHost(resolvedHost)
+                            lastOrdersListUrl = candidateUrl
+                            snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                            successFound = true
+                            break
+                        } else if (!isCloudflareBlock && currentCode > 0) {
+                            if (code <= 0 || code == 403) {
+                                code = currentCode
+                                targetUrl = candidateUrl
+                                snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                            }
+                        } else if (isCloudflareBlock) {
+                            if (snippet.isEmpty() || snippet.startsWith("Error:")) {
+                                code = currentCode
+                                targetUrl = candidateUrl
+                                snippet = "Cloudflare WAF (HTTP 403) detected on $candidateUrl.
+Note: In-App order interceptor & Screen watcher operate natively inside Jahez and bypass Cloudflare."
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        if (snippet.isEmpty()) {
+                            snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
+                        }
                     }
                 }
             }
@@ -564,6 +638,10 @@ object OrderInterceptor {
                 if (m.name == "newCall" && m.parameterTypes.size == 1) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
+                            val client = chain.thisObject as? OkHttpClient
+                            if (client != null) {
+                                capturedAppHttpClient = client
+                            }
                             val req = chain.args.getOrNull(0)
                             if (req != null) {
                                 captureRequestMetadata(req)
@@ -576,7 +654,7 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
 
-        // Hook RealCall execution bottlenecks
+        // Hook RealCall execution bottlenecks & async enqueue
         val realCallClasses = listOf(
             "okhttp3.internal.connection.RealCall",
             "okhttp3.RealCall"
@@ -596,6 +674,37 @@ object OrderInterceptor {
                             }
                         })
                         hooksInstalled++
+                    }
+                    if (m.name == "enqueue" && m.parameterTypes.size == 1) {
+                        try {
+                            val callbackClass = Class.forName("okhttp3.Callback", false, classLoader)
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    try {
+                                        val callObj = chain.thisObject
+                                        val mReq = callObj.javaClass.getMethod("request")
+                                        val req = mReq.invoke(callObj)
+                                        if (req != null) captureRequestMetadata(req)
+                                    } catch (_: Throwable) {}
+
+                                    val originalCb = chain.args.getOrNull(0)
+                                    if (originalCb != null) {
+                                        val proxyCb = Proxy.newProxyInstance(classLoader, arrayOf(callbackClass)) { _, method, args ->
+                                            if (method.name == "onResponse" && args != null && args.size >= 2) {
+                                                val resp = args[1]
+                                                if (resp != null) {
+                                                    try { processHttpResponse(resp) } catch (_: Throwable) {}
+                                                }
+                                            }
+                                            method.invoke(originalCb, *(args ?: emptyArray()))
+                                        }
+                                        chain.args[0] = proxyCb
+                                    }
+                                    return chain.proceed()
+                                }
+                            })
+                            hooksInstalled++
+                        } catch (_: Throwable) {}
                     }
                     if (m.name.startsWith("getResponseWithInterceptorChain")) {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -634,9 +743,9 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
 
-        // Hook OkHttpClient$Builder.build()
+        // Hook OkHttpClient.build()
         try {
-            val builderClass = Class.forName("okhttp3.OkHttpClient\$Builder", false, classLoader)
+            val builderClass = Class.forName("okhttp3.OkHttpClient$Builder", false, classLoader)
             val interceptorClass = Class.forName("okhttp3.Interceptor", false, classLoader)
             val mBuild = builderClass.getDeclaredMethod("build")
 
@@ -1052,40 +1161,46 @@ object OrderInterceptor {
         val token = cachedAuthToken
         if (token.isEmpty()) return
 
+        val candidateEndpoints = listOf(
+            "/api/fleets/orders/available",
+            "/api/v1/fleets/orders/available",
+            "/api/fleets/orders"
+        )
+
         val probeHosts = mutableListOf<String>()
         if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
         if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
         probeHosts.addAll(candidateApiHosts)
 
-        for (h in probeHosts.distinct()) {
-            val url = if (h.startsWith("http") && h.contains("/api")) h else "$h/api/fleets/orders/available"
-            try {
-                pollingHits.incrementAndGet()
-                val reqBuilder = Request.Builder().url(url).get()
-                reqBuilder.header("Authorization", token)
-                for ((k, v) in cachedHeaders) {
-                    if (k != "Authorization" && k != "Content-Length") {
-                        reqBuilder.header(k, v)
-                    }
-                }
-                val resp = httpClient.newCall(reqBuilder.build()).execute()
-                val code = resp.code
-                lastHttpResponseCode = code
-                val body = resp.body?.string() ?: ""
-                resp.close()
+        val clientToUse = capturedAppHttpClient ?: httpClient
 
-                if (code in 200..299 && body.isNotEmpty()) {
-                    if (cachedApiHost.isEmpty()) {
-                        val uri = java.net.URI(url)
-                        cachedApiHost = "${uri.scheme}://${uri.host}"
-                        persistHost(cachedApiHost)
+        for (h in probeHosts.distinct()) {
+            for (endpoint in candidateEndpoints) {
+                val url = buildCandidateUrl(h, endpoint)
+                try {
+                    pollingHits.incrementAndGet()
+                    val reqBuilder = Request.Builder().url(url).get()
+                    applyJahezHeaders(reqBuilder, token)
+
+                    val resp = clientToUse.newCall(reqBuilder.build()).execute()
+                    val code = resp.code
+                    lastHttpResponseCode = code
+                    val body = resp.body?.string() ?: ""
+                    resp.close()
+
+                    if (code in 200..299 && body.isNotEmpty()) {
+                        if (cachedApiHost.isEmpty()) {
+                            val uri = java.net.URI(url)
+                            cachedApiHost = "${uri.scheme}://${uri.host}"
+                            persistHost(cachedApiHost)
+                        }
+                        if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
+                            findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+                            return
+                        }
                     }
-                    if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
-                        findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-                        break
-                    }
-                }
-            } catch (_: Throwable) {}
+                } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -1252,25 +1367,27 @@ object OrderInterceptor {
         if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
         probeHosts.addAll(candidateApiHosts)
 
+        val clientToUse = capturedAppHttpClient ?: httpClient
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val body = "{\"order_id\":\"$orderIdNum\"}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val body = "{"order_id":""}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
                 for (burst in 0 until burstCount) {
                     launch {
                         for (host in probeHosts.distinct()) {
                             val endpoints = if (action == "ACCEPT") {
                                 listOf(
-                                    "$host/api/fleets/orders/$orderIdNum/accept",
-                                    "$host/api/driver/orders/$orderIdNum/accept",
-                                    "$host/api/orders/$orderIdNum/accept",
-                                    "$host/api/v1/orders/$orderIdNum/accept"
+                                    buildCandidateUrl(host, "/api/fleets/orders//accept"),
+                                    buildCandidateUrl(host, "/api/driver/orders//accept"),
+                                    buildCandidateUrl(host, "/api/orders//accept"),
+                                    buildCandidateUrl(host, "/api/v1/orders//accept")
                                 )
                             } else {
                                 listOf(
-                                    "$host/api/fleets/orders/$orderIdNum/reject",
-                                    "$host/api/driver/orders/$orderIdNum/reject",
-                                    "$host/api/orders/$orderIdNum/reject"
+                                    buildCandidateUrl(host, "/api/fleets/orders//reject"),
+                                    buildCandidateUrl(host, "/api/driver/orders//reject"),
+                                    buildCandidateUrl(host, "/api/orders//reject")
                                 )
                             }
 
@@ -1280,16 +1397,9 @@ object OrderInterceptor {
                                         val reqBuilder = Request.Builder().url(url)
                                         if (method == "POST") reqBuilder.post(body) else reqBuilder.put(body)
 
-                                        if (token.isNotEmpty()) {
-                                            reqBuilder.header("Authorization", token)
-                                        }
-                                        for ((k, v) in cachedHeaders) {
-                                            if (k != "Authorization" && k != "Content-Length") {
-                                                reqBuilder.header(k, v)
-                                            }
-                                        }
+                                        applyJahezHeaders(reqBuilder, token)
 
-                                        val resp = httpClient.newCall(reqBuilder.build()).execute()
+                                        val resp = clientToUse.newCall(reqBuilder.build()).execute()
                                         val code = resp.code
                                         resp.close()
                                         if (code in 200..299) {
