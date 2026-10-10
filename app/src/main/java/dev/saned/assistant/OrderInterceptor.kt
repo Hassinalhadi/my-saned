@@ -23,6 +23,9 @@ import android.widget.Toast
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -31,7 +34,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.Cipher
 
 object OrderInterceptor {
 
@@ -45,6 +50,16 @@ object OrderInterceptor {
     @Volatile var maxDistCustomer: Double = 0.0
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
+
+    // Network & Session Cache
+    @Volatile var cachedAuthToken: String = ""
+    @Volatile var cachedApiHost: String = ""
+    private val cachedHeaders = ConcurrentHashMap<String, String>()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .writeTimeout(3, TimeUnit.SECONDS)
+        .build()
 
     private val isAccepting = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -162,15 +177,42 @@ object OrderInterceptor {
         // 1. Hook JSON Object & Array constructors (Universal network/push parser)
         hookJsonConstructors(module)
 
-        // 2. Hook Dialog.show() to immediately detect bottom-sheets / popups
+        // 2. Hook javax.crypto.Cipher.doFinal (Intercept decrypted AES payloads as in original app)
+        hookCipher(module)
+
+        // 3. Hook Dialog.show() to immediately detect bottom-sheets / popups
         hookDialogShow(module)
 
-        // 3. Hook OkHttp Builder, Responses & WebSockets
+        // 4. Hook OkHttp Builder, Responses & WebSockets
         hookOkHttp(module, classLoader)
         hookWebSocket(module, classLoader)
 
-        // 4. Hook UI Lifecycle & start Continuous Multi-Window Screen Watcher
+        // 5. Hook UI Lifecycle & start Continuous Multi-Window Screen Watcher
         hookUI(module, classLoader)
+    }
+
+    private fun hookCipher(module: XposedModule) {
+        try {
+            val doFinalMethod = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
+            module.hook(doFinalMethod).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val result = chain.proceed()
+                    val bytes = result as? ByteArray
+                    if (bytes != null && bytes.isNotEmpty()) {
+                        try {
+                            val text = String(bytes, Charsets.UTF_8).trim()
+                            if ((text.startsWith("{") || text.startsWith("[")) && 
+                                (text.contains("order", ignoreCase = true) || 
+                                 text.contains("trip", ignoreCase = true) || 
+                                 text.contains("dispatch", ignoreCase = true))) {
+                                parseOrderJson(text, "وارد عبر التشفير (Cipher) 🔐")
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                    return result
+                }
+            })
+        } catch (_: Throwable) {}
     }
 
     private fun hookJsonConstructors(module: XposedModule) {
@@ -251,6 +293,8 @@ object OrderInterceptor {
                                     val chainObj = args[0]
                                     val requestMethod = chainObj.javaClass.getMethod("request")
                                     val request = requestMethod.invoke(chainObj)
+                                    captureRequestMetadata(request)
+
                                     val proceedMethod = chainObj.javaClass.getMethod("proceed", request.javaClass)
                                     val response = proceedMethod.invoke(chainObj, request)
                                     if (response != null) {
@@ -290,11 +334,59 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
+    private fun captureRequestMetadata(request: Any) {
+        try {
+            val urlMethod = request.javaClass.getMethod("url")
+            val url = urlMethod.invoke(request).toString()
+            if (url.startsWith("http")) {
+                val uri = java.net.URI(url)
+                cachedApiHost = "${uri.scheme}://${uri.host}"
+            }
+
+            val headersMethod = request.javaClass.getMethod("headers")
+            val headersObj = headersMethod.invoke(request)
+            val getMethod = headersObj.javaClass.getMethod("get", String::class.java)
+
+            val auth = getMethod.invoke(headersObj, "Authorization") as? String
+            if (!auth.isNullOrEmpty()) {
+                cachedAuthToken = auth
+                cachedHeaders["Authorization"] = auth
+            }
+
+            val cookie = getMethod.invoke(headersObj, "Cookie") as? String
+            if (!cookie.isNullOrEmpty()) cachedHeaders["Cookie"] = cookie
+
+            val userAgent = getMethod.invoke(headersObj, "User-Agent") as? String
+            if (!userAgent.isNullOrEmpty()) cachedHeaders["User-Agent"] = userAgent
+
+            val acceptLang = getMethod.invoke(headersObj, "accept-language") as? String
+            if (!acceptLang.isNullOrEmpty()) cachedHeaders["accept-language"] = acceptLang
+        } catch (_: Throwable) {}
+    }
+
     private fun hookWebSocket(module: XposedModule, classLoader: ClassLoader) {
         try {
             val realWsClass = Class.forName("okhttp3.internal.ws.RealWebSocket", false, classLoader)
             for (m in realWsClass.declaredMethods) {
                 if (m.name == "onReadMessage" || m.name == "onMessage") {
+                    module.hook(m).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            for (arg in chain.args) {
+                                if (arg is String && arg.isNotEmpty()) {
+                                    parseOrderJson(arg, "وارد عبر WebSocket ⚡")
+                                }
+                            }
+                            return chain.proceed()
+                        }
+                    })
+                }
+            }
+        } catch (_: Throwable) {}
+
+        try {
+            val listenerClass = Class.forName("okhttp3.WebSocketListener", false, classLoader)
+            for (m in listenerClass.methods) {
+                if (m.name == "onMessage" && m.parameterTypes.any { it == String::class.java }) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             for (arg in chain.args) {
@@ -420,6 +512,8 @@ object OrderInterceptor {
         try {
             val requestMethod = response.javaClass.getMethod("request")
             val request = requestMethod.invoke(response) ?: return
+            captureRequestMetadata(request)
+
             val urlMethod = request.javaClass.getMethod("url")
             val url = urlMethod.invoke(request).toString()
 
@@ -449,28 +543,28 @@ object OrderInterceptor {
                 for (i in 0 until array.length()) {
                     val item = array.optJSONObject(i)
                     if (item != null) {
-                        extractAndLogFromJsonObj(item, channelSource)
+                        extractAndProcessOrderJson(item, channelSource)
                     }
                 }
                 return
             }
 
             val json = JSONObject(trimmed)
-            extractAndLogFromJsonObj(json, channelSource)
+            extractAndProcessOrderJson(json, channelSource)
 
             val dataArray = json.optJSONArray("data") ?: json.optJSONArray("orders") ?: json.optJSONArray("result")
             if (dataArray != null) {
                 for (i in 0 until dataArray.length()) {
                     val item = dataArray.optJSONObject(i)
                     if (item != null) {
-                        extractAndLogFromJsonObj(item, channelSource)
+                        extractAndProcessOrderJson(item, channelSource)
                     }
                 }
             }
         } catch (_: Throwable) {}
     }
 
-    private fun extractAndLogFromJsonObj(json: JSONObject, channelSource: String) {
+    private fun extractAndProcessOrderJson(json: JSONObject, channelSource: String) {
         try {
             var orderId = json.optString("order_number", json.optString("order_id", json.optString("id", "")))
             var price = json.optDouble("price", json.optDouble("delivery_cost", json.optDouble("total", 0.0)))
@@ -488,12 +582,103 @@ object OrderInterceptor {
             if (orderId.isNotEmpty() || price > 0.0 || restaurant.isNotEmpty()) {
                 if (orderId.isEmpty()) orderId = "#" + (100000..999999).random()
                 if (loggedOrderIds.add(orderId)) {
-                    val statusText = if (isMasterRunning && isAutoAccept) "مقبول تلقائياً ✅" else channelSource
-                    sendOrderToLog(orderId, price, dist, restaurant, statusText)
+                    val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
+                    sendOrderToLog(orderId, cleanPrice, dist, restaurant, channelSource)
                     if (isSoundEnabled) playAlertSound()
+
+                    // If order arrived via network, trigger direct HTTP API Accept/Reject action!
+                    handleOrderViaApi(orderId, cleanPrice, dist, restaurant)
                 }
             }
         } catch (_: Throwable) {}
+    }
+
+    /**
+     * Executes direct API calls to Jahez endpoints using OkHttp, matching SanedAssistant-98
+     */
+    private fun handleOrderViaApi(orderId: String, price: Double, dist: Double, restaurant: String) {
+        val rawId = orderId.replace("#", "").trim()
+        if (rawId.isEmpty()) return
+
+        var shouldReject = false
+        var rejectReason = ""
+
+        if (isAutoReject) {
+            if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
+                shouldReject = true
+                rejectReason = "السعر (${String.format(Locale.US, "%.1f", price)} ر.س) أقل من الحد الأدنى"
+            } else if (maxDistToRestaurant > 0.0 && dist > 0.0 && dist > maxDistToRestaurant) {
+                shouldReject = true
+                rejectReason = "المسافة للمطعم (${dist} كم) أبعد من الحد"
+            }
+        }
+
+        if (shouldReject) {
+            currentActivity?.let { act -> showToast(act, "❌ تم رفض الطلب $orderId برمجياً: $rejectReason") }
+            sendOrderToLog(orderId, price, dist, restaurant, "مرفوض تلقائياً (API) ❌")
+            executeDirectApiCall(rawId, "REJECT")
+            return
+        }
+
+        if (isDryRun) {
+            currentActivity?.let { act -> showToast(act, "🔍 [وضع التجربة]: كان سيتم قبول الطلب $orderId (API)") }
+            sendOrderToLog(orderId, price, dist, restaurant, "وضع التجربة (كان سيُقبل) 🔍")
+            return
+        }
+
+        if (isAutoAccept || isMasterRunning) {
+            currentActivity?.let { act -> showToast(act, "⚡ جاري قبول الطلب $orderId عبر الشبكة مباشرة...") }
+            sendOrderToLog(orderId, price, dist, restaurant, "مقبول تلقائياً (API) ✅")
+            executeDirectApiCall(rawId, "ACCEPT")
+            playAlertSound()
+        }
+    }
+
+    private fun executeDirectApiCall(orderIdNum: String, action: String) {
+        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
+        val token = cachedAuthToken
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val endpoints = if (action == "ACCEPT") {
+                    listOf(
+                        "$host/api/fleets/orders/$orderIdNum/accept",
+                        "$host/api/driver/orders/$orderIdNum/accept",
+                        "$host/api/orders/$orderIdNum/accept"
+                    )
+                } else {
+                    listOf(
+                        "$host/api/fleets/orders/$orderIdNum/reject",
+                        "$host/api/driver/orders/$orderIdNum/reject",
+                        "$host/api/orders/$orderIdNum/reject"
+                    )
+                }
+
+                val body = "{\"order_id\":\"$orderIdNum\"}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+                for (url in endpoints) {
+                    val reqBuilder = Request.Builder()
+                        .url(url)
+                        .post(body)
+
+                    if (token.isNotEmpty()) {
+                        reqBuilder.header("Authorization", token)
+                    }
+                    for ((k, v) in cachedHeaders) {
+                        if (k != "Authorization" && k != "Content-Length") {
+                            reqBuilder.header(k, v)
+                        }
+                    }
+
+                    val resp = httpClient.newCall(reqBuilder.build()).execute()
+                    val code = resp.code
+                    resp.close()
+                    if (code in 200..299) {
+                        break
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun sendOrderToLog(orderId: String, price: Double, dist: Double, restaurant: String, status: String) {
@@ -524,6 +709,31 @@ object OrderInterceptor {
                 ctx.sendBroadcast(gIntent)
             } catch (_: Throwable) {}
         }
+
+        // 2. Fallback: Write shared JSON file in /data/local/tmp/
+        try {
+            val f = File("/data/local/tmp/saned_orders.json")
+            val existing = if (f.exists()) f.readText() else "[]"
+            val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+            val newObj = JSONObject().apply {
+                put("id", orderId)
+                put("price", price)
+                put("distance", dist)
+                put("restaurant", restaurant)
+                put("status", status)
+                put("time", timeStr)
+            }
+            val newArray = JSONArray()
+            newArray.put(newObj)
+            for (i in 0 until minOf(39, array.length())) {
+                newArray.put(array.getJSONObject(i))
+            }
+            f.writeText(newArray.toString())
+            f.setReadable(true, false)
+            f.setWritable(true, false)
+        } catch (_: Throwable) {}
     }
 
     /**
@@ -616,7 +826,7 @@ object OrderInterceptor {
                 }
             }
 
-            // Price extraction: Match numbers after currency symbols or # (e.g., "# 10.00199999999999" or "SAR 15.0")
+            // Price extraction: Match numbers with currency symbol (including official riyal ligature ﷼)
             if (!t.contains("From You", ignoreCase = true) && !t.contains("Pickup", ignoreCase = true) && 
                 !t.contains("منك", ignoreCase = true) && orderPrice == 0.0) {
                 
@@ -757,6 +967,7 @@ object OrderInterceptor {
             if (btnReject != null) {
                 triggerClick(btnReject)
             }
+            executeDirectApiCall(orderId.replace("#", ""), "REJECT")
             return
         }
 
@@ -767,13 +978,17 @@ object OrderInterceptor {
             return
         }
 
-        // 3. Auto-Accept: Trigger instant swipe & click gestures
+        // 3. Auto-Accept: Trigger instant dual execution (API Call + Screen Gesture)
         if (isAutoAccept || isMasterRunning) {
             if (isAccepting.compareAndSet(false, true)) {
                 val latency = System.currentTimeMillis() - startTime
                 CoroutineScope(Dispatchers.Main).launch {
                     try {
+                        // A. Trigger screen swipe & click
                         simulateSwipe(btnAccept, dialogRoot, act)
+                        // B. Trigger direct OkHttp Accept API
+                        executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
+
                         showToast(act, "⚡ تم قبول الطلب $orderId فورياً بنجاح (${latency}ms)!")
                         sendOrderToLog(orderId, price, distRest, "", "تم القبول بنجاح ✅ (${latency}ms)")
                         playAlertSound()
