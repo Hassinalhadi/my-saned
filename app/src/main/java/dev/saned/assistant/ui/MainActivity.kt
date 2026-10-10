@@ -47,6 +47,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
+
+    // Active Server Polling & Parallel Acceptance (Original Assistant Mechanics)
+    private lateinit var chkActivePolling: CheckBox
+    private lateinit var edtPollInterval: EditText
+    private lateinit var edtParallelRequests: EditText
+
     private lateinit var ordersLogContainer: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,7 +101,10 @@ class MainActivity : AppCompatActivity() {
         // ================= SECTION 3: AUTO ACCEPT & SMART FILTERS =================
         mainLayout.addView(createFiltersCard())
 
-        // ================= SECTION 4: ORDERS LIVE LOG =================
+        // ================= SECTION 4: ACTIVE SERVER POLLING =================
+        mainLayout.addView(createPollingCard())
+
+        // ================= SECTION 5: ORDERS LIVE LOG =================
         mainLayout.addView(createOrdersLogCard())
 
         // ================= SAVE BUTTON =================
@@ -244,7 +253,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🗺️ الخريطة التفاعلية ونظام تحديد المواقع (GPS)"
+            text = "📍 الخريطة وتغيير الموقع الجغرافي (GPS Spoofing)"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -253,26 +262,26 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         chkFixLoc = CheckBox(this).apply {
-            text = "حل مشكلة location unknown (حقن موقع دقيق دائماً)"
+            text = "إصلاح خطأ الموقع غير معروف (Fix Location Unknown)"
             isChecked = SettingsStore.isFixLocation(this@MainActivity)
         }
         layout.addView(chkFixLoc)
 
         chkFakeLoc = CheckBox(this).apply {
-            text = "تفعيل الموقع المخصص المحدد على الخريطة (Fake GPS)"
+            text = "تفعيل الموقع الوهمي المخصص (Mock Location)"
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
         }
         layout.addView(chkFakeLoc)
 
         val coordsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 8, 0, 12)
+            setPadding(0, 8, 0, 8)
         }
 
         edtLat = EditText(this).apply {
             hint = "خط العرض (Lat)"
-            val savedLat = SettingsStore.getFakeLat(this@MainActivity)
-            setText(if (savedLat != 0.0) savedLat.toString() else "")
+            val l = SettingsStore.getFakeLat(this@MainActivity)
+            setText(if (l != 0.0) l.toString() else "24.7136")
             textSize = 13f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -280,74 +289,41 @@ class MainActivity : AppCompatActivity() {
 
         edtLng = EditText(this).apply {
             hint = "خط الطول (Lng)"
-            val savedLng = SettingsStore.getFakeLng(this@MainActivity)
-            setText(if (savedLng != 0.0) savedLng.toString() else "")
+            val g = SettingsStore.getFakeLng(this@MainActivity)
+            setText(if (g != 0.0) g.toString() else "46.6753")
             textSize = 13f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         coordsRow.addView(edtLng)
         layout.addView(coordsRow)
 
-        // Hotspots Buttons (Riyadh)
-        val hotspotsLabel = TextView(this).apply {
-            text = "⚡ مواقع سريعة (شمال الرياض):"
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#475569"))
-            setPadding(0, 4, 0, 4)
-        }
-        layout.addView(hotspotsLabel)
-
-        val hotspotsRow1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        hotspotsRow1.addView(createHotspotBtn("الملقا", 24.7925, 46.6189))
-        hotspotsRow1.addView(createHotspotBtn("حطين", 24.7648, 46.6022))
-        layout.addView(hotspotsRow1)
-
-        val hotspotsRow2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 4, 0, 12)
-        }
-        hotspotsRow2.addView(createHotspotBtn("الياسمين", 24.8193, 46.6437))
-        hotspotsRow2.addView(createHotspotBtn("العليا", 24.6987, 46.6842))
-        layout.addView(hotspotsRow2)
-
-        // Leaflet Interactive Map WebView
-        mapWebView = WebView(this).apply {
+        val mapFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                700
-            )
+                550
+            ).apply {
+                setMargins(0, 8, 0, 8)
+            }
+        }
+
+        mapWebView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webViewClient = WebViewClient()
             addJavascriptInterface(WebAppInterface(), "AndroidBridge")
         }
-        layout.addView(mapWebView)
+        mapFrame.addView(mapWebView)
+        layout.addView(mapFrame)
 
-        loadMapContent()
+        setupLeafletMap()
+
         card.addView(layout)
         return card
     }
 
-    private fun createHotspotBtn(name: String, lat: Double, lng: Double): Button {
-        return Button(this).apply {
-            text = name
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                edtLat.setText(lat.toString())
-                edtLng.setText(lng.toString())
-                chkFakeLoc.isChecked = true
-                mapWebView.evaluateJavascript("setPin($lat, $lng);", null)
-            }
-        }
-    }
-
-    private fun loadMapContent() {
-        val initialLat = edtLat.text.toString().toDoubleOrNull() ?: 24.7925
-        val initialLng = edtLng.text.toString().toDoubleOrNull() ?: 46.6189
+    private fun setupLeafletMap() {
+        val initialLat = edtLat.text.toString().toDoubleOrNull() ?: 24.7136
+        val initialLng = edtLng.text.toString().toDoubleOrNull() ?: 46.6753
 
         val html = """
             <!DOCTYPE html>
@@ -464,6 +440,49 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
+    private fun createPollingCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+
+        val title = TextView(this).apply {
+            text = "🌐 استعلام الخادم المباشر (Active Server Polling)"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 6)
+        }
+        layout.addView(title)
+
+        val desc = TextView(this).apply {
+            text = "ميزة المساعد الأصلي الحصرية: فحص خوادم جاهز باستمرار عبر OkHttp لسحب وقبول الطلبات المتاحة برمجياً فور توفرها وقبل ظهورها على شاشات السائقين الآخرين."
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(desc)
+
+        chkActivePolling = CheckBox(this).apply {
+            text = "تفعيل استعلام الخادم التلقائي (Active Polling)"
+            isChecked = SettingsStore.isActivePolling(this@MainActivity)
+            textSize = 14f
+        }
+        layout.addView(chkActivePolling)
+
+        layout.addView(createLabel("فترة فحص واستعلام الخادم بالثواني (مثال: 0.8s):"))
+        edtPollInterval = createInput(SettingsStore.getPollInterval(this).toString())
+        layout.addView(edtPollInterval)
+
+        layout.addView(createLabel("عدد محاولات القبول المتوازية (Parallel Burst Requests للفوز بالطلب):"))
+        edtParallelRequests = createInput(SettingsStore.getParallelRequests(this).toString())
+        layout.addView(edtParallelRequests)
+
+        card.addView(layout)
+        return card
+    }
+
     private fun createStyledCard(): CardView {
         return CardView(this).apply {
             radius = 16f
@@ -526,6 +545,11 @@ class MainActivity : AppCompatActivity() {
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
 
+        // Active Server Polling
+        val activePolling = chkActivePolling.isChecked
+        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
+        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 3
+
         // Persist to SettingsStore & SharedPreferences
         SettingsStore.setMasterRunning(this, master)
         SettingsStore.setSpoofAndroidId(this, spoofId)
@@ -543,9 +567,13 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)
 
+        SettingsStore.setActivePolling(this, activePolling)
+        SettingsStore.setPollInterval(this, pollInterval)
+        SettingsStore.setParallelRequests(this, parallelReqs)
+
         Toast.makeText(
             this,
-            "✅ تم حفظ وتطبيق الإعدادات بنجاح!\nقم بعمل إيقاف إجباري لتطبيق جاهز وأعد فتحه لتطبيق التغييرات.",
+            "✅ تم حفظ وتطبيق الإعدادات بنجاح!\nاستعلام الخادم نشط (${pollInterval}s) بعدد ${parallelReqs} طلبات متوازية.",
             Toast.LENGTH_LONG
         ).show()
     }
@@ -678,7 +706,7 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
             }
             val idTv = TextView(this).apply {
-                text = "طلب: "
+                text = "طلب: $id"
                 textSize = 13.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#1E293B"))
@@ -720,7 +748,6 @@ class MainActivity : AppCompatActivity() {
             ordersLogContainer.addView(itemCard)
         }
     }
-
 
     private val ordersUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {

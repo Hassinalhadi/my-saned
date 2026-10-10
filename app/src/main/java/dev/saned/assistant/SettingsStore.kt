@@ -45,6 +45,25 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
+    // Active Server Polling & Parallel Acceptance (Original Assistant Features)
+    fun isActivePolling(context: Context): Boolean = getPrefs(context).getBoolean("active_polling", true)
+    fun setActivePolling(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("active_polling", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.8f)
+    fun setPollInterval(context: Context, value: Float) {
+        getPrefs(context).edit().putFloat("poll_interval_sec", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 3)
+    fun setParallelRequests(context: Context, value: Int) {
+        getPrefs(context).edit().putInt("parallel_requests", value).apply()
+        broadcastSettings(context)
+    }
+
     fun getMinPrice(context: Context): Double = 
         getPrefs(context).getString("min_price", getPrefs(context).getString("min_order_price", "0.0"))?.toDoubleOrNull() ?: 0.0
     
@@ -147,6 +166,9 @@ object SettingsStore {
         val autoAccept = isAutoAccept(context)
         val autoReject = isAutoReject(context)
         val dryRun = isDryRun(context)
+        val activePolling = isActivePolling(context)
+        val pollInterval = getPollInterval(context)
+        val parallelReqs = getParallelRequests(context)
         val minPrice = getMinPrice(context)
         val maxRest = getMaxDistRest(context)
         val maxCust = getMaxDistCust(context)
@@ -159,6 +181,9 @@ object SettingsStore {
                 putExtra("auto_accept", autoAccept)
                 putExtra("auto_reject", autoReject)
                 putExtra("dry_run", dryRun)
+                putExtra("active_polling", activePolling)
+                putExtra("poll_interval_sec", pollInterval)
+                putExtra("parallel_requests", parallelReqs)
                 putExtra("min_price", minPrice)
                 putExtra("max_dist_rest", maxRest)
                 putExtra("max_dist_cust", maxCust)
@@ -177,6 +202,9 @@ object SettingsStore {
                 putExtra("auto_accept", autoAccept)
                 putExtra("auto_reject", autoReject)
                 putExtra("dry_run", dryRun)
+                putExtra("active_polling", activePolling)
+                putExtra("poll_interval_sec", pollInterval)
+                putExtra("parallel_requests", parallelReqs)
                 putExtra("min_price", minPrice)
                 putExtra("max_dist_rest", maxRest)
                 putExtra("max_dist_cust", maxCust)
@@ -191,6 +219,9 @@ object SettingsStore {
                 put("auto_accept", autoAccept)
                 put("auto_reject", autoReject)
                 put("dry_run", dryRun)
+                put("active_polling", activePolling)
+                put("poll_interval_sec", pollInterval.toDouble())
+                put("parallel_requests", parallelReqs)
                 put("min_price", minPrice)
                 put("max_dist_rest", maxRest)
                 put("max_dist_cust", maxCust)

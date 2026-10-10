@@ -51,6 +51,13 @@ object OrderInterceptor {
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
 
+    // Active Server Polling & Parallel Acceptance (Original Assistant Mechanics)
+    @Volatile var isActivePolling: Boolean = true
+    @Volatile var pollIntervalSec: Float = 0.8f
+    @Volatile var parallelRequests: Int = 3
+    @Volatile var lastOrdersListUrl: String = ""
+    private val isPollingRunning = AtomicBoolean(false)
+
     // Network & Session Cache
     @Volatile var cachedAuthToken: String = ""
     @Volatile var cachedApiHost: String = ""
@@ -100,8 +107,14 @@ object OrderInterceptor {
         // 3. Fallback: Read shared config file if available
         loadFallbackConfigFile()
 
-        // 4. Start active screen watcher
+        // 4. Proactive: Scan Jahez SharedPreferences for auth tokens
+        scanSharedPreferencesForAuth(app)
+
+        // 5. Start active screen watcher
         startScreenWatcher()
+
+        // 6. Start active server polling loop (matching original assistant)
+        startActiveServerPolling()
     }
 
     fun requestSettingsFromAssistant() {
@@ -124,6 +137,9 @@ object OrderInterceptor {
         isAutoAccept = intent.getBooleanExtra("auto_accept", isAutoAccept)
         isAutoReject = intent.getBooleanExtra("auto_reject", isAutoReject)
         isDryRun = intent.getBooleanExtra("dry_run", isDryRun)
+        isActivePolling = intent.getBooleanExtra("active_polling", isActivePolling)
+        pollIntervalSec = intent.getFloatExtra("poll_interval_sec", pollIntervalSec)
+        parallelRequests = intent.getIntExtra("parallel_requests", parallelRequests)
         minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
         maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
@@ -140,6 +156,9 @@ object OrderInterceptor {
                 isAutoAccept = json.optBoolean("auto_accept", isAutoAccept)
                 isAutoReject = json.optBoolean("auto_reject", isAutoReject)
                 isDryRun = json.optBoolean("dry_run", isDryRun)
+                isActivePolling = json.optBoolean("active_polling", isActivePolling)
+                pollIntervalSec = json.optDouble("poll_interval_sec", pollIntervalSec.toDouble()).toFloat()
+                parallelRequests = json.optInt("parallel_requests", parallelRequests)
                 minOrderPrice = json.optDouble("min_price", minOrderPrice)
                 maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
                 maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
@@ -165,12 +184,38 @@ object OrderInterceptor {
             isAutoAccept = p.getBoolean("auto_accept", isAutoAccept)
             isAutoReject = p.getBoolean("auto_reject", isAutoReject)
             isDryRun = p.getBoolean("dry_run", isDryRun)
+            isActivePolling = p.getBoolean("active_polling", isActivePolling)
+            pollIntervalSec = p.getFloat("poll_interval_sec", pollIntervalSec)
+            parallelRequests = p.getInt("parallel_requests", parallelRequests)
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
+    }
+
+    fun scanSharedPreferencesForAuth(context: Context) {
+        try {
+            val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
+            if (prefsDir.exists() && prefsDir.isDirectory) {
+                prefsDir.listFiles()?.forEach { file ->
+                    val prefName = file.nameWithoutExtension
+                    try {
+                        val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                        for ((k, v) in sp.all) {
+                            val strVal = v?.toString() ?: ""
+                            if (strVal.startsWith("Bearer ", ignoreCase = true) || 
+                                (k.contains("token", ignoreCase = true) && strVal.length > 20)) {
+                                val token = if (strVal.startsWith("Bearer ", ignoreCase = true)) strVal else "Bearer $strVal"
+                                cachedAuthToken = token
+                                cachedHeaders["Authorization"] = token
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        } catch (_: Throwable) {}
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
@@ -341,6 +386,14 @@ object OrderInterceptor {
             if (url.startsWith("http")) {
                 val uri = java.net.URI(url)
                 cachedApiHost = "${uri.scheme}://${uri.host}"
+
+                // If URL fetches orders, save it for active polling
+                val lowerUrl = url.lowercase()
+                if (lowerUrl.contains("order") || lowerUrl.contains("fleet") || lowerUrl.contains("dispatch")) {
+                    if (!lowerUrl.contains("/accept") && !lowerUrl.contains("/reject")) {
+                        lastOrdersListUrl = url
+                    }
+                }
             }
 
             val headersMethod = request.javaClass.getMethod("headers")
@@ -414,6 +467,7 @@ object OrderInterceptor {
                         initAppContext(act.applicationContext)
                         requestSettingsFromAssistant()
                         startScreenWatcher()
+                        startActiveServerPolling()
                         scanAllRoots()
                     }
                     return result
@@ -433,6 +487,7 @@ object OrderInterceptor {
                         initAppContext(act.applicationContext)
                         requestSettingsFromAssistant()
                         startScreenWatcher()
+                        startActiveServerPolling()
                         scanAllRoots()
                     }
                     return result
@@ -503,6 +558,64 @@ object OrderInterceptor {
                 if (root.isShown && root.visibility == View.VISIBLE) {
                     val clicked = scanHomeScreenOrderCards(root, act)
                     if (clicked) return
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Active Server Polling: Query Jahez backend repeatedly to grab available orders
+     * before they are displayed or claimed by other drivers.
+     */
+    fun startActiveServerPolling() {
+        if (!isPollingRunning.compareAndSet(false, true)) return
+        CoroutineScope(Dispatchers.IO).launch {
+            while (true) {
+                try {
+                    if (isMasterRunning && isActivePolling) {
+                        pollServerForAvailableOrders()
+                    }
+                } catch (_: Throwable) {}
+                val delayMs = ((pollIntervalSec.coerceIn(0.2f, 10.0f)) * 1000).toLong()
+                delay(delayMs)
+            }
+        }
+    }
+
+    private fun pollServerForAvailableOrders() {
+        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
+        val token = cachedAuthToken
+        if (token.isEmpty()) return
+
+        val targetUrls = mutableListOf<String>()
+        if (lastOrdersListUrl.isNotEmpty()) {
+            targetUrls.add(lastOrdersListUrl)
+        }
+        targetUrls.add("$host/api/fleets/orders/available")
+        targetUrls.add("$host/api/fleets/orders")
+        targetUrls.add("$host/api/driver/orders/available")
+        targetUrls.add("$host/api/driver/orders")
+        targetUrls.add("$host/api/fleets/orders/unassigned")
+
+        for (url in targetUrls) {
+            try {
+                val reqBuilder = Request.Builder().url(url).get()
+                reqBuilder.header("Authorization", token)
+                for ((k, v) in cachedHeaders) {
+                    if (k != "Authorization" && k != "Content-Length") {
+                        reqBuilder.header(k, v)
+                    }
+                }
+                val resp = httpClient.newCall(reqBuilder.build()).execute()
+                val code = resp.code
+                val body = resp.body?.string() ?: ""
+                resp.close()
+
+                if (code in 200..299 && body.isNotEmpty()) {
+                    if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
+                        parseOrderJson(body, "استعلام الخادم (POLL) ⚡")
+                        break
+                    }
                 }
             } catch (_: Throwable) {}
         }
@@ -586,7 +699,7 @@ object OrderInterceptor {
                     sendOrderToLog(orderId, cleanPrice, dist, restaurant, channelSource)
                     if (isSoundEnabled) playAlertSound()
 
-                    // If order arrived via network, trigger direct HTTP API Accept/Reject action!
+                    // If order arrived via network / polling, trigger direct HTTP API Accept/Reject action!
                     handleOrderViaApi(orderId, cleanPrice, dist, restaurant)
                 }
             }
@@ -634,9 +747,13 @@ object OrderInterceptor {
         }
     }
 
+    /**
+     * Sends direct API requests using parallel bursts to win race against competing drivers
+     */
     private fun executeDirectApiCall(orderIdNum: String, action: String) {
         val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
         val token = cachedAuthToken
+        val burstCount = if (action == "ACCEPT") parallelRequests.coerceIn(1, 5) else 1
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -656,25 +773,31 @@ object OrderInterceptor {
 
                 val body = "{\"order_id\":\"$orderIdNum\"}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-                for (url in endpoints) {
-                    val reqBuilder = Request.Builder()
-                        .url(url)
-                        .post(body)
+                for (burst in 0 until burstCount) {
+                    launch {
+                        for (url in endpoints) {
+                            try {
+                                val reqBuilder = Request.Builder()
+                                    .url(url)
+                                    .post(body)
 
-                    if (token.isNotEmpty()) {
-                        reqBuilder.header("Authorization", token)
-                    }
-                    for ((k, v) in cachedHeaders) {
-                        if (k != "Authorization" && k != "Content-Length") {
-                            reqBuilder.header(k, v)
+                                if (token.isNotEmpty()) {
+                                    reqBuilder.header("Authorization", token)
+                                }
+                                for ((k, v) in cachedHeaders) {
+                                    if (k != "Authorization" && k != "Content-Length") {
+                                        reqBuilder.header(k, v)
+                                    }
+                                }
+
+                                val resp = httpClient.newCall(reqBuilder.build()).execute()
+                                val code = resp.code
+                                resp.close()
+                                if (code in 200..299) {
+                                    break
+                                }
+                            } catch (_: Throwable) {}
                         }
-                    }
-
-                    val resp = httpClient.newCall(reqBuilder.build()).execute()
-                    val code = resp.code
-                    resp.close()
-                    if (code in 200..299) {
-                        break
                     }
                 }
             } catch (_: Throwable) {}
