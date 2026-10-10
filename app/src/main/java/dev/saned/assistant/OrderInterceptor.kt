@@ -632,7 +632,7 @@ object OrderInterceptor {
 
         // Hook OkHttpClient.newCall(Request)
         try {
-            val builderClass = Class.forName("okhttp3.OkHttpClient" + '$' + "Builder", false, classLoader)
+            val clientClass = Class.forName("okhttp3.OkHttpClient", false, classLoader)
             for (m in clientClass.declaredMethods) {
                 if (m.name == "newCall" && m.parameterTypes.size == 1) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -744,7 +744,7 @@ object OrderInterceptor {
 
         // Hook OkHttpClient.build()
         try {
-            val builderClass = Class.forName("okhttp3.OkHttpClient$Builder", false, classLoader)
+            val builderClass = Class.forName("okhttp3.OkHttpClient" + '$' + "Builder", false, classLoader)
             val interceptorClass = Class.forName("okhttp3.Interceptor", false, classLoader)
             val mBuild = builderClass.getDeclaredMethod("build")
 
