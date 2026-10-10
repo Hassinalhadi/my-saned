@@ -629,7 +629,7 @@ object OrderInterceptor {
                     lowerKey.contains("access") || lowerKey.contains("jwt") ||
                     lowerKey.contains("bearer") || lowerKey.contains("session")
 
-            if (isTokenKey && !isExcluded && str.length in 20..2048 && str.matches(Regex("^[a-zA-Z0-9_\-\.]+$"))) {
+            if (isTokenKey && !isExcluded && str.length in 20..2048 && str.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' }) {
                 if (cachedAuthToken.isEmpty() || !cachedAuthToken.contains("ey")) {
                     val t = "Bearer $str"
                     cachedAuthToken = t
