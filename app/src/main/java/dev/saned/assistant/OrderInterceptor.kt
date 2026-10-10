@@ -40,6 +40,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
@@ -47,7 +48,7 @@ import javax.net.ssl.X509TrustManager
 
 object OrderInterceptor {
 
-    // Default to active state
+    // Master & Filter Controls
     @Volatile var isMasterRunning: Boolean = true
     @Volatile var isAutoAccept: Boolean = true
     @Volatile var isAutoReject: Boolean = false
@@ -58,12 +59,20 @@ object OrderInterceptor {
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
 
-    // Active Server Polling & Parallel Acceptance (Original Assistant Mechanics)
+    // Active Server Polling & Parallel Acceptance
     @Volatile var isActivePolling: Boolean = true
     @Volatile var pollIntervalSec: Float = 0.8f
     @Volatile var parallelRequests: Int = 3
     @Volatile var lastOrdersListUrl: String = ""
     private val isPollingRunning = AtomicBoolean(false)
+
+    // Network & Session Diagnostics
+    val httpRequestsCount = AtomicInteger(0)
+    val pollingHits = AtomicInteger(0)
+    @Volatile var lastInterceptedUrl: String = "None yet"
+    @Volatile var lastHttpResponseCode: Int = 0
+    @Volatile var lastOrderEvent: String = "Listening for orders..."
+    @Volatile var isOkHttpHooked: Boolean = true
 
     // Network & Session Cache
     @Volatile var cachedAuthToken: String = ""
@@ -88,10 +97,19 @@ object OrderInterceptor {
     private val settingsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
-            if (action == "dev.saned.assistant.SETTINGS_UPDATE") {
-                applySettingsFromIntent(intent)
-            } else if (action == "dev.saned.assistant.ACTION_PING") {
-                respondToPing(intent)
+            when (action) {
+                "dev.saned.assistant.SETTINGS_UPDATE" -> {
+                    applySettingsFromIntent(intent)
+                }
+                "dev.saned.assistant.ACTION_PING" -> {
+                    respondToPing(intent)
+                }
+                "dev.saned.assistant.ACTION_TEST_API" -> {
+                    performLiveApiProbe()
+                }
+                "dev.saned.assistant.ACTION_SIMULATE_ORDER" -> {
+                    simulateTestOrder()
+                }
             }
         }
     }
@@ -116,6 +134,12 @@ object OrderInterceptor {
                 putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
                 putExtra("orders_count", loggedOrderIds.size)
                 putExtra("api_host", cachedApiHost)
+                putExtra("http_requests_count", httpRequestsCount.get())
+                putExtra("polling_hits", pollingHits.get())
+                putExtra("last_http_url", lastInterceptedUrl)
+                putExtra("last_http_code", lastHttpResponseCode)
+                putExtra("last_order_event", lastOrderEvent)
+                putExtra("okhttp_hooked", isOkHttpHooked)
             }
             app.sendBroadcast(pongIntent)
         } catch (_: Throwable) {}
@@ -128,9 +152,79 @@ object OrderInterceptor {
                 putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
                 putExtra("orders_count", loggedOrderIds.size)
                 putExtra("api_host", cachedApiHost)
+                putExtra("http_requests_count", httpRequestsCount.get())
+                putExtra("polling_hits", pollingHits.get())
+                putExtra("last_http_url", lastInterceptedUrl)
+                putExtra("last_http_code", lastHttpResponseCode)
+                putExtra("last_order_event", lastOrderEvent)
+                putExtra("okhttp_hooked", isOkHttpHooked)
             }
             app.sendBroadcast(gPong)
         } catch (_: Throwable) {}
+    }
+
+    private fun performLiveApiProbe() {
+        val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://fleets.jahez.net"
+        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        val app = appContext ?: currentActivity ?: return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val startTime = System.currentTimeMillis()
+            var code = -1
+            var snippet = ""
+            var targetUrl = if (lastOrdersListUrl.isNotEmpty()) lastOrdersListUrl else "$host/api/fleets/orders/available"
+
+            try {
+                val reqBuilder = Request.Builder().url(targetUrl).get()
+                if (token.isNotEmpty()) reqBuilder.header("Authorization", token)
+                for ((k, v) in cachedHeaders) {
+                    if (k != "Authorization" && k != "Content-Length") reqBuilder.header(k, v)
+                }
+                val resp = httpClient.newCall(reqBuilder.build()).execute()
+                code = resp.code
+                val rawBody = resp.body?.string() ?: ""
+                resp.close()
+                snippet = if (rawBody.length > 200) rawBody.substring(0, 200) + "..." else rawBody
+            } catch (e: Throwable) {
+                snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
+            }
+
+            val latency = System.currentTimeMillis() - startTime
+            val resultIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+                component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+                putExtra("status_code", code)
+                putExtra("latency_ms", latency)
+                putExtra("url", targetUrl)
+                putExtra("body_snippet", snippet)
+                putExtra("has_token", token.isNotEmpty())
+            }
+            app.sendBroadcast(resultIntent)
+
+            try {
+                val gIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+                    putExtra("status_code", code)
+                    putExtra("latency_ms", latency)
+                    putExtra("url", targetUrl)
+                    putExtra("body_snippet", snippet)
+                    putExtra("has_token", token.isNotEmpty())
+                }
+                app.sendBroadcast(gIntent)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun simulateTestOrder() {
+        val testId = "#TEST" + (100..999).random()
+        val testPrice = 18.5
+        val testDist = 1.2
+        val testStore = "Al Romansiah Restaurant"
+
+        lastOrderEvent = "Simulated Order $testId received"
+        sendOrderToLog(testId, testPrice, testDist, testStore, "Test Order Simulation 🧪")
+        playAlertSound()
+        currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
+
+        handleOrderViaApi(testId, testPrice, testDist, testStore)
     }
 
     fun initAppContext(context: Context) {
@@ -143,6 +237,8 @@ object OrderInterceptor {
             val filter = IntentFilter().apply {
                 addAction("dev.saned.assistant.SETTINGS_UPDATE")
                 addAction("dev.saned.assistant.ACTION_PING")
+                addAction("dev.saned.assistant.ACTION_TEST_API")
+                addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -151,20 +247,11 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
 
-        // 2. Request current settings using explicit component intent
         requestSettingsFromAssistant()
-
-        // 3. Fallback: Read shared config file if available
         loadFallbackConfigFile()
-
-        // 4. Proactive: Read persisted token and scan SharedPreferences / EncryptedSharedPreferences
         readPersistedToken()
         scanAllSharedPreferencesForTokens(app)
-
-        // 5. Start active screen watcher
         startScreenWatcher()
-
-        // 6. Start active server polling loop
         startActiveServerPolling()
     }
 
@@ -339,34 +426,19 @@ object OrderInterceptor {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        // 1. Universal OkHttp Client & Call Interceptors (Catches 100% of network traffic)
         hookOkHttp(module, classLoader)
-
-        // 2. WebSocket Listeners & Readers
         hookWebSocket(module, classLoader)
-
-        // 3. SharedPreferences Editor & getString hooks
         hookSharedPreferences(module, classLoader)
-
-        // 4. Firebase Cloud Messaging (FCM Push Notifications)
         hookFirebase(module, classLoader)
-
-        // 5. SQLite Database (Room & raw SQLite order inserts)
         hookSQLite(module)
-
-        // 6. Hook javax.crypto.Cipher.doFinal (Intercept decrypted AES payloads as in original app)
         hookCipher(module)
-
-        // 7. Universal JSON constructors
         hookJsonConstructors(module)
-
-        // 8. Dialog show & UI Lifecycle
         hookDialogShow(module)
         hookUI(module, classLoader)
     }
 
     private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader) {
-        // Hook OkHttpClient.newCall(Request) -> Captures 100% of created HTTP requests & Auth headers
+        // Hook OkHttpClient.newCall(Request)
         try {
             val clientClass = Class.forName("okhttp3.OkHttpClient", false, classLoader)
             for (m in clientClass.declaredMethods) {
@@ -478,27 +550,15 @@ object OrderInterceptor {
                 }
             })
         } catch (_: Throwable) {}
-
-        // Hook Response$Builder.build()
-        try {
-            val respBuilderClass = Class.forName("okhttp3.Response\$Builder", false, classLoader)
-            val mBuild = respBuilderClass.getDeclaredMethod("build")
-            module.hook(mBuild).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val response = chain.proceed()
-                    if (response != null) {
-                        try { processHttpResponse(response) } catch (_: Throwable) {}
-                    }
-                    return response
-                }
-            })
-        } catch (_: Throwable) {}
     }
 
     private fun captureRequestMetadata(request: Any) {
         try {
+            httpRequestsCount.incrementAndGet()
             val urlMethod = request.javaClass.getMethod("url")
             val url = urlMethod.invoke(request).toString()
+            lastInterceptedUrl = url
+
             if (url.startsWith("http")) {
                 val uri = java.net.URI(url)
                 cachedApiHost = "${uri.scheme}://${uri.host}"
@@ -578,7 +638,6 @@ object OrderInterceptor {
     }
 
     private fun hookSharedPreferences(module: XposedModule, classLoader: ClassLoader) {
-        // Hook SharedPreferences.Editor.putString to catch tokens as they are saved
         try {
             val editorClass = Class.forName("android.content.SharedPreferences\$Editor")
             for (m in editorClass.declaredMethods) {
@@ -594,7 +653,6 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
 
-        // Hook SharedPreferencesImpl.getString to catch tokens as they are read
         try {
             val spImplClass = Class.forName("android.app.SharedPreferencesImpl")
             for (m in spImplClass.declaredMethods) {
@@ -824,7 +882,6 @@ object OrderInterceptor {
         val roots = getAllRootViews()
         val startTime = System.currentTimeMillis()
 
-        // 1. Scan in reverse order: Dialog/BottomSheet windows are always on top!
         for (root in roots.reversed()) {
             try {
                 if (root.isShown && root.visibility == View.VISIBLE) {
@@ -834,7 +891,6 @@ object OrderInterceptor {
             } catch (_: Throwable) {}
         }
 
-        // 2. Scan Home screen order list cards
         for (root in roots) {
             try {
                 if (root.isShown && root.visibility == View.VISIBLE) {
@@ -882,6 +938,7 @@ object OrderInterceptor {
 
         for (url in targetUrls) {
             try {
+                pollingHits.incrementAndGet()
                 val reqBuilder = Request.Builder().url(url).get()
                 reqBuilder.header("Authorization", token)
                 for ((k, v) in cachedHeaders) {
@@ -891,6 +948,7 @@ object OrderInterceptor {
                 }
                 val resp = httpClient.newCall(reqBuilder.build()).execute()
                 val code = resp.code
+                lastHttpResponseCode = code
                 val body = resp.body?.string() ?: ""
                 resp.close()
 
@@ -909,6 +967,10 @@ object OrderInterceptor {
             val requestMethod = response.javaClass.getMethod("request")
             val request = requestMethod.invoke(response) ?: return
             captureRequestMetadata(request)
+
+            val codeMethod = response.javaClass.getMethod("code")
+            val code = codeMethod.invoke(response) as? Int ?: 200
+            lastHttpResponseCode = code
 
             val urlMethod = request.javaClass.getMethod("url")
             val url = urlMethod.invoke(request).toString()
@@ -1004,6 +1066,7 @@ object OrderInterceptor {
                 if (orderId.isEmpty()) orderId = "#" + (100000..999999).random()
                 if (loggedOrderIds.add(orderId)) {
                     val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
+                    lastOrderEvent = "Order $orderId detected via $channelSource"
                     sendOrderToLog(orderId, cleanPrice, dist, restaurant, channelSource)
                     if (isSoundEnabled) playAlertSound()
 
@@ -1031,6 +1094,7 @@ object OrderInterceptor {
         }
 
         if (shouldReject) {
+            lastOrderEvent = "Order $orderId Auto-Rejected: $rejectReason"
             currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected Order $orderId: $rejectReason") }
             sendOrderToLog(orderId, price, dist, restaurant, "Auto-Rejected ❌ ($rejectReason)")
             executeDirectApiCall(rawId, "REJECT")
@@ -1038,12 +1102,14 @@ object OrderInterceptor {
         }
 
         if (isDryRun) {
+            lastOrderEvent = "Order $orderId evaluated (Dry-Run: would accept)"
             currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: Would accept Order $orderId (API)") }
             sendOrderToLog(orderId, price, dist, restaurant, "Dry-Run (Would Accept) 🔍")
             return
         }
 
         if (isAutoAccept || isMasterRunning) {
+            lastOrderEvent = "Auto-Accepting Order $orderId..."
             currentActivity?.let { act -> showToast(act, "⚡ Auto-Accepting Order $orderId via direct API...") }
             sendOrderToLog(orderId, price, dist, restaurant, "Auto-Accepted ✅ (API)")
             executeDirectApiCall(rawId, "ACCEPT")
@@ -1173,6 +1239,7 @@ object OrderInterceptor {
         var isNewOrderScreen = false
 
         val allTexts = mutableListOf<String>()
+        val clickableCandidates = mutableListOf<View>()
 
         fun traverse(v: View) {
             val desc = v.contentDescription?.toString() ?: ""
@@ -1182,6 +1249,10 @@ object OrderInterceptor {
             if (desc.isNotEmpty()) allTexts.add(desc)
 
             val combined = (text + " " + desc).trim().lowercase()
+
+            if (v.isClickable || v.width > 180) {
+                clickableCandidates.add(v)
+            }
 
             if (combined.contains("accept") || combined.contains("قبول") || 
                 combined.contains("تأكيد") || combined.contains("confirm") || 
@@ -1257,11 +1328,20 @@ object OrderInterceptor {
             }
         }
 
+        // Fail-safe: If acceptView is null but an order popup is detected, pick the bottom-most clickable candidate
+        if (acceptView == null && (isNewOrderScreen || orderPrice > 0.0) && clickableCandidates.isNotEmpty()) {
+            acceptView = clickableCandidates.maxByOrNull {
+                val loc = IntArray(2)
+                it.getLocationOnScreen(loc)
+                loc[1]
+            }
+        }
+
         if (orderId.isEmpty()) {
             orderId = if (storeName.isNotEmpty()) "#$storeName" else "#" + (100000..999999).random()
         }
 
-        if (acceptView != null && (isNewOrderScreen || acceptView!!.isShown)) {
+        if (acceptView != null && (isNewOrderScreen || acceptView!!.isShown || orderPrice > 0.0)) {
             val signature = "$orderId-$orderPrice-$distToRestaurant"
             val now = System.currentTimeMillis()
             if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3000L) {
@@ -1273,6 +1353,7 @@ object OrderInterceptor {
 
             if (loggedOrderIds.add(orderId)) {
                 val cleanPrice = String.format(Locale.US, "%.2f", orderPrice).toDoubleOrNull() ?: orderPrice
+                lastOrderEvent = "Order $orderId detected on screen ($cleanPrice SAR, $distToRestaurant km)"
                 sendOrderToLog(orderId, cleanPrice, distToRestaurant, storeName, "Screen Popup 📱")
             }
 
@@ -1335,6 +1416,7 @@ object OrderInterceptor {
             lastHandledTimestamp = now
 
             if (loggedOrderIds.add(foundOrderId)) {
+                lastOrderEvent = "Order $foundOrderId available in orders list"
                 sendOrderToLog(foundOrderId, 0.0, 0.0, foundStore, "Order List Card 📋")
             }
 
@@ -1377,6 +1459,7 @@ object OrderInterceptor {
         }
 
         if (shouldReject) {
+            lastOrderEvent = "Order $orderId auto-rejected ($rejectReason)"
             showToast(act, "❌ Auto-Rejected Order $orderId: $rejectReason")
             sendOrderToLog(orderId, price, distRest, "", "Auto-Rejected ❌ ($rejectReason)")
             if (btnReject != null) {
@@ -1387,6 +1470,7 @@ object OrderInterceptor {
         }
 
         if (isDryRun) {
+            lastOrderEvent = "Order $orderId dry-run (would accept)"
             showToast(act, "🔍 [Dry-Run]: Would accept Order $orderId")
             sendOrderToLog(orderId, price, distRest, "", "Dry-Run (Would Accept) 🔍")
             return
@@ -1397,11 +1481,10 @@ object OrderInterceptor {
                 val latency = System.currentTimeMillis() - startTime
                 CoroutineScope(Dispatchers.Main).launch {
                     try {
-                        // 1. Direct hardware-level screen touch swipe
                         simulateSwipe(btnAccept, dialogRoot, act)
-                        // 2. Direct OkHttp HTTP accept API call
                         executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
 
+                        lastOrderEvent = "Order $orderId accepted successfully in ${latency}ms"
                         showToast(act, "⚡ Accepted Order $orderId in ${latency}ms!")
                         sendOrderToLog(orderId, price, distRest, "", "Accepted Successfully ✅ (${latency}ms)")
                         playAlertSound()
@@ -1436,13 +1519,11 @@ object OrderInterceptor {
             endScreenX = location[0].toFloat() + viewW - 50f
             screenY = location[1].toFloat() + (viewH / 2f)
         } else {
-            // Screen bottom default coordinates
             startScreenX = 140f
             endScreenX = screenW - 140f
             screenY = screenH * 0.88f
         }
 
-        // 1. Dispatch full hardware touch sequence directly to Activity Window
         CoroutineScope(Dispatchers.Main).launch {
             try {
                 val downTime = SystemClock.uptimeMillis()
@@ -1466,11 +1547,9 @@ object OrderInterceptor {
             } catch (_: Throwable) {}
         }
 
-        // 2. Also click views directly
         triggerClick(view)
         triggerClick(targetView)
 
-        // 3. Reflective methods
         var current: View? = targetView
         while (current != null) {
             try {

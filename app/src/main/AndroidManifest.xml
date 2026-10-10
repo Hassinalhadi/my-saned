@@ -49,6 +49,8 @@
                 <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
                 <action android:name="dev.saned.assistant.ACTION_PING" />
                 <action android:name="dev.saned.assistant.ACTION_PONG" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API_RESULT" />
             </intent-filter>
         </receiver>
 

@@ -1,5 +1,6 @@
 package dev.saned.assistant.ui
 
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -33,6 +34,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvPingDetails: TextView
     private var lastPongTimestamp: Long = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // OkHttp & Diagnostics UI
+    private lateinit var tvOkHttpHookStatus: TextView
+    private lateinit var tvHttpRequestsCount: TextView
+    private lateinit var tvPollingHits: TextView
+    private lateinit var tvLastHttpUrl: TextView
+    private lateinit var tvLastOrderEvent: TextView
 
     // Master Switch
     private lateinit var swMaster: Switch
@@ -109,6 +117,9 @@ class MainActivity : AppCompatActivity() {
         // ================= SECTION 0: LIVE PING & CONNECTION STATUS =================
         mainLayout.addView(createConnectionPingCard())
 
+        // ================= SECTION 0.5: OKHTTP & NETWORK DIAGNOSTICS =================
+        mainLayout.addView(createDiagnosticsCard())
+
         // ================= SECTION 1: MASTER SWITCH CARD =================
         mainLayout.addView(createMasterSwitchCard())
 
@@ -175,8 +186,9 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvPingDetails)
 
         val btnPing = Button(this).apply {
-            text = "⚡ Test Ping Now"
-            textSize = 12f
+            text = "⚡ TEST PING NOW"
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#2563EB"))
             setTextColor(Color.WHITE)
             setOnClickListener {
@@ -188,6 +200,132 @@ class MainActivity : AppCompatActivity() {
 
         card.addView(layout)
         return card
+    }
+
+    private fun createDiagnosticsCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#FFFFFF"))
+        }
+
+        val title = TextView(this).apply {
+            text = "🌐 OkHttp & Network Diagnostics"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(title)
+
+        val sub = TextView(this).apply {
+            text = "Live inspection of OkHttp traffic, background polling hits, and direct API probe:"
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 10)
+        }
+        layout.addView(sub)
+
+        tvOkHttpHookStatus = TextView(this).apply {
+            text = "OkHttp Hook: Active & Intercepting 🟢"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#059669"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(tvOkHttpHookStatus)
+
+        tvHttpRequestsCount = TextView(this).apply {
+            text = "Total Captured HTTP Requests: 0"
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#334155"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(tvHttpRequestsCount)
+
+        tvPollingHits = TextView(this).apply {
+            text = "Active Server Polling Hits: 0"
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#334155"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(tvPollingHits)
+
+        tvLastHttpUrl = TextView(this).apply {
+            text = "Last Request: Waiting for network traffic..."
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(tvLastHttpUrl)
+
+        tvLastOrderEvent = TextView(this).apply {
+            text = "Last Event: Ready for orders"
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(tvLastOrderEvent)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        val btnTestApi = Button(this).apply {
+            text = "🧪 Test Live Jahez API"
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+            setBackgroundColor(Color.parseColor("#0D9488"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                sendTestApiProbe()
+            }
+        }
+        btnRow.addView(btnTestApi)
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(16, 1)
+        }
+        btnRow.addView(spacer)
+
+        val btnSimOrder = Button(this).apply {
+            text = "⚡ Simulate Test Order"
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setBackgroundColor(Color.parseColor("#7C3AED"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                sendSimulateOrder()
+            }
+        }
+        btnRow.addView(btnSimOrder)
+
+        layout.addView(btnRow)
+        card.addView(layout)
+        return card
+    }
+
+    private fun sendTestApiProbe() {
+        Toast.makeText(this, "Testing direct OkHttp call to Jahez API...", Toast.LENGTH_SHORT).show()
+        val intent = Intent("dev.saned.assistant.ACTION_TEST_API").apply {
+            setPackage("net.jahez.fleets")
+        }
+        sendBroadcast(intent)
+        try {
+            sendBroadcast(Intent("dev.saned.assistant.ACTION_TEST_API"))
+        } catch (_: Throwable) {}
+    }
+
+    private fun sendSimulateOrder() {
+        Toast.makeText(this, "Simulating incoming test order...", Toast.LENGTH_SHORT).show()
+        val intent = Intent("dev.saned.assistant.ACTION_SIMULATE_ORDER").apply {
+            setPackage("net.jahez.fleets")
+        }
+        sendBroadcast(intent)
+        try {
+            sendBroadcast(Intent("dev.saned.assistant.ACTION_SIMULATE_ORDER"))
+        } catch (_: Throwable) {}
     }
 
     private fun sendPing() {
@@ -843,10 +981,16 @@ class MainActivity : AppCompatActivity() {
     private val ordersUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
-            if (action == "dev.saned.assistant.UI_REFRESH_ORDERS") {
-                refreshOrdersLogUI()
-            } else if (action == "dev.saned.assistant.UI_PONG_RECEIVED" || action == "dev.saned.assistant.ACTION_PONG") {
-                handlePongResponse(intent)
+            when (action) {
+                "dev.saned.assistant.UI_REFRESH_ORDERS" -> {
+                    refreshOrdersLogUI()
+                }
+                "dev.saned.assistant.UI_PONG_RECEIVED", "dev.saned.assistant.ACTION_PONG" -> {
+                    handlePongResponse(intent)
+                }
+                "dev.saned.assistant.UI_TEST_API_RESULT" -> {
+                    handleTestApiResult(intent)
+                }
             }
         }
     }
@@ -859,11 +1003,49 @@ class MainActivity : AppCompatActivity() {
 
         val hasToken = intent.getBooleanExtra("has_auth_token", false)
         val ordersCount = intent.getIntExtra("orders_count", 0)
+        val httpCount = intent.getIntExtra("http_requests_count", 0)
+        val pollCount = intent.getIntExtra("polling_hits", 0)
+        val lastUrl = intent.getStringExtra("last_http_url") ?: "None yet"
+        val lastCode = intent.getIntExtra("last_http_code", 0)
+        val lastEvent = intent.getStringExtra("last_order_event") ?: "Ready"
 
         runOnUiThread {
             tvPingStatus.text = "Connected to Jahez Fleets (Ping: ${latency} ms) 🟢"
             tvPingStatus.setTextColor(Color.parseColor("#059669"))
             tvPingDetails.text = "Hook: Active  •  Auth: ${if (hasToken) "Token Cached ✅" else "Waiting for Login ⏳"}  •  Orders Logged: $ordersCount"
+
+            if (::tvHttpRequestsCount.isInitialized) {
+                tvHttpRequestsCount.text = "Total Captured HTTP Requests: $httpCount"
+                tvPollingHits.text = "Active Server Polling Hits: $pollCount"
+                tvLastHttpUrl.text = "Last Request: $lastUrl" + (if (lastCode > 0) " (HTTP $lastCode)" else "")
+                tvLastOrderEvent.text = "Last Event: $lastEvent"
+            }
+        }
+    }
+
+    private fun handleTestApiResult(intent: Intent) {
+        val code = intent.getIntExtra("status_code", -1)
+        val latency = intent.getLongExtra("latency_ms", 0L)
+        val url = intent.getStringExtra("url") ?: ""
+        val body = intent.getStringExtra("body_snippet") ?: ""
+        val hasToken = intent.getBooleanExtra("has_token", false)
+
+        runOnUiThread {
+            val statusColor = if (code in 200..299) "#059669" else "#DC2626"
+            val message = """
+                Status Code: HTTP $code (${latency}ms)
+                Auth Token: ${if (hasToken) "Attached ✅" else "Missing ❌"}
+                Target URL: $url
+                
+                Response Preview:
+                $body
+            """.trimIndent()
+
+            AlertDialog.Builder(this)
+                .setTitle("🧪 Jahez API Probe Result")
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show()
         }
     }
 
@@ -877,6 +1059,7 @@ class MainActivity : AppCompatActivity() {
                 addAction("dev.saned.assistant.UI_REFRESH_ORDERS")
                 addAction("dev.saned.assistant.UI_PONG_RECEIVED")
                 addAction("dev.saned.assistant.ACTION_PONG")
+                addAction("dev.saned.assistant.UI_TEST_API_RESULT")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(ordersUpdateReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -885,7 +1068,6 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Throwable) {}
 
-        // Start periodic live ping
         mainHandler.post(pingRunnable)
     }
 

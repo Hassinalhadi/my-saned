@@ -25,7 +25,7 @@ class SanedReceiver : BroadcastReceiver() {
                 val prefs = context.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
                 val existing = prefs.getString("orders_log_json", "[]") ?: "[]"
                 val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
-                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
                 val newObj = JSONObject().apply {
                     put("id", orderId)
@@ -42,7 +42,6 @@ class SanedReceiver : BroadcastReceiver() {
                 }
                 prefs.edit().putString("orders_log_json", newArray.toString()).apply()
 
-                // Notify UI to refresh orders
                 try {
                     context.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
                 } catch (_: Throwable) {}
@@ -53,9 +52,17 @@ class SanedReceiver : BroadcastReceiver() {
             }
 
             "dev.saned.assistant.ACTION_PONG" -> {
-                // Forward pong event to MainActivity UI
                 try {
                     val relay = Intent("dev.saned.assistant.UI_PONG_RECEIVED").apply {
+                        putExtras(intent)
+                    }
+                    context.sendBroadcast(relay)
+                } catch (_: Throwable) {}
+            }
+
+            "dev.saned.assistant.ACTION_TEST_API_RESULT" -> {
+                try {
+                    val relay = Intent("dev.saned.assistant.UI_TEST_API_RESULT").apply {
                         putExtras(intent)
                     }
                     context.sendBroadcast(relay)
