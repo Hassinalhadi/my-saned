@@ -3,6 +3,7 @@ package dev.saned.assistant
 import android.app.Activity
 import android.app.Dialog
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
@@ -34,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object OrderInterceptor {
 
-    // Default to TRUE so auto-acceptance is active immediately upon injection
+    // Default to active state
     @Volatile var isMasterRunning: Boolean = true
     @Volatile var isAutoAccept: Boolean = true
     @Volatile var isAutoReject: Boolean = false
@@ -78,19 +79,29 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
 
-        // 2. Request current settings from Saned Assistant explicitly
-        try {
-            val reqIntent = Intent("dev.saned.assistant.REQUEST_SETTINGS").apply {
-                setPackage("dev.jing.sanedhook")
-            }
-            app.sendBroadcast(reqIntent)
-        } catch (_: Throwable) {}
+        // 2. Request current settings using EXPLICIT intent (bypasses package visibility)
+        requestSettingsFromAssistant()
 
         // 3. Fallback: Read shared config file if available
         loadFallbackConfigFile()
 
         // 4. Start active screen watcher
         startScreenWatcher()
+    }
+
+    fun requestSettingsFromAssistant() {
+        val app = appContext ?: return
+        try {
+            val reqIntent = Intent("dev.saned.assistant.REQUEST_SETTINGS").apply {
+                component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+            }
+            app.sendBroadcast(reqIntent)
+        } catch (_: Throwable) {}
+
+        try {
+            val gIntent = Intent("dev.saned.assistant.REQUEST_SETTINGS")
+            app.sendBroadcast(gIntent)
+        } catch (_: Throwable) {}
     }
 
     fun applySettingsFromIntent(intent: Intent) {
@@ -223,7 +234,6 @@ object OrderInterceptor {
     }
 
     private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader) {
-        // A. Hook okhttp3.OkHttpClient$Builder.build() to insert dynamic Interceptor
         try {
             val builderClass = Class.forName("okhttp3.OkHttpClient\$Builder", false, classLoader)
             val interceptorClass = Class.forName("okhttp3.Interceptor", false, classLoader)
@@ -263,7 +273,6 @@ object OrderInterceptor {
             })
         } catch (_: Throwable) {}
 
-        // B. Hook okhttp3.Response$Builder.build() as universal fallback
         try {
             val respBuilderClass = Class.forName("okhttp3.Response\$Builder", false, classLoader)
             val mBuild = respBuilderClass.getDeclaredMethod("build")
@@ -279,26 +288,6 @@ object OrderInterceptor {
                 }
             })
         } catch (_: Throwable) {}
-
-        // C. Hook okhttp3.Call.execute()
-        try {
-            val callClass = Class.forName("okhttp3.Call", false, classLoader)
-            for (m in callClass.methods) {
-                if (m.name == "execute") {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val response = chain.proceed()
-                            if (response != null) {
-                                try {
-                                    processHttpResponse(response)
-                                } catch (_: Throwable) {}
-                            }
-                            return response
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
     }
 
     private fun hookWebSocket(module: XposedModule, classLoader: ClassLoader) {
@@ -306,24 +295,6 @@ object OrderInterceptor {
             val realWsClass = Class.forName("okhttp3.internal.ws.RealWebSocket", false, classLoader)
             for (m in realWsClass.declaredMethods) {
                 if (m.name == "onReadMessage" || m.name == "onMessage") {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            for (arg in chain.args) {
-                                if (arg is String && arg.isNotEmpty()) {
-                                    parseOrderJson(arg, "وارد عبر WebSocket ⚡")
-                                }
-                            }
-                            return chain.proceed()
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
-
-        try {
-            val listenerClass = Class.forName("okhttp3.WebSocketListener", false, classLoader)
-            for (m in listenerClass.methods) {
-                if (m.name == "onMessage" && m.parameterTypes.any { it == String::class.java }) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             for (arg in chain.args) {
@@ -346,10 +317,10 @@ object OrderInterceptor {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val result = chain.proceed()
                     val act = chain.thisObject as? Activity
-                    if (act != null && act.packageName == "net.jahez.fleets") {
+                    if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
                         currentActivity = act
                         initAppContext(act.applicationContext)
-                        syncSettings(act.contentResolver)
+                        requestSettingsFromAssistant()
                         startScreenWatcher()
                         scanAllRoots()
                     }
@@ -365,10 +336,10 @@ object OrderInterceptor {
                     val result = chain.proceed()
                     val hasFocus = chain.args[0] as? Boolean ?: false
                     val act = chain.thisObject as? Activity
-                    if (hasFocus && act != null && act.packageName == "net.jahez.fleets") {
+                    if (hasFocus && act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
                         currentActivity = act
                         initAppContext(act.applicationContext)
-                        syncSettings(act.contentResolver)
+                        requestSettingsFromAssistant()
                         startScreenWatcher()
                         scanAllRoots()
                     }
@@ -376,25 +347,8 @@ object OrderInterceptor {
                 }
             })
         } catch (_: Throwable) {}
-
-        try {
-            val mPause = Activity::class.java.getDeclaredMethod("onPause")
-            module.hook(mPause).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val act = chain.thisObject as? Activity
-                    if (currentActivity == act) {
-                        currentActivity = null
-                    }
-                    return chain.proceed()
-                }
-            })
-        } catch (_: Throwable) {}
     }
 
-    /**
-     * Inspects WindowManagerGlobal to get all attached root views in the process.
-     * Crucial for inspecting Dialogs and BottomSheets that live in separate Windows.
-     */
     fun getAllRootViews(): List<View> {
         val result = mutableListOf<View>()
         try {
@@ -405,9 +359,11 @@ object OrderInterceptor {
             mViewsField.isAccessible = true
             val list = mViewsField.get(wmg) as? List<*>
             if (list != null) {
-                for (item in list) {
-                    if (item is View) {
-                        result.add(item)
+                synchronized(list) {
+                    for (item in list) {
+                        if (item is View) {
+                            result.add(item)
+                        }
                     }
                 }
             }
@@ -449,7 +405,7 @@ object OrderInterceptor {
             } catch (_: Throwable) {}
         }
 
-        // 2. If no popup found, scan Home screen order list cards (e.g., [New] card in 000.jpg)
+        // 2. If no popup found, scan Home screen order list cards
         for (root in roots) {
             try {
                 if (root.isShown && root.visibility == View.VISIBLE) {
@@ -543,11 +499,11 @@ object OrderInterceptor {
     private fun sendOrderToLog(orderId: String, price: Double, dist: Double, restaurant: String, status: String) {
         val ctx = appContext ?: currentActivity
 
-        // 1. Broadcast to Saned Assistant UI
+        // 1. Explicit Broadcast directly to SanedReceiver
         if (ctx != null) {
             try {
                 val logIntent = Intent("dev.saned.assistant.ACTION_LOG_ORDER").apply {
-                    setPackage("dev.jing.sanedhook")
+                    component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
                     putExtra("order_id", orderId)
                     putExtra("price", price)
                     putExtra("distance", dist)
@@ -556,40 +512,27 @@ object OrderInterceptor {
                 }
                 ctx.sendBroadcast(logIntent)
             } catch (_: Throwable) {}
+
+            try {
+                val gIntent = Intent("dev.saned.assistant.ACTION_LOG_ORDER").apply {
+                    putExtra("order_id", orderId)
+                    putExtra("price", price)
+                    putExtra("distance", dist)
+                    putExtra("restaurant", restaurant)
+                    putExtra("status", status)
+                }
+                ctx.sendBroadcast(gIntent)
+            } catch (_: Throwable) {}
         }
-
-        // 2. Shared File Fallback for high reliability across UIDs
-        try {
-            val f = File("/data/local/tmp/saned_orders.json")
-            val existing = if (f.exists()) f.readText() else "[]"
-            val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
-            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-
-            val newObj = JSONObject().apply {
-                put("id", orderId)
-                put("price", price)
-                put("distance", dist)
-                put("restaurant", restaurant)
-                put("status", status)
-                put("time", timeStr)
-            }
-            val newArray = JSONArray()
-            newArray.put(newObj)
-            for (i in 0 until minOf(39, array.length())) {
-                newArray.put(array.getJSONObject(i))
-            }
-            f.writeText(newArray.toString())
-            f.setReadable(true, false)
-            f.setWritable(true, false)
-        } catch (_: Throwable) {}
     }
 
     /**
-     * Scans a root view (Activity, Dialog, BottomSheet) for the Order Accept slider/button
+     * Scans a root view (Activity, Dialog, BottomSheet) for Order Accept slider/button & Reject button
      */
     private fun findAndTriggerOrder(root: View, activity: Activity, startTime: Long): Boolean {
         var acceptView: View? = null
         var rejectView: View? = null
+        var confirmDialogBtn: View? = null
         var orderPrice = 0.0
         var distToRestaurant = 0.0
         var distToCustomer = 0.0
@@ -606,17 +549,24 @@ object OrderInterceptor {
             if (text.isNotEmpty()) allTexts.add(text)
             if (desc.isNotEmpty()) allTexts.add(desc)
 
-            // Look for Accept button or slider (>> Accept or قبول or >>)
             val combined = (text + " " + desc).trim()
+
+            // Look for Accept slider or button
             if (combined.contains("Accept", ignoreCase = true) || combined.contains("قبول") || combined.contains(">>")) {
                 if (acceptView == null || combined.contains("Accept", ignoreCase = true)) {
                     acceptView = v
                 }
             }
 
-            // Look for Reject button (Reject or رفض)
+            // Look for Reject button
             if (combined.equals("Reject", ignoreCase = true) || combined.equals("رفض", ignoreCase = true)) {
                 rejectView = v
+            }
+
+            // Look for confirmation popup buttons (e.g. Yes, Confirm, تأكيد, نعم)
+            if (combined.equals("Confirm", ignoreCase = true) || combined.equals("Yes", ignoreCase = true) ||
+                combined.equals("تأكيد", ignoreCase = true) || combined.equals("نعم", ignoreCase = true)) {
+                confirmDialogBtn = v
             }
 
             if (v is ViewGroup) {
@@ -628,6 +578,11 @@ object OrderInterceptor {
 
         traverse(root)
 
+        // Handle possible confirmation dialog for reject
+        if (confirmDialogBtn != null && confirmDialogBtn!!.isShown) {
+            triggerClick(confirmDialogBtn!!)
+        }
+
         // Parse extracted texts
         for (raw in allTexts) {
             val t = normalizeArabicNumerals(raw).trim()
@@ -635,13 +590,13 @@ object OrderInterceptor {
                 isNewOrderScreen = true
             }
 
-            // Distance to Restaurant (From You / كم منك)
+            // Distance to Restaurant (e.g., "12.1 Km From You" / "12.1 كم منك")
             val mDistRest = Regex("""(\d+(?:\.\d+)?)\s*(?:Km\s*From\s*You|كم\s*منك)""", RegexOption.IGNORE_CASE).find(t)
             if (mDistRest != null && distToRestaurant == 0.0) {
                 distToRestaurant = mDistRest.groupValues[1].toDoubleOrNull() ?: 0.0
             }
 
-            // Distance to Customer (From Pickup / كم من نقطة الاستلام)
+            // Distance to Customer (e.g., "1.8 Km From Pickup" / "1.8 كم من نقطة الاستلام")
             val mDistCust = Regex("""(\d+(?:\.\d+)?)\s*(?:Km\s*From\s*Pickup|كم\s*من\s*نقطة\s*الاستلام)""", RegexOption.IGNORE_CASE).find(t)
             if (mDistCust != null && distToCustomer == 0.0) {
                 distToCustomer = mDistCust.groupValues[1].toDoubleOrNull() ?: 0.0
@@ -653,25 +608,24 @@ object OrderInterceptor {
                 storeName = mStore.groupValues[1].trim()
             }
 
-            // Order ID (#516864147 or 516864147)
-            val mId = Regex("""#?\s*(\d{5,})""").find(t)
-            if (mId != null && orderId.isEmpty()) {
-                orderId = "#" + mId.groupValues[1]
+            // Order ID: only match whole numbers with at least 5 digits (no decimal points)
+            if (!t.contains(".") && !t.contains("Km", ignoreCase = true)) {
+                val mId = Regex("""#?\s*(\d{5,12})""").find(t)
+                if (mId != null && orderId.isEmpty()) {
+                    orderId = "#" + mId.groupValues[1]
+                }
             }
 
-            // Price extraction (7.001 SAR / 7.001 ﷼ / 7.001)
-            if (!t.contains("Bonus", ignoreCase = true) && !t.contains("From You", ignoreCase = true) && 
-                !t.contains("Pickup", ignoreCase = true) && !t.contains("طريق", ignoreCase = true) && orderPrice == 0.0) {
+            // Price extraction: Match numbers after currency symbols or # (e.g., "# 10.00199999999999" or "SAR 15.0")
+            if (!t.contains("From You", ignoreCase = true) && !t.contains("Pickup", ignoreCase = true) && 
+                !t.contains("منك", ignoreCase = true) && orderPrice == 0.0) {
                 
-                val mPriceCurr = Regex("""(?:SAR|﷼|رس)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(t)
-                    ?: Regex("""(\d+(?:\.\d+)?)\s*(?:SAR|﷼|رس)""", RegexOption.IGNORE_CASE).find(t)
-                
-                if (mPriceCurr != null) {
-                    val p = mPriceCurr.groupValues[1].toDoubleOrNull() ?: 0.0
-                    if (p in 5.0..350.0) orderPrice = p
-                } else if (t.matches(Regex("""^\d{1,3}\.\d{1,3}$"""))) {
-                    val p = t.toDoubleOrNull() ?: 0.0
-                    if (p in 5.0..350.0) orderPrice = p
+                val mPrice = Regex("""(?:[#﷼\$€£]|SAR|رس)?\s*(\d+\.\d+|\d+)""", RegexOption.IGNORE_CASE).find(t)
+                if (mPrice != null) {
+                    val p = mPrice.groupValues[1].toDoubleOrNull() ?: 0.0
+                    if (p in 2.0..500.0 && p != distToRestaurant && p != distToCustomer) {
+                        orderPrice = p
+                    }
                 }
             }
         }
@@ -684,16 +638,17 @@ object OrderInterceptor {
         if (acceptView != null && (isNewOrderScreen || acceptView!!.isShown)) {
             val signature = "$orderId-$orderPrice-$distToRestaurant"
             val now = System.currentTimeMillis()
-            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3500L) {
+            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3000L) {
                 return true // Already handled recently
             }
 
             lastHandledOrderSignature = signature
             lastHandledTimestamp = now
 
-            // Log order to Orders Log if new
+            // Log order to Orders Log immediately
             if (loggedOrderIds.add(orderId)) {
-                sendOrderToLog(orderId, orderPrice, distToRestaurant, storeName, "شاشة الطلب اللحظية 📱")
+                val cleanPrice = String.format(Locale.US, "%.2f", orderPrice).toDoubleOrNull() ?: orderPrice
+                sendOrderToLog(orderId, cleanPrice, distToRestaurant, storeName, "شاشة الطلب اللحظية 📱")
             }
 
             evaluateAndProcessOrder(activity, root, acceptView!!, rejectView, orderPrice, distToRestaurant, distToCustomer, orderId, startTime)
@@ -703,10 +658,6 @@ object OrderInterceptor {
         return false
     }
 
-    /**
-     * Scans Home Screen for pending order cards (as shown in user photo 000.jpg: Pho / Jahez / New / 516864147).
-     * If an order card with [New] is visible, click it to open the acceptance popup.
-     */
     private fun scanHomeScreenOrderCards(root: View, activity: Activity): Boolean {
         var newOrderCardView: View? = null
         var foundOrderId = ""
@@ -718,7 +669,6 @@ object OrderInterceptor {
             val combined = "$text $desc".trim()
 
             if (combined.equals("New", ignoreCase = true) || combined.equals("جديد", ignoreCase = true)) {
-                // Find parent container representing the card
                 var parent = v.parent as? View
                 while (parent != null) {
                     if (parent.width > 300 && parent.height in 80..600) {
@@ -751,7 +701,7 @@ object OrderInterceptor {
         if (newOrderCardView != null && foundOrderId.isNotEmpty()) {
             val signature = "home-$foundOrderId"
             val now = System.currentTimeMillis()
-            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3500L) {
+            if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3000L) {
                 return false
             }
 
@@ -764,10 +714,7 @@ object OrderInterceptor {
 
             if (isAutoAccept || isMasterRunning) {
                 mainHandler.post {
-                    try {
-                        newOrderCardView?.performClick()
-                        newOrderCardView?.callOnClick()
-                    } catch (_: Throwable) {}
+                    triggerClick(newOrderCardView!!)
                 }
                 return true
             }
@@ -787,8 +734,6 @@ object OrderInterceptor {
         orderId: String,
         startTime: Long
     ) {
-        syncSettings(act.contentResolver)
-
         // 1. Check Filters for Auto-Reject
         var shouldReject = false
         var rejectReason = ""
@@ -796,7 +741,7 @@ object OrderInterceptor {
         if (isAutoReject) {
             if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
                 shouldReject = true
-                rejectReason = "السعر (${price} ر.س) أقل من الحد الأدنى (${minOrderPrice} ر.س)"
+                rejectReason = "السعر (${String.format(Locale.US, "%.1f", price)} ر.س) أقل من الحد الأدنى (${minOrderPrice} ر.س)"
             } else if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
                 shouldReject = true
                 rejectReason = "المسافة للمطعم (${distRest} كم) أبعد من الحد (${maxDistToRestaurant} كم)"
@@ -810,19 +755,19 @@ object OrderInterceptor {
             showToast(act, "❌ تم رفض الطلب $orderId: $rejectReason")
             sendOrderToLog(orderId, price, distRest, "", "مرفوض تلقائياً ❌ ($rejectReason)")
             if (btnReject != null) {
-                triggerReject(btnReject)
+                triggerClick(btnReject)
             }
             return
         }
 
         // 2. Check Dry-Run
         if (isDryRun) {
-            showToast(act, "🔍 [وضع التجربة]: كان سيتم قبول الطلب $orderId بنجاح (${price} ر.س)")
+            showToast(act, "🔍 [وضع التجربة]: كان سيتم قبول الطلب $orderId بنجاح")
             sendOrderToLog(orderId, price, distRest, "", "وضع التجربة (كان سيُقبل) 🔍")
             return
         }
 
-        // 3. Auto-Accept: Trigger instant swipe gesture
+        // 3. Auto-Accept: Trigger instant swipe & click gestures
         if (isAutoAccept || isMasterRunning) {
             if (isAccepting.compareAndSet(false, true)) {
                 val latency = System.currentTimeMillis() - startTime
@@ -849,61 +794,65 @@ object OrderInterceptor {
         val w = targetView.width.toFloat().coerceAtLeast(320f)
         val h = targetView.height.toFloat().coerceAtLeast(65f)
 
-        val startScreenX = location[0].toFloat() + (h / 2f).coerceAtLeast(50f)
+        val startScreenX = location[0].toFloat() + 70f
         val endScreenX = location[0].toFloat() + w - 40f
         val screenY = location[1].toFloat() + (h / 2f)
 
-        val startLocalX = (h / 2f).coerceAtLeast(50f)
+        val startLocalX = 70f
         val endLocalX = w - 40f
         val localY = h / 2f
 
         val downTime = SystemClock.uptimeMillis()
         var eventTime = downTime
 
-        // 1. Dispatch local MotionEvents directly to slider targetView
+        // A. Clicks on view and parent chain
+        triggerClick(view)
+        triggerClick(targetView)
+
+        // B. Dispatch local MotionEvents to targetView
         try {
             val downLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, startLocalX, localY, 0)
             targetView.dispatchTouchEvent(downLocal)
             downLocal.recycle()
 
-            val steps = 20
+            val steps = 25
             for (i in 1..steps) {
-                eventTime += 8
+                eventTime += 6
                 val currX = startLocalX + (endLocalX - startLocalX) * (i.toFloat() / steps.toFloat())
                 val moveLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, currX, localY, 0)
                 targetView.dispatchTouchEvent(moveLocal)
                 moveLocal.recycle()
             }
 
-            eventTime += 8
+            eventTime += 6
             val upLocal = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, endLocalX, localY, 0)
             targetView.dispatchTouchEvent(upLocal)
             upLocal.recycle()
         } catch (_: Throwable) {}
 
-        // 2. Dispatch window MotionEvents to Dialog root DecorView with screen coordinates
+        // C. Dispatch window MotionEvents to Dialog/Activity DecorView with screen coordinates
         try {
             var sTime = downTime
             val downScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
             dialogRoot.dispatchTouchEvent(downScreen)
             downScreen.recycle()
 
-            val steps = 20
+            val steps = 25
             for (i in 1..steps) {
-                sTime += 8
+                sTime += 6
                 val currX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
                 val moveScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_MOVE, currX, screenY, 0)
                 dialogRoot.dispatchTouchEvent(moveScreen)
                 moveScreen.recycle()
             }
 
-            sTime += 8
+            sTime += 6
             val upScreen = MotionEvent.obtain(downTime, sTime, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
             dialogRoot.dispatchTouchEvent(upScreen)
             upScreen.recycle()
         } catch (_: Throwable) {}
 
-        // 3. Fallback: Dispatch to Activity window decorView
+        // D. Also dispatch on activity window decorView if distinct
         try {
             val decor = activity.window.decorView
             if (decor != dialogRoot) {
@@ -911,21 +860,13 @@ object OrderInterceptor {
                 decor.dispatchTouchEvent(downScreen)
                 downScreen.recycle()
 
-                val upScreen = MotionEvent.obtain(downTime, downTime + 100, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
+                val upScreen = MotionEvent.obtain(downTime, downTime + 80, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
                 decor.dispatchTouchEvent(upScreen)
                 upScreen.recycle()
             }
         } catch (_: Throwable) {}
 
-        // 4. Regular Clicks on view and parent chain
-        try {
-            view.performClick()
-            view.callOnClick()
-            targetView.performClick()
-            targetView.callOnClick()
-        } catch (_: Throwable) {}
-
-        // 5. Invoke any slider completion methods reflectively
+        // E. Invoke reflective methods
         var current: View? = targetView
         while (current != null) {
             try {
@@ -945,7 +886,7 @@ object OrderInterceptor {
         }
     }
 
-    private fun triggerReject(view: View) {
+    private fun triggerClick(view: View) {
         try {
             view.performClick()
             view.callOnClick()
@@ -954,15 +895,15 @@ object OrderInterceptor {
         try {
             val location = IntArray(2)
             view.getLocationOnScreen(location)
-            val cx = location[0].toFloat() + (view.width / 2f)
-            val cy = location[1].toFloat() + (view.height / 2f)
+            val cx = location[0].toFloat() + (view.width / 2f).coerceAtLeast(20f)
+            val cy = location[1].toFloat() + (view.height / 2f).coerceAtLeast(20f)
             val downTime = SystemClock.uptimeMillis()
 
             val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, cx, cy, 0)
             view.dispatchTouchEvent(down)
             down.recycle()
 
-            val up = MotionEvent.obtain(downTime, downTime + 50, MotionEvent.ACTION_UP, cx, cy, 0)
+            val up = MotionEvent.obtain(downTime, downTime + 30, MotionEvent.ACTION_UP, cx, cy, 0)
             view.dispatchTouchEvent(up)
             up.recycle()
         } catch (_: Throwable) {}
