@@ -258,11 +258,11 @@ object OrderInterceptor {
                 "/api/fleets/orders"
             )
 
-            // Build list of hosts to probe
+            // Build list of hosts to probe (strictly validated for jahez.net)
             val probeHosts = mutableListOf<String>()
-            if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
-            if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
-            probeHosts.addAll(candidateApiHosts)
+            if (lastOrdersListUrl.isNotEmpty() && isValidJahezHost(lastOrdersListUrl)) probeHosts.add(lastOrdersListUrl)
+            if (cachedApiHost.isNotEmpty() && isValidJahezHost(cachedApiHost)) probeHosts.add(cachedApiHost)
+            probeHosts.add("https://api.jahez.net")
 
             val clientToUse = capturedAppHttpClient ?: httpClient
             var successFound = false
@@ -271,6 +271,7 @@ object OrderInterceptor {
                 if (successFound) break
                 for (endpoint in candidateEndpoints) {
                     val candidateUrl = buildCandidateUrl(h, endpoint)
+                    targetUrl = candidateUrl
                     try {
                         val reqBuilder = Request.Builder().url(candidateUrl).get()
                         applyJahezHeaders(reqBuilder, token)
@@ -491,8 +492,18 @@ object OrderInterceptor {
         return ""
     }
 
+    fun isValidJahezHost(host: String): Boolean {
+        return try {
+            val uri = java.net.URI(host)
+            val h = uri.host?.lowercase() ?: ""
+            h == "api.jahez.net" || h.endsWith(".jahez.net")
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun persistHost(host: String) {
-        if (host.isEmpty()) return
+        if (!isValidJahezHost(host)) return
         try {
             val f = File("/data/local/tmp/saned_api_host.txt")
             f.writeText(host.trim())
@@ -506,13 +517,16 @@ object OrderInterceptor {
             val f = File("/data/local/tmp/saned_api_host.txt")
             if (f.exists()) {
                 val h = f.readText().trim()
-                if (h.isNotEmpty()) {
+                if (isValidJahezHost(h)) {
                     cachedApiHost = h
                     return h
+                } else {
+                    f.delete()
                 }
             }
         } catch (_: Throwable) {}
-        return ""
+        cachedApiHost = "https://api.jahez.net"
+        return cachedApiHost
     }
 
     private fun extractHostFromJwt(token: String) {
@@ -558,10 +572,13 @@ object OrderInterceptor {
                             val strVal = v?.toString() ?: ""
                             checkAndSetToken(strVal, k)
                             if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
-                                if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
+                                if (strVal.contains("jahez.net")) {
                                     val uri = java.net.URI(strVal)
-                                    cachedApiHost = "${uri.scheme}://${uri.host}"
-                                    persistHost(cachedApiHost)
+                                    val h = "${uri.scheme}://${uri.host}"
+                                    if (isValidJahezHost(h)) {
+                                        cachedApiHost = h
+                                        persistHost(cachedApiHost)
+                                    }
                                 }
                             }
                         }
