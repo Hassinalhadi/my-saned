@@ -620,7 +620,7 @@ object OrderInterceptor {
             if (!t.contains("From You", ignoreCase = true) && !t.contains("Pickup", ignoreCase = true) && 
                 !t.contains("منك", ignoreCase = true) && orderPrice == 0.0) {
                 
-                val mPrice = Regex("""(?:[#﷼\$€£]|SAR|رس)?\s*(\d+\.\d+|\d+)""", RegexOption.IGNORE_CASE).find(t)
+                val mPrice = Regex("""(?:[#﷼\$€£]|SAR|رس|ر\.س|ريال)?\s*(\d+(?:\.\d+)?)\s*(?:[#﷼\$€£]|SAR|رس|ر\.س|ريال)?""", RegexOption.IGNORE_CASE).find(t)
                 if (mPrice != null) {
                     val p = mPrice.groupValues[1].toDoubleOrNull() ?: 0.0
                     if (p in 2.0..500.0 && p != distToRestaurant && p != distToCustomer) {
