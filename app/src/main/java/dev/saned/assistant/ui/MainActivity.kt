@@ -1,15 +1,17 @@
 package dev.saned.assistant.ui
 
 import android.content.BroadcastReceiver
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.webkit.JavascriptInterface
@@ -26,6 +28,13 @@ import java.util.Random
 
 class MainActivity : AppCompatActivity() {
 
+    // Connection & Ping Status
+    private lateinit var tvPingStatus: TextView
+    private lateinit var tvPingDetails: TextView
+    private var lastPongTimestamp: Long = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Master Switch
     private lateinit var swMaster: Switch
     private lateinit var tvMasterStatus: TextView
 
@@ -48,12 +57,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
 
-    // Active Server Polling & Parallel Acceptance (Original Assistant Mechanics)
+    // Active Server Polling & Parallel Acceptance
     private lateinit var chkActivePolling: CheckBox
     private lateinit var edtPollInterval: EditText
     private lateinit var edtParallelRequests: EditText
 
     private lateinit var ordersLogContainer: LinearLayout
+
+    private val pingRunnable = object : Runnable {
+        override fun run() {
+            sendPing()
+            checkPingTimeout()
+            mainHandler.postDelayed(this, 2500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +88,7 @@ class MainActivity : AppCompatActivity() {
 
         // ================= HEADER =================
         val header = TextView(this).apply {
-            text = "⚡ مساعد جاهز الذكي - Saned Assistant"
+            text = "⚡ Saned Assistant Pro"
             textSize = 22f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E293B"))
@@ -81,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(header)
 
         val subHeader = TextView(this).apply {
-            text = "النسخة البرمجية المطابقة للمساعد الأصلي - مفتوحة المصدر وبدون قيود"
+            text = "Automated High-Speed Order Interceptor for Jahez Fleets"
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             gravity = Gravity.CENTER
@@ -89,28 +106,31 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(subHeader)
 
-        // ================= MASTER SWITCH CARD =================
+        // ================= SECTION 0: LIVE PING & CONNECTION STATUS =================
+        mainLayout.addView(createConnectionPingCard())
+
+        // ================= SECTION 1: MASTER SWITCH CARD =================
         mainLayout.addView(createMasterSwitchCard())
 
-        // ================= SECTION 1: ANDROID ID SPOOFER =================
+        // ================= SECTION 2: ANDROID ID SPOOFER =================
         mainLayout.addView(createAndroidIdCard())
 
-        // ================= SECTION 2: INTERACTIVE MAP & GPS =================
+        // ================= SECTION 3: INTERACTIVE MAP & GPS =================
         mainLayout.addView(createLocationMapCard())
 
-        // ================= SECTION 3: AUTO ACCEPT & SMART FILTERS =================
+        // ================= SECTION 4: AUTO ACCEPT & SMART FILTERS =================
         mainLayout.addView(createFiltersCard())
 
-        // ================= SECTION 4: ACTIVE SERVER POLLING =================
+        // ================= SECTION 5: ACTIVE SERVER POLLING =================
         mainLayout.addView(createPollingCard())
 
-        // ================= SECTION 5: ORDERS LIVE LOG =================
+        // ================= SECTION 6: ORDERS LIVE LOG =================
         mainLayout.addView(createOrdersLogCard())
 
         // ================= SAVE BUTTON =================
         val btnSave = Button(this).apply {
-            text = "💾 حفظ جميع الإعدادات وتطبيقها فوراً"
-            textSize = 16f
+            text = "💾 Save & Apply All Settings"
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#059669"))
@@ -118,6 +138,83 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { saveAllSettings() }
         }
         mainLayout.addView(btnSave)
+    }
+
+    private fun createConnectionPingCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#FFFFFF"))
+        }
+
+        val title = TextView(this).apply {
+            text = "📡 Connection & Live Ping Status"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
+        }
+        layout.addView(title)
+
+        tvPingStatus = TextView(this).apply {
+            text = "Checking connection to Jahez Fleets... ⏳"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#D97706"))
+            setPadding(0, 0, 0, 4)
+        }
+        layout.addView(tvPingStatus)
+
+        tvPingDetails = TextView(this).apply {
+            text = "Hook: Initializing  •  Auth: Waiting for login  •  Orders: 0"
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(tvPingDetails)
+
+        val btnPing = Button(this).apply {
+            text = "⚡ Test Ping Now"
+            textSize = 12f
+            setBackgroundColor(Color.parseColor("#2563EB"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                sendPing()
+                Toast.makeText(this@MainActivity, "Ping request sent to Jahez Fleets", Toast.LENGTH_SHORT).show()
+            }
+        }
+        layout.addView(btnPing)
+
+        card.addView(layout)
+        return card
+    }
+
+    private fun sendPing() {
+        val pingTime = System.currentTimeMillis()
+        try {
+            val intent = Intent("dev.saned.assistant.ACTION_PING").apply {
+                setPackage("net.jahez.fleets")
+                putExtra("timestamp", pingTime)
+            }
+            sendBroadcast(intent)
+        } catch (_: Throwable) {}
+
+        try {
+            val gIntent = Intent("dev.saned.assistant.ACTION_PING").apply {
+                putExtra("timestamp", pingTime)
+            }
+            sendBroadcast(gIntent)
+        } catch (_: Throwable) {}
+    }
+
+    private fun checkPingTimeout() {
+        val now = System.currentTimeMillis()
+        if (lastPongTimestamp > 0 && (now - lastPongTimestamp) > 4000L) {
+            tvPingStatus.text = "🔴 Disconnected (Jahez App Closed or Inactive)"
+            tvPingStatus.setTextColor(Color.parseColor("#DC2626"))
+            tvPingDetails.text = "Open Jahez Fleet app to establish real-time link"
+        }
     }
 
     private fun createMasterSwitchCard(): CardView {
@@ -129,8 +226,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🔘 زر التشغيل والتحكم الرئيسي"
-            textSize = 17f
+            text = "🔘 Master Control Switch"
+            textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
             setPadding(0, 0, 0, 8)
@@ -143,8 +240,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         swMaster = Switch(this).apply {
-            text = "تشغيل المساعد بالكامل (Master ON / OFF)"
-            textSize = 15f
+            text = "Enable All Assistant Functions (Master ON / OFF)"
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             isChecked = SettingsStore.isMasterRunning(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
@@ -162,10 +259,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateMasterStatusUI(isRunning: Boolean) {
         if (isRunning) {
-            tvMasterStatus.text = "الحالة: 🟢 المساعد قيد التشغيل والجاهزية للعمل مع جاهز"
+            tvMasterStatus.text = "Status: 🟢 Active & Ready for Jahez Orders"
             tvMasterStatus.setTextColor(Color.parseColor("#059669"))
         } else {
-            tvMasterStatus.text = "الحالة: 🔴 المساعد متوقف بالكامل (كل الوظائف معطلة حالياً)"
+            tvMasterStatus.text = "Status: 🔴 Stopped (All Functions Disabled)"
             tvMasterStatus.setTextColor(Color.parseColor("#DC2626"))
         }
     }
@@ -178,7 +275,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "📱 معرف الجهاز (Android ID)"
+            text = "📱 Device Identifier (Android ID / IMEI)"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -187,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val note = TextView(this).apply {
-            text = "ملاحظة: تطبيق جاهز يعتمد على Android ID ويسميه في واجهة الدخول IMEI. تعديل هذا المعرف يغير رقم الجهاز الظاهر في جاهز."
+            text = "Note: Jahez Fleets uses Android ID as device IMEI on the login screen. Modifying this changes the reported device ID."
             textSize = 11.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -195,7 +292,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(note)
 
         chkAndroidId = CheckBox(this).apply {
-            text = "تفعيل تغيير معرف الجهاز (Android ID Spoofing)"
+            text = "Enable Device ID Spoofing"
             isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setSpoofAndroidId(this@MainActivity, isChecked)
@@ -204,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(chkAndroidId)
 
         edtAndroidId = EditText(this).apply {
-            hint = "أدخل 16 خانة سداسية عشرية (مثال: a1b2c3d4e5f67890)"
+            hint = "Enter 16-hex characters (e.g. a1b2c3d4e5f67890)"
             setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))
             textSize = 14f
             typeface = Typeface.MONOSPACE
@@ -218,7 +315,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnGen = Button(this).apply {
-            text = "🎲 توليد عشوائي (16 خانة)"
+            text = "🎲 Randomize (16-char)"
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
@@ -229,13 +326,13 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnGen)
 
         val btnCopy = Button(this).apply {
-            text = "📋 نسخ المعرف"
+            text = "📋 Copy ID"
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clip.setPrimaryClip(ClipData.newPlainText("Android ID", edtAndroidId.text.toString().trim()))
-                Toast.makeText(this@MainActivity, "تم نسخ المعرف إلى الحافظة", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Device ID copied to clipboard", Toast.LENGTH_SHORT).show()
             }
         }
         btnRow.addView(btnCopy)
@@ -253,7 +350,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "📍 الخريطة وتغيير الموقع الجغرافي (GPS Spoofing)"
+            text = "📍 GPS Location & Interactive Map"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -262,13 +359,13 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         chkFixLoc = CheckBox(this).apply {
-            text = "إصلاح خطأ الموقع غير معروف (Fix Location Unknown)"
+            text = "Fix 'Location Unknown' Error"
             isChecked = SettingsStore.isFixLocation(this@MainActivity)
         }
         layout.addView(chkFixLoc)
 
         chkFakeLoc = CheckBox(this).apply {
-            text = "تفعيل الموقع الوهمي المخصص (Mock Location)"
+            text = "Enable Mock GPS Location"
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
         }
         layout.addView(chkFakeLoc)
@@ -279,7 +376,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         edtLat = EditText(this).apply {
-            hint = "خط العرض (Lat)"
+            hint = "Latitude (Lat)"
             val l = SettingsStore.getFakeLat(this@MainActivity)
             setText(if (l != 0.0) l.toString() else "24.7136")
             textSize = 13f
@@ -288,7 +385,7 @@ class MainActivity : AppCompatActivity() {
         coordsRow.addView(edtLat)
 
         edtLng = EditText(this).apply {
-            hint = "خط الطول (Lng)"
+            hint = "Longitude (Lng)"
             val g = SettingsStore.getFakeLng(this@MainActivity)
             setText(if (g != 0.0) g.toString() else "46.6753")
             textSize = 13f
@@ -398,7 +495,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "⚡ إعدادات القبول والفلاتر الذكية"
+            text = "⚡ Auto-Accept & Smart Filters"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -407,32 +504,32 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         chkAutoAccept = CheckBox(this).apply {
-            text = "تفعيل القبول التلقائي الفوري للطلبات"
+            text = "Enable Instant Auto-Accept"
             isChecked = SettingsStore.isAutoAccept(this@MainActivity)
         }
         layout.addView(chkAutoAccept)
 
         chkAutoReject = CheckBox(this).apply {
-            text = "تفعيل الرفض التلقائي للطلبات غير المطابقة"
+            text = "Enable Auto-Reject for Non-Matching Orders"
             isChecked = SettingsStore.isAutoReject(this@MainActivity)
         }
         layout.addView(chkAutoReject)
 
         chkDryRun = CheckBox(this).apply {
-            text = "وضع التجربة (Dry-Run: فحص الطلب دون قبوله فعلياً)"
+            text = "Dry-Run Mode (Evaluate orders without accepting)"
             isChecked = SettingsStore.isDryRun(this@MainActivity)
         }
         layout.addView(chkDryRun)
 
-        layout.addView(createLabel("الحد الأدنى لسعر الطلب (SAR) - اتركه 0 لإلغاء القيد:"))
+        layout.addView(createLabel("Minimum Order Price (SAR) - Set 0 to disable limit:"))
         edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
         layout.addView(edtMinPrice)
 
-        layout.addView(createLabel("أقصى مسافة للمطعم (كم) - اتركه 0 لإلغاء القيد:"))
+        layout.addView(createLabel("Max Distance to Restaurant (km) - Set 0 to disable limit:"))
         edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).toString())
         layout.addView(edtMaxDistRest)
 
-        layout.addView(createLabel("أقصى مسافة توصيل للعميل (كم) - اتركه 0 لإلغاء القيد:"))
+        layout.addView(createLabel("Max Distance to Customer (km) - Set 0 to disable limit:"))
         edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
         layout.addView(edtMaxDistCust)
 
@@ -448,7 +545,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🌐 استعلام الخادم المباشر (Active Server Polling)"
+            text = "🌐 Active Server Polling (Background Puller)"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -457,7 +554,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val desc = TextView(this).apply {
-            text = "ميزة المساعد الأصلي الحصرية: فحص خوادم جاهز باستمرار عبر OkHttp لسحب وقبول الطلبات المتاحة برمجياً فور توفرها وقبل ظهورها على شاشات السائقين الآخرين."
+            text = "Original Assistant Feature: Repeatedly queries Jahez backend via OkHttp to grab unassigned orders before they appear on other drivers' screens."
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -465,17 +562,17 @@ class MainActivity : AppCompatActivity() {
         layout.addView(desc)
 
         chkActivePolling = CheckBox(this).apply {
-            text = "تفعيل استعلام الخادم التلقائي (Active Polling)"
+            text = "Enable Active Server Polling"
             isChecked = SettingsStore.isActivePolling(this@MainActivity)
             textSize = 14f
         }
         layout.addView(chkActivePolling)
 
-        layout.addView(createLabel("فترة فحص واستعلام الخادم بالثواني (مثال: 0.8s):"))
+        layout.addView(createLabel("Poll Interval in seconds (e.g. 0.8s):"))
         edtPollInterval = createInput(SettingsStore.getPollInterval(this).toString())
         layout.addView(edtPollInterval)
 
-        layout.addView(createLabel("عدد محاولات القبول المتوازية (Parallel Burst Requests للفوز بالطلب):"))
+        layout.addView(createLabel("Parallel Acceptance Attempts (Burst requests to win order):"))
         edtParallelRequests = createInput(SettingsStore.getParallelRequests(this).toString())
         layout.addView(edtParallelRequests)
 
@@ -527,17 +624,14 @@ class MainActivity : AppCompatActivity() {
     private fun saveAllSettings() {
         val master = swMaster.isChecked
 
-        // Android ID
         val spoofId = chkAndroidId.isChecked
         val customId = edtAndroidId.text.toString().trim()
 
-        // Location
         val fixLoc = chkFixLoc.isChecked
         val fakeLoc = chkFakeLoc.isChecked
         val lat = edtLat.text.toString().toDoubleOrNull() ?: 0.0
         val lng = edtLng.text.toString().toDoubleOrNull() ?: 0.0
 
-        // Filters
         val autoAccept = chkAutoAccept.isChecked
         val autoReject = chkAutoReject.isChecked
         val dryRun = chkDryRun.isChecked
@@ -545,12 +639,10 @@ class MainActivity : AppCompatActivity() {
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
 
-        // Active Server Polling
         val activePolling = chkActivePolling.isChecked
         val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
         val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 3
 
-        // Persist to SettingsStore & SharedPreferences
         SettingsStore.setMasterRunning(this, master)
         SettingsStore.setSpoofAndroidId(this, spoofId)
         SettingsStore.setSpoofedAndroidId(this, customId)
@@ -573,7 +665,7 @@ class MainActivity : AppCompatActivity() {
 
         Toast.makeText(
             this,
-            "✅ تم حفظ وتطبيق الإعدادات بنجاح!\nاستعلام الخادم نشط (${pollInterval}s) بعدد ${parallelReqs} طلبات متوازية.",
+            "✅ Settings saved & applied successfully!\nServer Polling active (${pollInterval}s) with ${parallelReqs} parallel burst attempts.",
             Toast.LENGTH_LONG
         ).show()
     }
@@ -586,7 +678,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "📋 سجل الطلبات اللحظي (HTTP / WebSocket)"
+            text = "📋 Live Orders Log (HTTP / WebSocket / Push)"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -595,7 +687,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val desc = TextView(this).apply {
-            text = "يتم رصد الطلبات الملتقطة فوراً عبر شبكة جاهز HTTP / WebSocket وعرضها هنا:"
+            text = "Real-time feed of intercepted orders across all network, database, and screen channels:"
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -608,7 +700,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnRefresh = Button(this).apply {
-            text = "🔄 تحديث السجل"
+            text = "🔄 Refresh Log"
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { refreshOrdersLogUI() }
@@ -616,13 +708,13 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnRefresh)
 
         val btnClear = Button(this).apply {
-            text = "🗑️ مسح السجل"
+            text = "🗑️ Clear Log"
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 SettingsStore.clearOrdersLog(this@MainActivity)
                 refreshOrdersLogUI()
-                Toast.makeText(this@MainActivity, "تم مسح سجل الطلبات", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Orders log cleared", Toast.LENGTH_SHORT).show()
             }
         }
         btnRow.addView(btnClear)
@@ -646,7 +738,6 @@ class MainActivity : AppCompatActivity() {
         val jsonStr = SettingsStore.getOrdersLog(this)
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
 
-        // Fallback: Also merge from shared orders file if available
         try {
             val f = File("/data/local/tmp/saned_orders.json")
             if (f.exists()) {
@@ -671,7 +762,7 @@ class MainActivity : AppCompatActivity() {
 
         if (array.length() == 0) {
             val emptyTv = TextView(this).apply {
-                text = "لا توجد طلبات ملتقطة حتى الآن. (تأكد من تشغيل المساعد واستقبال طلبات في تطبيق جاهز)."
+                text = "No orders captured yet. (Make sure Jahez Fleet app is running and orders are dispatched)."
                 textSize = 12.5f
                 setTextColor(Color.parseColor("#94A3B8"))
                 gravity = Gravity.CENTER
@@ -706,7 +797,7 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
             }
             val idTv = TextView(this).apply {
-                text = "طلب: $id"
+                text = "Order: $id"
                 textSize = 13.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#1E293B"))
@@ -722,8 +813,8 @@ class MainActivity : AppCompatActivity() {
             itemCard.addView(topRow)
 
             val detailsText = StringBuilder()
-            if (price > 0.0) detailsText.append("السعر: ").append(price).append(" ر.س  ")
-            if (dist > 0.0) detailsText.append("المسافة: ").append(dist).append(" كم  ")
+            if (price > 0.0) detailsText.append("Price: ").append(price).append(" SAR  ")
+            if (dist > 0.0) detailsText.append("Distance: ").append(dist).append(" km  ")
             if (rest.isNotEmpty()) detailsText.append("(").append(rest).append(")")
 
             if (detailsText.isNotEmpty()) {
@@ -740,7 +831,7 @@ class MainActivity : AppCompatActivity() {
                 text = status
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (status.contains("رفض")) Color.parseColor("#DC2626") else Color.parseColor("#059669"))
+                setTextColor(if (status.contains("Reject") || status.contains("رفض")) Color.parseColor("#DC2626") else Color.parseColor("#059669"))
                 setPadding(0, 2, 0, 0)
             }
             itemCard.addView(statusTv)
@@ -751,9 +842,28 @@ class MainActivity : AppCompatActivity() {
 
     private val ordersUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "dev.saned.assistant.UI_REFRESH_ORDERS") {
+            val action = intent?.action ?: return
+            if (action == "dev.saned.assistant.UI_REFRESH_ORDERS") {
                 refreshOrdersLogUI()
+            } else if (action == "dev.saned.assistant.UI_PONG_RECEIVED" || action == "dev.saned.assistant.ACTION_PONG") {
+                handlePongResponse(intent)
             }
+        }
+    }
+
+    private fun handlePongResponse(intent: Intent) {
+        val pingTime = intent.getLongExtra("ping_timestamp", 0L)
+        val now = System.currentTimeMillis()
+        val latency = if (pingTime > 0) (now - pingTime).coerceAtLeast(0L) else 0L
+        lastPongTimestamp = now
+
+        val hasToken = intent.getBooleanExtra("has_auth_token", false)
+        val ordersCount = intent.getIntExtra("orders_count", 0)
+
+        runOnUiThread {
+            tvPingStatus.text = "Connected to Jahez Fleets (Ping: ${latency} ms) 🟢"
+            tvPingStatus.setTextColor(Color.parseColor("#059669"))
+            tvPingDetails.text = "Hook: Active  •  Auth: ${if (hasToken) "Token Cached ✅" else "Waiting for Login ⏳"}  •  Orders Logged: $ordersCount"
         }
     }
 
@@ -761,18 +871,27 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         refreshOrdersLogUI()
         SettingsStore.broadcastSettings(this)
+
         try {
-            val filter = IntentFilter("dev.saned.assistant.UI_REFRESH_ORDERS")
+            val filter = IntentFilter().apply {
+                addAction("dev.saned.assistant.UI_REFRESH_ORDERS")
+                addAction("dev.saned.assistant.UI_PONG_RECEIVED")
+                addAction("dev.saned.assistant.ACTION_PONG")
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(ordersUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                registerReceiver(ordersUpdateReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 registerReceiver(ordersUpdateReceiver, filter)
             }
         } catch (_: Throwable) {}
+
+        // Start periodic live ping
+        mainHandler.post(pingRunnable)
     }
 
     override fun onPause() {
         super.onPause()
+        mainHandler.removeCallbacks(pingRunnable)
         try {
             unregisterReceiver(ordersUpdateReceiver)
         } catch (_: Throwable) {}
