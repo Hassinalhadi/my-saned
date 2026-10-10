@@ -285,8 +285,7 @@ object OrderInterceptor {
                             if (snippet.isEmpty() || snippet.startsWith("Error:")) {
                                 code = currentCode
                                 targetUrl = candidateUrl
-                                snippet = "Cloudflare WAF (HTTP 403) detected on $candidateUrl.
-Note: In-App order interceptor & Screen watcher operate natively inside Jahez and bypass Cloudflare."
+                                snippet = "Cloudflare WAF (HTTP 403) detected on " + candidateUrl + ". Note: In-App order interceptor & Screen watcher operate natively inside Jahez and bypass Cloudflare."
                             }
                         }
                     } catch (e: Throwable) {
@@ -633,7 +632,7 @@ Note: In-App order interceptor & Screen watcher operate natively inside Jahez an
 
         // Hook OkHttpClient.newCall(Request)
         try {
-            val clientClass = Class.forName("okhttp3.OkHttpClient", false, classLoader)
+            val builderClass = Class.forName("okhttp3.OkHttpClient" + '$' + "Builder", false, classLoader)
             for (m in clientClass.declaredMethods) {
                 if (m.name == "newCall" && m.parameterTypes.size == 1) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -1371,7 +1370,7 @@ Note: In-App order interceptor & Screen watcher operate natively inside Jahez an
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val body = "{"order_id":""}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val body = org.json.JSONObject().apply { put("order_id", orderIdNum) }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
                 for (burst in 0 until burstCount) {
                     launch {
