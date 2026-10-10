@@ -302,6 +302,24 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnSimOrder)
 
         layout.addView(btnRow)
+
+        val btnRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 0)
+        }
+        val btnClearToken = Button(this).apply {
+            text = "🗑️ Clear Cached Token"
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            setBackgroundColor(Color.parseColor("#475569"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                sendClearToken()
+            }
+        }
+        btnRow2.addView(btnClearToken)
+        layout.addView(btnRow2)
+
         card.addView(layout)
         return card
     }
@@ -326,6 +344,18 @@ class MainActivity : AppCompatActivity() {
         try {
             sendBroadcast(Intent("dev.saned.assistant.ACTION_SIMULATE_ORDER"))
         } catch (_: Throwable) {}
+    }
+
+    private fun sendClearToken() {
+        val intent = Intent("dev.saned.assistant.ACTION_CLEAR_TOKEN").apply {
+            setPackage("net.jahez.fleets")
+        }
+        sendBroadcast(intent)
+        try {
+            sendBroadcast(Intent("dev.saned.assistant.ACTION_CLEAR_TOKEN"))
+        } catch (_: Throwable) {}
+        Toast.makeText(this, "Token cache cleared! Open Jahez Fleets app to refresh token.", Toast.LENGTH_LONG).show()
+        sendPing()
     }
 
     private fun sendPing() {
@@ -476,6 +506,24 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnCopy)
 
         layout.addView(btnRow)
+
+        val btnRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 0)
+        }
+        val btnClearToken = Button(this).apply {
+            text = "🗑️ Clear Cached Token"
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            setBackgroundColor(Color.parseColor("#475569"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                sendClearToken()
+            }
+        }
+        btnRow2.addView(btnClearToken)
+        layout.addView(btnRow2)
+
         card.addView(layout)
         return card
     }

@@ -164,6 +164,9 @@ object OrderInterceptor {
                 "dev.saned.assistant.ACTION_SIMULATE_ORDER" -> {
                     simulateTestOrder()
                 }
+                "dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {
+                    clearPersistedToken()
+                }
             }
         }
     }
@@ -272,7 +275,12 @@ object OrderInterceptor {
                             cachedApiHost = resolvedHost
                             persistHost(resolvedHost)
                             lastOrdersListUrl = candidateUrl
-                            snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                            if (currentCode == 401 && (rawBody.contains("invalid_token") || rawBody.contains("unauthorized", ignoreCase = true))) {
+                                clearPersistedToken()
+                                snippet = "Invalid/Expired Token: " + rawBody + " -- Stale token cleared! Open Jahez Fleets app & pull to refresh to capture active token."
+                            } else {
+                                snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                            }
                             successFound = true
                             break
                         } else if (!isCloudflareBlock && currentCode > 0) {
@@ -345,6 +353,7 @@ object OrderInterceptor {
                 addAction("dev.saned.assistant.ACTION_PING")
                 addAction("dev.saned.assistant.ACTION_TEST_API")
                 addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
+                addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -531,7 +540,7 @@ object OrderInterceptor {
                         val sp = context.getSharedPreferences(name, Context.MODE_PRIVATE)
                         for ((k, v) in sp.all) {
                             val strVal = v?.toString() ?: ""
-                            checkAndSetToken(strVal)
+                            checkAndSetToken(strVal, k)
                             if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
                                 if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
                                     val uri = java.net.URI(strVal)
@@ -560,7 +569,7 @@ object OrderInterceptor {
             )
             for ((k, v) in encPrefs.all) {
                 val strVal = v?.toString() ?: ""
-                checkAndSetToken(strVal)
+                checkAndSetToken(strVal, k)
                 if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
                     if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
                         val uri = java.net.URI(strVal)
@@ -572,26 +581,61 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    fun checkAndSetToken(value: String?) {
+    fun clearPersistedToken() {
+        try {
+            File("/data/local/tmp/saned_auth_token.txt").delete()
+        } catch (_: Throwable) {}
+        cachedAuthToken = ""
+        cachedHeaders.remove("Authorization")
+    }
+
+    fun checkAndSetToken(value: String?, key: String? = null) {
         if (value.isNullOrEmpty()) return
         val str = value.trim()
+
+        // 1. Direct Bearer header (highest priority, verified from live network call)
         if (str.startsWith("Bearer ", ignoreCase = true)) {
-            cachedAuthToken = str
-            cachedHeaders["Authorization"] = str
-            persistToken(str)
-            extractHostFromJwt(str)
-        } else if (str.startsWith("ey", ignoreCase = false) && str.contains(".") && str.length > 30) {
+            val tokenPart = str.substring(7).trim()
+            if (tokenPart.length > 20) {
+                cachedAuthToken = str
+                cachedHeaders["Authorization"] = str
+                persistToken(str)
+                extractHostFromJwt(str)
+                return
+            }
+        }
+
+        // 2. JWT token format (starts with ey, contains dots, length > 40)
+        if (str.startsWith("ey", ignoreCase = false) && str.contains(".") && str.length > 40) {
             val t = "Bearer $str"
             cachedAuthToken = t
             cachedHeaders["Authorization"] = t
             persistToken(t)
             extractHostFromJwt(str)
-        } else if (str.length > 32 && str.matches(Regex("^[a-zA-Z0-9_\\-\\.]+$"))) {
-            if (cachedAuthToken.isEmpty()) {
-                val t = "Bearer $str"
-                cachedAuthToken = t
-                cachedHeaders["Authorization"] = t
-                persistToken(t)
+            return
+        }
+
+        // 3. Key-based token filtering for SharedPreferences
+        if (key != null) {
+            val lowerKey = key.lowercase()
+            val isExcluded = lowerKey.contains("device") || lowerKey.contains("install") ||
+                    lowerKey.contains("fcm") || lowerKey.contains("firebase") ||
+                    lowerKey.contains("admob") || lowerKey.contains("analytics") ||
+                    lowerKey.contains("fingerprint") || lowerKey.contains("signature") ||
+                    lowerKey.contains("push") || lowerKey.contains("notification") ||
+                    lowerKey.contains("hash") || lowerKey.contains("id")
+
+            val isTokenKey = lowerKey.contains("token") || lowerKey.contains("auth") ||
+                    lowerKey.contains("access") || lowerKey.contains("jwt") ||
+                    lowerKey.contains("bearer") || lowerKey.contains("session")
+
+            if (isTokenKey && !isExcluded && str.length in 20..2048 && str.matches(Regex("^[a-zA-Z0-9_\-\.]+$"))) {
+                if (cachedAuthToken.isEmpty() || !cachedAuthToken.contains("ey")) {
+                    val t = "Bearer $str"
+                    cachedAuthToken = t
+                    cachedHeaders["Authorization"] = t
+                    persistToken(t)
+                }
             }
         }
     }
@@ -812,7 +856,7 @@ object OrderInterceptor {
 
             val auth = getMethod.invoke(headersObj, "Authorization") as? String
             if (!auth.isNullOrEmpty()) {
-                checkAndSetToken(auth)
+                checkAndSetToken(auth, "Authorization")
             }
 
             val cookie = getMethod.invoke(headersObj, "Cookie") as? String
@@ -880,7 +924,7 @@ object OrderInterceptor {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             val value = chain.args.getOrNull(1) as? String
-                            checkAndSetToken(value)
+                            checkAndSetToken(value, chain.args.getOrNull(0) as? String)
                             return chain.proceed()
                         }
                     })
@@ -896,7 +940,7 @@ object OrderInterceptor {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             val result = chain.proceed()
                             val s = result as? String
-                            checkAndSetToken(s)
+                            checkAndSetToken(s, chain.args.getOrNull(0) as? String)
                             return result
                         }
                     })
