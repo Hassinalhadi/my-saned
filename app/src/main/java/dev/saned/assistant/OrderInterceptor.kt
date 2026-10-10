@@ -82,14 +82,7 @@ object OrderInterceptor {
 
     // Candidate hosts verified for Jahez platform
     val candidateApiHosts = listOf(
-        "https://fleet-api.jahez.net",
-        "https://api.jahez.net",
-        "https://integration-api.jahez.net",
-        "https://portal.jahez.net",
-        "https://app.jahez.net",
-        "https://mobile-api.jahez.net",
-        "https://gateway.jahez.net",
-        "https://driver.jahez.net"
+        "https://api.jahez.net"
     )
 
     @Volatile var capturedAppHttpClient: OkHttpClient? = null
@@ -228,6 +221,31 @@ object OrderInterceptor {
         val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
 
         CoroutineScope(Dispatchers.IO).launch {
+            if (token.isEmpty()) {
+                val hint = "Waiting for Live Session Token ⏳
+
+👉 Please open Jahez Fleets app, go to Orders tab and pull down to refresh. Saned Assistant will automatically capture your active session token from live network traffic!"
+                val noTokenIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+                    component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+                    putExtra("status_code", 0)
+                    putExtra("latency_ms", 0L)
+                    putExtra("url", "https://api.jahez.net/api/fleets/orders/available")
+                    putExtra("body_snippet", hint)
+                    putExtra("has_token", false)
+                }
+                app.sendBroadcast(noTokenIntent)
+                try {
+                    val gIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+                        putExtra("status_code", 0)
+                        putExtra("latency_ms", 0L)
+                        putExtra("url", "https://api.jahez.net/api/fleets/orders/available")
+                        putExtra("body_snippet", hint)
+                        putExtra("has_token", false)
+                    }
+                    app.sendBroadcast(gIntent)
+                } catch (_: Throwable) {}
+                return@launch
+            }
             val startTime = System.currentTimeMillis()
             var code = -1
             var snippet = ""
@@ -852,21 +870,30 @@ object OrderInterceptor {
 
             val headersMethod = request.javaClass.getMethod("headers")
             val headersObj = headersMethod.invoke(request)
-            val getMethod = headersObj.javaClass.getMethod("get", String::class.java)
-
-            val auth = getMethod.invoke(headersObj, "Authorization") as? String
-            if (!auth.isNullOrEmpty()) {
-                checkAndSetToken(auth, "Authorization")
+            try {
+                val sizeMethod = headersObj.javaClass.getMethod("size")
+                val nameMethod = headersObj.javaClass.getMethod("name", Int::class.javaPrimitiveType)
+                val valMethod = headersObj.javaClass.getMethod("value", Int::class.javaPrimitiveType)
+                val count = sizeMethod.invoke(headersObj) as Int
+                for (i in 0 until count) {
+                    val hName = nameMethod.invoke(headersObj, i) as String
+                    val hVal = valMethod.invoke(headersObj, i) as String
+                    cachedHeaders[hName] = hVal
+                    if (hName.equals("Authorization", ignoreCase = true) || hName.contains("token", ignoreCase = true)) {
+                        checkAndSetToken(hVal, hName)
+                    }
+                }
+            } catch (_: Throwable) {
+                val getMethod = headersObj.javaClass.getMethod("get", String::class.java)
+                val auth = getMethod.invoke(headersObj, "Authorization") as? String
+                if (!auth.isNullOrEmpty()) {
+                    checkAndSetToken(auth, "Authorization")
+                }
+                val cookie = getMethod.invoke(headersObj, "Cookie") as? String
+                if (!cookie.isNullOrEmpty()) cachedHeaders["Cookie"] = cookie
+                val userAgent = getMethod.invoke(headersObj, "User-Agent") as? String
+                if (!userAgent.isNullOrEmpty()) cachedHeaders["User-Agent"] = userAgent
             }
-
-            val cookie = getMethod.invoke(headersObj, "Cookie") as? String
-            if (!cookie.isNullOrEmpty()) cachedHeaders["Cookie"] = cookie
-
-            val userAgent = getMethod.invoke(headersObj, "User-Agent") as? String
-            if (!userAgent.isNullOrEmpty()) cachedHeaders["User-Agent"] = userAgent
-
-            val acceptLang = getMethod.invoke(headersObj, "accept-language") as? String
-            if (!acceptLang.isNullOrEmpty()) cachedHeaders["accept-language"] = acceptLang
         } catch (_: Throwable) {}
     }
 
