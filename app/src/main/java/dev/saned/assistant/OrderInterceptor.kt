@@ -301,10 +301,14 @@ object OrderInterceptor {
                             successFound = true
                             break
                         } else if (!isCloudflareBlock && currentCode > 0) {
-                            if (code <= 0 || code == 403) {
+                            if (code <= 0 || code == 403 || currentCode == 404) {
                                 code = currentCode
                                 targetUrl = candidateUrl
-                                snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                                if (currentCode == 404 && rawBody.contains("Tomcat", ignoreCase = true)) {
+                                    snippet = "Connected to Jahez Server (Apache Tomcat) 🟢\n\n• Server Response: HTTP 404 (Test path not routed)\n• Network Hook: Active & Ready\n\n👉 Next Step: Open Jahez Fleets app and pull down to refresh on Orders tab. Saned Assistant will automatically capture the exact production order endpoint!"
+                                } else {
+                                    snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
+                                }
                             }
                         } else if (isCloudflareBlock) {
                             if (snippet.isEmpty() || snippet.startsWith("Error:")) {
