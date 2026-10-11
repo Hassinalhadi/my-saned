@@ -6,20 +6,36 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
+import android.os.IBinder
 
 class XposedProvider : ContentProvider() {
+
+    companion object {
+        @Volatile
+        var serviceBinder: IBinder? = null
+            private set
+    }
 
     override fun onCreate(): Boolean = true
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val bundle = Bundle()
         if (method == "SendBinder") {
+            val binder = extras?.getBinder("binder")
+            if (binder != null) {
+                serviceBinder = binder
+                try {
+                    binder.linkToDeath({
+                        serviceBinder = null
+                    }, 0)
+                } catch (_: Throwable) {}
+            }
             return bundle
         }
+
         val ctx = context ?: return bundle
         try {
             val prefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
-
             val all = prefs.all
             for ((key, value) in all) {
                 when (value) {
