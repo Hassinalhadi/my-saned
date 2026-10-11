@@ -349,16 +349,35 @@ object OrderInterceptor {
         }
     }
 
-    private fun simulateTestOrder() {
-        val testId = "#TEST" + (100..999).random()
-        val testPrice = 18.5
-        val testDist = 1.2
-        val testStore = "Al Romansiah Restaurant"
+    fun simulateTestOrder() {
+        val testNum = (100000..999999).random()
+        val testRef = "JH-"
+        val testId = "#"
+        val testPrice = 24.50
+        val testDist = 2.8
+        val testStore = "شاورما كلاسك (Al Classic Shawarma)"
+        val testCustomer = "محمد العتيبي (Mohammed)"
+        val testPhone = "0501234567"
+        val testAddress = "حي الياسمين، شارع أنس بن مالك، الرياض"
+        val testCash = 55.00
+        val testStatus = "Accepted (Auto-Accept ⚡)"
 
-        lastOrderEvent = "Simulated Order $testId received"
-        sendOrderToLog(testId, testPrice, testDist, testStore, "Test Order Simulation 🧪")
+        lastOrderEvent = "Simulated Order  received"
+        sendOrderToLog(
+            orderId = testId,
+            price = testPrice,
+            dist = testDist,
+            restaurant = testStore,
+            status = testStatus,
+            customerName = testCustomer,
+            customerPhone = testPhone,
+            address = testAddress,
+            cashAmount = testCash,
+            currency = "SAR",
+            reference = testRef
+        )
         playAlertSound()
-        currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
+        currentActivity?.let { showToast(it, "🧪 Simulated Order : Processing auto-accept pipeline...") }
 
         handleOrderViaApi(testId, testPrice, testDist, testStore)
     }
@@ -1378,27 +1397,88 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
+    private fun extractFirstString(json: JSONObject, vararg keys: String): String {
+        for (k in keys) {
+            val v = json.optString(k, "")
+            if (v.isNotEmpty() && v != "null") return v
+        }
+        return ""
+    }
+
+    private fun extractFirstDouble(json: JSONObject, vararg keys: String): Double {
+        for (k in keys) {
+            if (json.has(k)) {
+                val d = json.optDouble(k, 0.0)
+                if (d > 0.0) return d
+            }
+        }
+        return 0.0
+    }
+
     private fun extractAndProcessOrderJson(json: JSONObject, channelSource: String) {
         try {
-            var orderId = json.optString("order_number", json.optString("order_id", json.optString("id", "")))
-            var price = json.optDouble("price", json.optDouble("delivery_cost", json.optDouble("total", 0.0)))
-            var dist = json.optDouble("distance", json.optDouble("km", 0.0))
-            var restaurant = json.optString("store_name", json.optString("restaurant_name", ""))
+            var orderId = extractFirstString(json, "order_number", "order_id", "orderNumber", "orderId", "id", "code", "trip_id", "tripId")
+            var reference = extractFirstString(json, "reference", "order_number", "orderNumber", "order_code", "code", "id")
+            var price = extractFirstDouble(json, "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee", "earning", "amount", "total")
+            var dist = extractFirstDouble(json, "distance", "km", "distance_to_pickup", "distance_in_km", "distanceInKm", "distanceKm")
+            var restaurant = extractFirstString(json, "store_name", "restaurant_name", "storeName", "restaurantName", "vendor_name", "vendorName", "shop_name", "shopName", "name", "restaurant")
+            var customerName = extractFirstString(json, "customer_name", "client_name", "customerName", "clientName", "recipient_name", "user_name", "customer")
+            var customerPhone = extractFirstString(json, "customer_phone", "client_phone", "customerPhone", "clientPhone", "phone", "mobile", "contact_number")
+            var address = extractFirstString(json, "customer_address", "delivery_address", "dropoff_address", "address", "dropoffLocation", "destination_address", "location_address")
+            var cashAmount = extractFirstDouble(json, "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+            var currency = extractFirstString(json, "currency", "curr").ifEmpty { "SAR" }
+            var status = extractFirstString(json, "status", "order_status", "state").ifEmpty { "Accepted ✅" }
 
-            val dataObj = json.optJSONObject("data") ?: json.optJSONObject("order") ?: json.optJSONObject("trip")
+            val dataObj = json.optJSONObject("data") ?: json.optJSONObject("order") ?: json.optJSONObject("trip") ?: json.optJSONObject("payload")
             if (dataObj != null) {
-                if (orderId.isEmpty()) orderId = dataObj.optString("order_number", dataObj.optString("order_id", dataObj.optString("id", "")))
-                if (price == 0.0) price = dataObj.optDouble("price", dataObj.optDouble("delivery_cost", dataObj.optDouble("total", 0.0)))
-                if (dist == 0.0) dist = dataObj.optDouble("distance", dataObj.optDouble("km", 0.0))
-                if (restaurant.isEmpty()) restaurant = dataObj.optString("store_name", dataObj.optString("restaurant_name", ""))
+                if (orderId.isEmpty()) orderId = extractFirstString(dataObj, "order_number", "order_id", "orderNumber", "orderId", "id", "code", "trip_id", "tripId")
+                if (reference.isEmpty()) reference = extractFirstString(dataObj, "reference", "order_number", "orderNumber", "order_code", "code", "id")
+                if (price == 0.0) price = extractFirstDouble(dataObj, "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee", "earning", "amount", "total")
+                if (dist == 0.0) dist = extractFirstDouble(dataObj, "distance", "km", "distance_to_pickup", "distance_in_km", "distanceInKm", "distanceKm")
+                if (restaurant.isEmpty()) restaurant = extractFirstString(dataObj, "store_name", "restaurant_name", "storeName", "restaurantName", "vendor_name", "vendorName", "shop_name", "shopName", "name", "restaurant")
+                if (customerName.isEmpty()) customerName = extractFirstString(dataObj, "customer_name", "client_name", "customerName", "clientName", "recipient_name", "user_name", "customer")
+                if (customerPhone.isEmpty()) customerPhone = extractFirstString(dataObj, "customer_phone", "client_phone", "customerPhone", "clientPhone", "phone", "mobile", "contact_number")
+                if (address.isEmpty()) address = extractFirstString(dataObj, "customer_address", "delivery_address", "dropoff_address", "address", "dropoffLocation", "destination_address", "location_address")
+                if (cashAmount == 0.0) cashAmount = extractFirstDouble(dataObj, "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+                val s = extractFirstString(dataObj, "status", "order_status", "state")
+                if (s.isNotEmpty()) status = s
+            }
+
+            val custObj = json.optJSONObject("customer") ?: dataObj?.optJSONObject("customer") ?: json.optJSONObject("client") ?: dataObj?.optJSONObject("client")
+            if (custObj != null) {
+                if (customerName.isEmpty()) customerName = extractFirstString(custObj, "name", "full_name", "customer_name")
+                if (customerPhone.isEmpty()) customerPhone = extractFirstString(custObj, "phone", "mobile", "phone_number")
+            }
+
+            val dropoffObj = json.optJSONObject("dropoff") ?: dataObj?.optJSONObject("dropoff") ?: json.optJSONObject("delivery") ?: dataObj?.optJSONObject("delivery")
+            if (dropoffObj != null) {
+                if (address.isEmpty()) address = extractFirstString(dropoffObj, "address", "location_name", "formatted_address", "name")
+            }
+
+            val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store")
+            if (pickupObj != null) {
+                if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
             }
 
             if (orderId.isNotEmpty() || price > 0.0 || restaurant.isNotEmpty()) {
                 if (orderId.isEmpty()) orderId = "#" + (100000..999999).random()
+                if (reference.isEmpty()) reference = orderId.replace("#", "")
                 if (loggedOrderIds.add(orderId)) {
                     val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
-                    lastOrderEvent = "Order $orderId detected via $channelSource"
-                    sendOrderToLog(orderId, cleanPrice, dist, restaurant, channelSource)
+                    lastOrderEvent = "Order  detected via "
+                    sendOrderToLog(
+                        orderId = orderId,
+                        price = cleanPrice,
+                        dist = dist,
+                        restaurant = restaurant,
+                        status = " via ",
+                        customerName = customerName,
+                        customerPhone = customerPhone,
+                        address = address,
+                        cashAmount = cashAmount,
+                        currency = currency,
+                        reference = reference
+                    )
                     if (isSoundEnabled) playAlertSound()
 
                     handleOrderViaApi(orderId, cleanPrice, dist, restaurant)
@@ -1506,18 +1586,54 @@ object OrderInterceptor {
         }
     }
 
-    private fun sendOrderToLog(orderId: String, price: Double, dist: Double, restaurant: String, status: String) {
+    fun sendOrderToLog(
+        orderId: String,
+        price: Double,
+        dist: Double,
+        restaurant: String,
+        status: String,
+        customerName: String = "",
+        customerPhone: String = "",
+        address: String = "",
+        cashAmount: Double = 0.0,
+        currency: String = "SAR",
+        reference: String = ""
+    ) {
         val ctx = appContext ?: currentActivity
+        val ref = if (reference.isNotEmpty()) reference else orderId.replace("#", "")
+        val intId = orderId.filter { it.isDigit() }.toIntOrNull() ?: 0
+        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+        val order = OrderModel(
+            id = intId,
+            reference = ref,
+            status = status,
+            restaurant = restaurant,
+            customerName = customerName,
+            customerPhone = customerPhone,
+            address = address,
+            price = price,
+            currency = currency,
+            cashAmount = cashAmount,
+            distanceKm = dist,
+            time = timeStr
+        )
 
         if (ctx != null) {
             try {
                 val logIntent = Intent("dev.saned.assistant.ACTION_LOG_ORDER").apply {
                     component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
                     putExtra("order_id", orderId)
+                    putExtra("reference", ref)
                     putExtra("price", price)
                     putExtra("distance", dist)
                     putExtra("restaurant", restaurant)
                     putExtra("status", status)
+                    putExtra("customer_name", customerName)
+                    putExtra("customer_phone", customerPhone)
+                    putExtra("address", address)
+                    putExtra("cash_amount", cashAmount)
+                    putExtra("currency", currency)
                 }
                 ctx.sendBroadcast(logIntent)
             } catch (_: Throwable) {}
@@ -1525,12 +1641,27 @@ object OrderInterceptor {
             try {
                 val gIntent = Intent("dev.saned.assistant.ACTION_LOG_ORDER").apply {
                     putExtra("order_id", orderId)
+                    putExtra("reference", ref)
                     putExtra("price", price)
                     putExtra("distance", dist)
                     putExtra("restaurant", restaurant)
                     putExtra("status", status)
+                    putExtra("customer_name", customerName)
+                    putExtra("customer_phone", customerPhone)
+                    putExtra("address", address)
+                    putExtra("cash_amount", cashAmount)
+                    putExtra("currency", currency)
                 }
                 ctx.sendBroadcast(gIntent)
+            } catch (_: Throwable) {}
+
+            // Instant System Notification matching Luc1;.c
+            try {
+                NotificationHelper.showOrderNotification(
+                    ctx,
+                    order,
+                    isAccepted = status.contains("Accept", ignoreCase = true) || status.contains("قبول")
+                )
             } catch (_: Throwable) {}
         }
 
@@ -1538,18 +1669,9 @@ object OrderInterceptor {
             val f = File("/data/local/tmp/saned_orders.json")
             val existing = if (f.exists()) f.readText() else "[]"
             val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
-            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
-            val newObj = JSONObject().apply {
-                put("id", orderId)
-                put("price", price)
-                put("distance", dist)
-                put("restaurant", restaurant)
-                put("status", status)
-                put("time", timeStr)
-            }
             val newArray = JSONArray()
-            newArray.put(newObj)
+            newArray.put(order.toJson())
             for (i in 0 until minOf(39, array.length())) {
                 newArray.put(array.getJSONObject(i))
             }
@@ -1617,6 +1739,11 @@ object OrderInterceptor {
             triggerClick(confirmDialogBtn!!)
         }
 
+        var customerPhone = ""
+        var customerName = ""
+        var customerAddress = ""
+        var cashAmount = 0.0
+
         for (raw in allTexts) {
             val t = normalizeArabicNumerals(raw).trim()
             if (t.contains("New Order", ignoreCase = true) || t.contains("طلب جديد", ignoreCase = true) ||
@@ -1638,6 +1765,21 @@ object OrderInterceptor {
             val mStore = Regex("""(?:Pick-up from|استلام من)\s*([^,\n]+)""", RegexOption.IGNORE_CASE).find(t)
             if (mStore != null && storeName.isEmpty()) {
                 storeName = mStore.groupValues[1].trim()
+            }
+
+            val mPhone = Regex("""(?:\+?966|0)?5\d{8}""").find(t)
+            if (mPhone != null && customerPhone.isEmpty()) {
+                customerPhone = mPhone.value
+            }
+
+            val mCash = Regex("""(?:استلم نقداً|استلام نقدي|كاش|نقدا|نقداً|Collect\s*Cash|COD)[\s:]*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(t)
+            if (mCash != null && cashAmount == 0.0) {
+                cashAmount = mCash.groupValues[1].toDoubleOrNull() ?: 0.0
+            }
+
+            val mDrop = Regex("""(?:Deliver to|توصيل إلى|التوصيل إلى)\s*([^,\n]+)""", RegexOption.IGNORE_CASE).find(t)
+            if (mDrop != null && customerAddress.isEmpty()) {
+                customerAddress = mDrop.groupValues[1].trim()
             }
 
             if (!t.contains(".") && !t.contains("Km", ignoreCase = true)) {
@@ -1686,7 +1828,19 @@ object OrderInterceptor {
             if (loggedOrderIds.add(orderId)) {
                 val cleanPrice = String.format(Locale.US, "%.2f", orderPrice).toDoubleOrNull() ?: orderPrice
                 lastOrderEvent = "Order $orderId detected on screen ($cleanPrice SAR, $distToRestaurant km)"
-                sendOrderToLog(orderId, cleanPrice, distToRestaurant, storeName, "Screen Popup 📱")
+                sendOrderToLog(
+                    orderId = orderId,
+                    price = cleanPrice,
+                    dist = distToRestaurant,
+                    restaurant = storeName,
+                    status = "Screen Popup 📱 (Accepted ✅)",
+                    customerName = customerName,
+                    customerPhone = customerPhone,
+                    address = customerAddress,
+                    cashAmount = cashAmount,
+                    currency = "SAR",
+                    reference = orderId.replace("#", "")
+                )
             }
 
             evaluateAndProcessOrder(activity, root, acceptView!!, rejectView, orderPrice, distToRestaurant, distToCustomer, orderId, startTime)

@@ -1,5 +1,9 @@
 package dev.saned.assistant.ui
 
+import android.net.Uri
+import dev.saned.assistant.OrderModel
+import dev.saned.assistant.NotificationHelper
+import java.util.Locale
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -344,6 +348,38 @@ class MainActivity : AppCompatActivity() {
         try {
             sendBroadcast(Intent("dev.saned.assistant.ACTION_SIMULATE_ORDER"))
         } catch (_: Throwable) {}
+
+        // Immediate direct simulation locally to verify notifications & UI
+        mainHandler.postDelayed({
+            val testNum = (100000..999999).random()
+            val simOrder = OrderModel(
+                id = testNum,
+                reference = "JH-",
+                status = "Accepted (Auto-Accept ⚡)",
+                restaurant = "شاورما كلاسك (Al Classic Shawarma)",
+                customerName = "عبدالله الشمري (Abdullah)",
+                customerPhone = "0551234567",
+                address = "حي الياسمين، شارع أنس بن مالك، الرياض",
+                price = 24.50,
+                currency = "SAR",
+                cashAmount = 55.00,
+                distanceKm = 2.8,
+                time = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date())
+            )
+
+            val prefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val existing = prefs.getString("orders_log_json", "[]") ?: "[]"
+            val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
+            val newArray = JSONArray()
+            newArray.put(simOrder.toJson())
+            for (i in 0 until minOf(39, array.length())) {
+                newArray.put(array.getJSONObject(i))
+            }
+            prefs.edit().putString("orders_log_json", newArray.toString()).apply()
+
+            NotificationHelper.showOrderNotification(this@MainActivity, simOrder, isAccepted = true)
+            refreshOrdersLogUI()
+        }, 150)
     }
 
     private fun sendClearToken() {
@@ -960,68 +996,239 @@ class MainActivity : AppCompatActivity() {
 
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
-            val id = item.optString("id", "#--")
-            val price = item.optDouble("price", 0.0)
-            val dist = item.optDouble("distance", 0.0)
-            val rest = item.optString("restaurant", "")
-            val status = item.optString("status", "")
-            val time = item.optString("time", "")
+            val order = OrderModel.fromJson(item)
+            val idStr = if (order.reference.isNotEmpty()) order.reference else order.id.toString().ifEmpty { "#--" }
+            val displayId = if (idStr.startsWith("#")) idStr else "#$idStr"
+            val timeStr = order.time
 
-            val itemCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(16, 14, 16, 14)
-                setBackgroundColor(Color.parseColor(if (i % 2 == 0) "#F8FAFC" else "#FFFFFF"))
+            val itemCard = CardView(this).apply {
+                radius = 16f
+                cardElevation = 3f
+                setCardBackgroundColor(Color.parseColor("#FFFFFF"))
                 val params = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 )
-                params.setMargins(0, 0, 0, 8)
+                params.setMargins(0, 0, 0, 16)
                 layoutParams = params
             }
 
+            val cardInner = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(20, 18, 20, 18)
+            }
+
+            // Top Header: Order ID + Status Badge + Time
             val topRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
             val idTv = TextView(this).apply {
-                text = "Order: $id"
+                text = displayId
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#0F172A"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val statusBadge = TextView(this).apply {
+                val isRejected = order.status.contains("Reject", ignoreCase = true) || order.status.contains("رفض")
+                val isDeliver = order.status.contains("DELIVER", ignoreCase = true) || order.status.contains("PICKED", ignoreCase = true) || order.status.contains("WAY", ignoreCase = true)
+                text = if (isRejected) "❌ ${order.status}" else if (isDeliver) "🚗 ${order.status}" else "✅ ${order.status}"
+                textSize = 11.5f
+                typeface = Typeface.DEFAULT_BOLD
+                if (isRejected) {
+                    setTextColor(Color.parseColor("#DC2626"))
+                    setBackgroundColor(Color.parseColor("#FEE2E2"))
+                } else if (isDeliver) {
+                    setTextColor(Color.parseColor("#2563EB"))
+                    setBackgroundColor(Color.parseColor("#DBEAFE"))
+                } else {
+                    setTextColor(Color.parseColor("#059669"))
+                    setBackgroundColor(Color.parseColor("#DCFCE7"))
+                }
+                setPadding(12, 4, 12, 4)
+            }
+            val timeTv = TextView(this).apply {
+                text = " $timeStr"
+                textSize = 11.5f
+                setTextColor(Color.parseColor("#94A3B8"))
+                setPadding(8, 0, 0, 0)
+            }
+            topRow.addView(idTv)
+            topRow.addView(statusBadge)
+            topRow.addView(timeTv)
+            cardInner.addView(topRow)
+
+            // Divider
+            val div = View(this).apply {
+                setBackgroundColor(Color.parseColor("#F1F5F9"))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).apply {
+                    setMargins(0, 12, 0, 12)
+                }
+            }
+            cardInner.addView(div)
+
+            // Route Section (Matching Lg8;.t - Pickup ➔ Dropoff)
+            val routeLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#F8FAFC"))
+                setPadding(14, 12, 14, 12)
+            }
+
+            // Pickup: Restaurant
+            val pickupRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val pickupIcon = TextView(this).apply {
+                text = "🏪 "
+                textSize = 13f
+            }
+            val pickupTv = TextView(this).apply {
+                val restName = if (order.restaurant.isNotEmpty()) order.restaurant else "Restaurant / المتجر"
+                text = restName
                 textSize = 13.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#1E293B"))
+            }
+            pickupRow.addView(pickupIcon)
+            pickupRow.addView(pickupTv)
+            routeLayout.addView(pickupRow)
+
+            // Dropoff: Customer Name & Delivery Address
+            val dropoffRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 6, 0, 0)
+            }
+            val dropoffIcon = TextView(this).apply {
+                text = "📍 "
+                textSize = 13f
+            }
+            val dropoffText = StringBuilder()
+            if (order.customerName.isNotEmpty()) {
+                dropoffText.append(order.customerName)
+            }
+            if (order.address.isNotEmpty()) {
+                if (dropoffText.isNotEmpty()) dropoffText.append(" — ")
+                dropoffText.append(order.address)
+            }
+            if (dropoffText.isEmpty()) {
+                dropoffText.append("Customer Dropoff / موقع التسليم")
+            }
+            val dropoffTv = TextView(this).apply {
+                text = dropoffText.toString()
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#475569"))
+            }
+            dropoffRow.addView(dropoffIcon)
+            dropoffRow.addView(dropoffTv)
+            routeLayout.addView(dropoffRow)
+
+            cardInner.addView(routeLayout)
+
+            // Price & Distance (Matching Lg8;.l)
+            val priceRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 12, 0, 4)
+            }
+            val priceTv = TextView(this).apply {
+                val pStr = if (order.bonus > 0.0) {
+                    "${String.format(Locale.US, \"%.1f\", order.price)} + ${String.format(Locale.US, \"%.1f\", order.bonus)} (Bonus) ${order.currency}"
+                } else if (order.price > 0.0) {
+                    "${String.format(Locale.US, \"%.1f\", order.price)} ${order.currency}"
+                } else "--"
+                text = "💰 Delivery Fee: $pStr"
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#0F172A"))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
-            val timeTv = TextView(this).apply {
-                text = time
-                textSize = 11.5f
-                setTextColor(Color.parseColor("#64748B"))
-            }
-            topRow.addView(idTv)
-            topRow.addView(timeTv)
-            itemCard.addView(topRow)
+            priceRow.addView(priceTv)
 
-            val detailsText = StringBuilder()
-            if (price > 0.0) detailsText.append("Price: ").append(price).append(" SAR  ")
-            if (dist > 0.0) detailsText.append("Distance: ").append(dist).append(" km  ")
-            if (rest.isNotEmpty()) detailsText.append("(").append(rest).append(")")
-
-            if (detailsText.isNotEmpty()) {
-                val detailsTv = TextView(this).apply {
-                    text = detailsText.toString()
+            if (order.distanceKm > 0.0) {
+                val distTv = TextView(this).apply {
+                    text = "📏 ${String.format(Locale.US, "%.1f", order.distanceKm)} km"
                     textSize = 12f
-                    setTextColor(Color.parseColor("#334155"))
-                    setPadding(0, 4, 0, 2)
+                    setTextColor(Color.parseColor("#64748B"))
                 }
-                itemCard.addView(detailsTv)
+                priceRow.addView(distTv)
+            }
+            cardInner.addView(priceRow)
+
+            // Cash Alert Banner (Matching Lg8;.e) - If cashAmount > 0
+            if (order.cashAmount > 0.0) {
+                val cashBanner = TextView(this).apply {
+                    text = "💵 استلم نقداً / Collect cash: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
+                    textSize = 13f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.parseColor("#B91C1C"))
+                    setBackgroundColor(Color.parseColor("#FEF2F2"))
+                    setPadding(14, 10, 14, 10)
+                    val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    p.setMargins(0, 8, 0, 8)
+                    layoutParams = p
+                }
+                cardInner.addView(cashBanner)
             }
 
-            val statusTv = TextView(this).apply {
-                text = status
-                textSize = 12f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (status.contains("Reject") || status.contains("رفض")) Color.parseColor("#DC2626") else Color.parseColor("#059669"))
-                setPadding(0, 2, 0, 0)
-            }
-            itemCard.addView(statusTv)
+            // Customer Contact Actions (Matching Lg8;.a) - WhatsApp & Direct Dial buttons
+            if (order.customerPhone.isNotEmpty()) {
+                val actionsRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, 8, 0, 0)
+                }
 
+                val cleanPhone = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
+
+                // WhatsApp Button (Lg8;.a)
+                val btnWa = Button(this).apply {
+                    text = "💬 WhatsApp"
+                    textSize = 12f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#25D366"))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        setMargins(0, 0, 6, 0)
+                    }
+                    setOnClickListener {
+                        try {
+                            val waUrl = "https://api.whatsapp.com/send?phone=$cleanPhone"
+                            val waIntent = Intent(Intent.ACTION_VIEW, Uri.parse(waUrl))
+                            startActivity(waIntent)
+                        } catch (e: Throwable) {
+                            Toast.makeText(this@MainActivity, "WhatsApp not available: $cleanPhone", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                actionsRow.addView(btnWa)
+
+                // Direct Call Button
+                val btnCall = Button(this).apply {
+                    text = "📞 Call"
+                    textSize = 12f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#2563EB"))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        setMargins(6, 0, 0, 0)
+                    }
+                    setOnClickListener {
+                        try {
+                            val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanPhone"))
+                            startActivity(dialIntent)
+                        } catch (e: Throwable) {
+                            Toast.makeText(this@MainActivity, "Cannot dial: $cleanPhone", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                actionsRow.addView(btnCall)
+
+                cardInner.addView(actionsRow)
+            }
+
+            itemCard.addView(cardInner)
             ordersLogContainer.addView(itemCard)
         }
     }
