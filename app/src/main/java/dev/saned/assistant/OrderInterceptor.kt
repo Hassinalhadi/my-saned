@@ -108,7 +108,10 @@ object OrderInterceptor {
             val authVal = if (token.startsWith("Bearer ", ignoreCase = true)) token else "Bearer $token"
             reqBuilder.header("Authorization", authVal)
         }
-        val defaultUa = "Jahez/6.1.0 (Linux; U; Android ${Build.VERSION.RELEASE ?: "14"}; ${Build.MODEL ?: "Device"}; Build/${Build.ID ?: "BUILD"}) okhttp/4.12.0"
+        val osRel = Build.VERSION.RELEASE ?: "14"
+        val devMod = Build.MODEL ?: "Device"
+        val bldId = Build.ID ?: "BUILD"
+        val defaultUa = "Jahez/6.1.0 (Linux; U; Android " + osRel + "; " + devMod + "; Build/" + bldId + ") okhttp/4.12.0"
         val ua = cachedHeaders["User-Agent"] ?: defaultUa
         reqBuilder.header("User-Agent", ua)
         reqBuilder.header("Accept", "application/json, text/plain, */*")
@@ -1497,7 +1500,8 @@ object OrderInterceptor {
         if (isAutoReject) {
             if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
                 shouldReject = true
-                rejectReason = "Price (${String.format(Locale.US, "%.1f", price)} SAR) below minimum"
+                val fmtP = String.format(Locale.US, "%.1f", price)
+                rejectReason = "Price (" + fmtP + " SAR) below minimum"
             } else if (maxDistToRestaurant > 0.0 && dist > 0.0 && dist > maxDistToRestaurant) {
                 shouldReject = true
                 rejectReason = "Distance to restaurant (${dist} km) exceeds limit"
@@ -1934,7 +1938,8 @@ object OrderInterceptor {
         if (isAutoReject) {
             if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
                 shouldReject = true
-                rejectReason = "Price (${String.format(Locale.US, "%.1f", price)} SAR) below minimum (${minOrderPrice} SAR)"
+                val fmtP = String.format(Locale.US, "%.1f", price)
+            rejectReason = "Price (" + fmtP + " SAR) below minimum (" + minOrderPrice + " SAR)"
             } else if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
                 shouldReject = true
                 rejectReason = "Distance to restaurant (${distRest} km) exceeds limit (${maxDistToRestaurant} km)"

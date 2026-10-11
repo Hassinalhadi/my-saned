@@ -1134,12 +1134,16 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, 12, 0, 4)
             }
             val priceTv = TextView(this).apply {
+                val formattedPrice = String.format(Locale.US, "%.1f", order.price)
+                val formattedBonus = String.format(Locale.US, "%.1f", order.bonus)
                 val pStr = if (order.bonus > 0.0) {
-                    "${String.format(Locale.US, \"%.1f\", order.price)} + ${String.format(Locale.US, \"%.1f\", order.bonus)} (Bonus) ${order.currency}"
+                    formattedPrice + " + " + formattedBonus + " (Bonus) " + order.currency
                 } else if (order.price > 0.0) {
-                    "${String.format(Locale.US, \"%.1f\", order.price)} ${order.currency}"
-                } else "--"
-                text = "💰 Delivery Fee: $pStr"
+                    formattedPrice + " " + order.currency
+                } else {
+                    "--"
+                }
+                text = "💰 Delivery Fee: " + pStr
                 textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#0F172A"))
@@ -1149,7 +1153,8 @@ class MainActivity : AppCompatActivity() {
 
             if (order.distanceKm > 0.0) {
                 val distTv = TextView(this).apply {
-                    text = "📏 ${String.format(Locale.US, "%.1f", order.distanceKm)} km"
+                    val formattedDist = String.format(Locale.US, "%.1f", order.distanceKm)
+                    text = "📏 " + formattedDist + " km"
                     textSize = 12f
                     setTextColor(Color.parseColor("#64748B"))
                 }
@@ -1160,7 +1165,8 @@ class MainActivity : AppCompatActivity() {
             // Cash Alert Banner (Matching Lg8;.e) - If cashAmount > 0
             if (order.cashAmount > 0.0) {
                 val cashBanner = TextView(this).apply {
-                    text = "💵 استلم نقداً / Collect cash: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
+                    val formattedCash = String.format(Locale.US, "%.1f", order.cashAmount)
+                    text = "💵 استلم نقداً / Collect cash: " + formattedCash + " " + order.currency
                     textSize = 13f
                     typeface = Typeface.DEFAULT_BOLD
                     setTextColor(Color.parseColor("#B91C1C"))
@@ -1267,7 +1273,8 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             tvPingStatus.text = "Connected to Jahez Fleets (Ping: ${latency} ms) 🟢"
             tvPingStatus.setTextColor(Color.parseColor("#059669"))
-            tvPingDetails.text = "Hook: Active  •  Auth: ${if (hasToken) "Token Cached ✅" else "Waiting for Login ⏳"}  •  Orders Logged: $ordersCount"
+            val tokenLabel = if (hasToken) "Token Cached ✅" else "Waiting for Login ⏳"
+            tvPingDetails.text = "Hook: Active  •  Auth: " + tokenLabel + "  •  Orders Logged: " + ordersCount
 
             if (::tvHttpRequestsCount.isInitialized) {
                 tvHttpRequestsCount.text = "Total Captured HTTP Requests: $httpCount"
@@ -1286,10 +1293,10 @@ class MainActivity : AppCompatActivity() {
         val hasToken = intent.getBooleanExtra("has_token", false)
 
         runOnUiThread {
-            val statusColor = if (code in 200..299) "#059669" else "#DC2626"
+            val tokenStr = if (hasToken) "Attached ✅" else "Missing ❌"
             val message = """
                 Status Code: HTTP $code (${latency}ms)
-                Auth Token: ${if (hasToken) "Attached ✅" else "Missing ❌"}
+                Auth Token: $tokenStr
                 Target URL: $url
                 
                 Response Preview:

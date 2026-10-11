@@ -61,8 +61,8 @@ object NotificationHelper {
             }
 
             val restStr = if (order.restaurant.isNotEmpty()) order.restaurant else "Jahez Fleet"
-            val distStr = if (order.distanceKm > 0.0) "${String.format(Locale.US, "%.1f", order.distanceKm)} km" else ""
-            val priceStr = "${String.format(Locale.US, "%.1f", order.price)} ${order.currency}"
+            val distStr = if (order.distanceKm > 0.0) String.format(Locale.US, "%.1f", order.distanceKm) + " km" else ""
+            val priceStr = String.format(Locale.US, "%.1f", order.price) + " " + order.currency
 
             val summaryParts = mutableListOf<String>()
             summaryParts.add("#$ref")
@@ -73,10 +73,10 @@ object NotificationHelper {
             var bigText = summaryParts.joinToString(" · ")
             if (order.cashAmount > 0.0) {
                 val cashMsg = when (lang) {
-                    "ar" -> "\n💵 استلم نقداً: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
-                    "ur" -> "\n💵 نقد وصول کریں: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
-                    "bn" -> "\n💵 নগদ সংগ্রহ করুন: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
-                    else -> "\n💵 Collect Cash: ${String.format(Locale.US, "%.1f", order.cashAmount)} ${order.currency}"
+                    "ar" -> "\n💵 استلم نقداً: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
+                    "ur" -> "\n💵 نقد وصول کریں: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
+                    "bn" -> "\n💵 নগদ সংগ্রহ করুন: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
+                    else -> "\n💵 Collect Cash: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
                 }
                 bigText += cashMsg
             }
