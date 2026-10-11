@@ -221,7 +221,11 @@ object OrderInterceptor {
 
     private fun performLiveApiProbe() {
         val app = appContext ?: currentActivity ?: return
-        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        var token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        if (token.isEmpty() && appContext != null) {
+            val scanned = scanJahezSharedPreferencesForToken(appContext!!)
+            if (scanned.isNotEmpty()) token = scanned
+        }
 
         CoroutineScope(Dispatchers.IO).launch {
             if (token.isEmpty()) {
@@ -389,6 +393,7 @@ object OrderInterceptor {
         if (appContext != null) return
         val app = context.applicationContext
         appContext = app
+        scanJahezSharedPreferencesForToken(app)
 
         try {
             val filter = IntentFilter().apply {
@@ -1532,6 +1537,31 @@ object OrderInterceptor {
         }
     }
 
+    fun scanJahezSharedPreferencesForToken(context: Context): String {
+        try {
+            val dataDir = context.applicationInfo.dataDir
+            val prefsDir = File(dataDir, "shared_prefs")
+            if (prefsDir.exists() && prefsDir.isDirectory) {
+                val xmlFiles = prefsDir.listFiles { _, name -> name.endsWith(".xml") } ?: emptyArray()
+                for (xmlFile in xmlFiles) {
+                    val prefName = xmlFile.nameWithoutExtension
+                    val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                    for ((key, value) in sp.all) {
+                        val strVal = value?.toString()?.trim() ?: continue
+                        if (strVal.length > 20 && (strVal.startsWith("ey") || strVal.startsWith("Bearer "))) {
+                            checkAndSetToken(strVal, key)
+                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                        } else if (key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true) || key.contains("session", ignoreCase = true)) {
+                            checkAndSetToken(strVal, key)
+                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        return ""
+    }
+
     private fun executeDirectApiCall(orderIdNum: String, action: String) {
         val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val burstCount = if (action == "ACCEPT") parallelRequests.coerceIn(1, 5) else 1
@@ -1551,16 +1581,16 @@ object OrderInterceptor {
                         for (host in probeHosts.distinct()) {
                             val endpoints = if (action == "ACCEPT") {
                                 listOf(
-                                    buildCandidateUrl(host, "/api/fleets/orders//accept"),
-                                    buildCandidateUrl(host, "/api/driver/orders//accept"),
-                                    buildCandidateUrl(host, "/api/orders//accept"),
-                                    buildCandidateUrl(host, "/api/v1/orders//accept")
+                                    buildCandidateUrl(host, "/api/fleets/orders/" + orderIdNum + "/accept"),
+                                    buildCandidateUrl(host, "/api/driver/orders/" + orderIdNum + "/accept"),
+                                    buildCandidateUrl(host, "/api/orders/" + orderIdNum + "/accept"),
+                                    buildCandidateUrl(host, "/api/v1/orders/" + orderIdNum + "/accept")
                                 )
                             } else {
                                 listOf(
-                                    buildCandidateUrl(host, "/api/fleets/orders//reject"),
-                                    buildCandidateUrl(host, "/api/driver/orders//reject"),
-                                    buildCandidateUrl(host, "/api/orders//reject")
+                                    buildCandidateUrl(host, "/api/fleets/orders/" + orderIdNum + "/reject"),
+                                    buildCandidateUrl(host, "/api/driver/orders/" + orderIdNum + "/reject"),
+                                    buildCandidateUrl(host, "/api/orders/" + orderIdNum + "/reject")
                                 )
                             }
 
@@ -2017,24 +2047,40 @@ object OrderInterceptor {
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
+                // Immediate direct clicks on all relevant views
+                try { view.performClick(); view.callOnClick() } catch (_: Throwable) {}
+                try { targetView.performClick(); targetView.callOnClick() } catch (_: Throwable) {}
+
+                fun dispatchToAll(ev: MotionEvent) {
+                    try { dialogRoot.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                    try { targetView.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                    try { view.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                    try { targetView.rootView?.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                    try { activity.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                }
+
                 val downTime = SystemClock.uptimeMillis()
                 val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
-                activity.dispatchTouchEvent(downEvent)
+                dispatchToAll(downEvent)
                 downEvent.recycle()
 
                 val steps = 25
                 for (i in 1..steps) {
-                    val eventTime = downTime + (i * 7L)
+                    val eventTime = downTime + (i * 8L)
                     val curX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
                     val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, curX, screenY, 0)
-                    activity.dispatchTouchEvent(moveEvent)
+                    dispatchToAll(moveEvent)
                     moveEvent.recycle()
                 }
 
-                val upTime = downTime + (steps * 7L) + 15L
+                val upTime = downTime + (steps * 8L) + 15L
                 val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
-                activity.dispatchTouchEvent(upEvent)
+                dispatchToAll(upEvent)
                 upEvent.recycle()
+
+                // Final direct clicks
+                try { targetView.performClick() } catch (_: Throwable) {}
+                try { view.performClick() } catch (_: Throwable) {}
             } catch (_: Throwable) {}
         }
 
