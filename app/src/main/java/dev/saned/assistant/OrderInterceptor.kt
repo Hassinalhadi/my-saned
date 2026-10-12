@@ -144,6 +144,49 @@ object OrderInterceptor {
     @Volatile private var lastHandledOrderSignature = ""
     @Volatile private var lastHandledTimestamp = 0L
 
+    fun onActivityCreated(activity: Activity) {
+        currentActivity = activity
+        try {
+            val intent = activity.intent
+            val extras = intent?.extras
+            if (extras != null) {
+                for (k in extras.keySet()) {
+                    val v = extras.get(k) ?: continue
+                    val str = v.toString()
+                    if (str.startsWith("{") && str.endsWith("}")) {
+                        try {
+                            val json = JSONObject(str)
+                            extractAndProcessOrderJson(json, "Activity Intent Extra ()")
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        activity.runOnUiThread {
+            try {
+                scanAllRoots()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun onDialogShown(dialog: Dialog) {
+        val act = currentActivity ?: dialog.ownerActivity
+        if (act != null) {
+            act.runOnUiThread {
+                try {
+                    scanAllRoots()
+                } catch (_: Throwable) {}
+            }
+        } else {
+            mainHandler.post {
+                try {
+                    scanAllRoots()
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
     private val settingsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
@@ -1221,9 +1264,11 @@ object OrderInterceptor {
         mainHandler.post(object : Runnable {
             override fun run() {
                 try {
-                    scanAllRoots()
+                    if (isMasterRunning && (isAutoAccept || isAutoReject || isDryRun)) {
+                        scanAllRoots()
+                    }
                 } catch (_: Throwable) {}
-                mainHandler.postDelayed(this, 100)
+                mainHandler.postDelayed(this, 350)
             }
         })
     }
@@ -1468,8 +1513,10 @@ object OrderInterceptor {
                 if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
             }
 
-            if (orderId.isNotEmpty() || price > 0.0 || restaurant.isNotEmpty()) {
-                if (orderId.isEmpty()) orderId = "#" + (100000..999999).random()
+            if (orderId.isNotEmpty() || (price > 0.0 && restaurant.isNotEmpty())) {
+                if (orderId.isEmpty()) {
+                    orderId = if (reference.isNotEmpty()) "#" else if (restaurant.isNotEmpty()) "#" else return
+                }
                 if (reference.isEmpty()) reference = orderId.replace("#", "")
                 if (loggedOrderIds.add(orderId)) {
                     val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
@@ -1479,7 +1526,7 @@ object OrderInterceptor {
                         price = cleanPrice,
                         dist = dist,
                         restaurant = restaurant,
-                        status = " via ",
+                        status = " (Accepted ✅)",
                         customerName = customerName,
                         customerPhone = customerPhone,
                         address = address,
@@ -1877,11 +1924,19 @@ object OrderInterceptor {
             }
         }
 
-        if (orderId.isEmpty()) {
-            orderId = if (storeName.isNotEmpty()) "#$storeName" else "#" + (100000..999999).random()
+        // 1. إذا لم يوجد اسم مطعم، ولا سعر، ولا معرّف طلب حقيقي، ولا علامة على شاشة استلام:
+        val hasOrderDetails = isNewOrderScreen || (orderPrice > 0.0 && storeName.isNotEmpty())
+        if (!hasOrderDetails && orderId.isEmpty() && storeName.isEmpty() && orderPrice == 0.0) {
+            return false // شاشة عادية (ليست طلباً) - لا تفعل شيئاً
         }
 
-        if (acceptView != null && (isNewOrderScreen || acceptView!!.isShown || orderPrice > 0.0)) {
+        // 2. استخدام معرّف حقيقي فقط، وعدم استخدام random() نهائياً:
+        if (orderId.isEmpty()) {
+            orderId = if (storeName.isNotEmpty()) "#" else return false
+        }
+
+        // 3. التأكد أن هناك زراً بالفعل، وأن الشاشة هي شاشة طلب جديد حقيقية تحتوي على تفاصيل:
+        if (acceptView != null && hasOrderDetails && (orderPrice > 0.0 || storeName.isNotEmpty() || orderId.isNotEmpty())) {
             val signature = "$orderId-$orderPrice-$distToRestaurant"
             val now = System.currentTimeMillis()
             if (signature == lastHandledOrderSignature && (now - lastHandledTimestamp) < 3000L) {

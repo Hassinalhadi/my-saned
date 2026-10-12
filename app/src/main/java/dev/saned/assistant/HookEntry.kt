@@ -64,6 +64,7 @@ class HookEntry : XposedModule() {
                         try {
                             Toast.makeText(act, "⚡ Saned Assistant Connected!", Toast.LENGTH_SHORT).show()
                         } catch (_: Throwable) {}
+                        OrderInterceptor.onActivityCreated(act)
                     }
                     return res
                 }
@@ -81,6 +82,22 @@ class HookEntry : XposedModule() {
                         OrderInterceptor.initAppContext(act.applicationContext)
                         OrderInterceptor.currentActivity = act
                         initAppHooks(act.classLoader)
+                        OrderInterceptor.onActivityCreated(act)
+                    }
+                    return res
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 4. Hook Dialog.show for instant event-driven order popup detection
+        try {
+            val mDialogShow = android.app.Dialog::class.java.getDeclaredMethod("show")
+            hook(mDialogShow).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val res = chain.proceed()
+                    val dialog = chain.thisObject as? android.app.Dialog
+                    if (dialog != null) {
+                        OrderInterceptor.onDialogShown(dialog)
                     }
                     return res
                 }
