@@ -401,8 +401,8 @@ object OrderInterceptor {
 
     fun simulateTestOrder() {
         val testNum = (100000..999999).random()
-        val testRef = "JH-"
-        val testId = "#"
+        val testRef = "JH-$testNum"
+        val testId = "#$testNum"
         val testPrice = 24.50
         val testDist = 2.8
         val testStore = "شاورما كلاسك (Al Classic Shawarma)"
@@ -412,7 +412,7 @@ object OrderInterceptor {
         val testCash = 55.00
         val testStatus = "Accepted (Auto-Accept ⚡)"
 
-        lastOrderEvent = "Simulated Order  received"
+        lastOrderEvent = "Simulated Order $testId received"
         sendOrderToLog(
             orderId = testId,
             price = testPrice,
@@ -1515,18 +1515,18 @@ object OrderInterceptor {
 
             if (orderId.isNotEmpty() || (price > 0.0 && restaurant.isNotEmpty())) {
                 if (orderId.isEmpty()) {
-                    orderId = if (reference.isNotEmpty()) "#" else if (restaurant.isNotEmpty()) "#" else return
+                    orderId = if (reference.isNotEmpty()) "#$reference" else if (restaurant.isNotEmpty()) "#$restaurant" else return
                 }
                 if (reference.isEmpty()) reference = orderId.replace("#", "")
                 if (loggedOrderIds.add(orderId)) {
                     val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
-                    lastOrderEvent = "Order  detected via "
+                    lastOrderEvent = "Order $orderId detected via $channelSource"
                     sendOrderToLog(
                         orderId = orderId,
                         price = cleanPrice,
                         dist = dist,
                         restaurant = restaurant,
-                        status = " (Accepted ✅)",
+                        status = "$channelSource (Accepted ✅)",
                         customerName = customerName,
                         customerPhone = customerPhone,
                         address = address,
@@ -1576,9 +1576,9 @@ object OrderInterceptor {
         }
 
         if (isAutoAccept || isMasterRunning) {
-            lastOrderEvent = "Auto-Accepting Order ..."
+            lastOrderEvent = "Auto-Accepting Order $orderId..."
             currentActivity?.let { act ->
-                showToast(act, "⚡ Auto-Accepting Order  (In-Process)...")
+                showToast(act, "⚡ Auto-Accepting Order $orderId (In-Process)...")
                 act.runOnUiThread {
                     try {
                         act.window?.decorView?.let { decor ->
@@ -1932,7 +1932,7 @@ object OrderInterceptor {
 
         // 2. استخدام معرّف حقيقي فقط، وعدم استخدام random() نهائياً:
         if (orderId.isEmpty()) {
-            orderId = if (storeName.isNotEmpty()) "#" else return false
+            orderId = if (storeName.isNotEmpty()) "#$storeName" else return false
         }
 
         // 3. التأكد أن هناك زراً بالفعل، وأن الشاشة هي شاشة طلب جديد حقيقية تحتوي على تفاصيل:
