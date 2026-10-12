@@ -53,9 +53,9 @@ object LocationEngine {
             val xmlFile = java.io.File("/data/data/com.muzahid.gps/shared_prefs/com.muzahid.gps_prefs.xml")
             if (xmlFile.exists() && xmlFile.canRead()) {
                 val text = xmlFile.readText()
-                if (text.contains("name="start" value="true"") || text.contains(">true</boolean>")) {
-                    val latMatch = Regex("name="latitude"[^>]*>([^<]+)<").find(text)
-                    val lngMatch = Regex("name="longitude"[^>]*>([^<]+)<").find(text)
+               if (text.contains("name=\"start\" value=\"true\"") || text.contains(">true</boolean>")) {
+                    val latMatch = Regex("name=\"latitude\"[^>]*>([^<]+)<").find(text)
+                    val lngMatch = Regex("name=\"longitude\"[^>]*>([^<]+)<").find(text)
                     val lat = latMatch?.groupValues?.get(1)?.toDoubleOrNull()
                     val lng = lngMatch?.groupValues?.get(1)?.toDoubleOrNull()
                     if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
