@@ -1529,9 +1529,18 @@ object OrderInterceptor {
         }
 
         if (isAutoAccept || isMasterRunning) {
-            lastOrderEvent = "Auto-Accepting Order $orderId..."
-            currentActivity?.let { act -> showToast(act, "⚡ Auto-Accepting Order $orderId via direct API...") }
-            sendOrderToLog(orderId, price, dist, restaurant, "Auto-Accepted ✅ (API)")
+            lastOrderEvent = "Auto-Accepting Order ..."
+            currentActivity?.let { act ->
+                showToast(act, "⚡ Auto-Accepting Order  (In-Process)...")
+                act.runOnUiThread {
+                    try {
+                        act.window?.decorView?.let { decor ->
+                            findAndTriggerOrder(decor, act, System.currentTimeMillis())
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+            sendOrderToLog(orderId, price, dist, restaurant, "Auto-Accepted ✅ (In-Process / API)")
             executeDirectApiCall(rawId, "ACCEPT")
             playAlertSound()
         }
@@ -1836,9 +1845,32 @@ object OrderInterceptor {
             }
         }
 
-        // Fail-safe: If acceptView is null but an order popup is detected, pick the bottom-most clickable candidate
-        if (acceptView == null && (isNewOrderScreen || orderPrice > 0.0) && clickableCandidates.isNotEmpty()) {
-            acceptView = clickableCandidates.maxByOrNull {
+        // Geometry-based slider detection (for Canvas / Custom Slider views without text)
+        if (acceptView == null) {
+            val dm = activity.resources.displayMetrics
+            val screenW = dm.widthPixels
+            val screenH = dm.heightPixels
+
+            val sliderList = mutableListOf<View>()
+            fun findSliderCandidates(v: View) {
+                val loc = IntArray(2)
+                v.getLocationOnScreen(loc)
+                if (v.width > (screenW * 0.45) && v.height in 35..180 && loc[1] > (screenH * 0.35)) {
+                    sliderList.add(v)
+                }
+                if (v is ViewGroup) {
+                    for (idx in 0 until v.childCount) {
+                        findSliderCandidates(v.getChildAt(idx))
+                    }
+                }
+            }
+            findSliderCandidates(root)
+
+            acceptView = sliderList.maxByOrNull {
+                val loc = IntArray(2)
+                it.getLocationOnScreen(loc)
+                loc[1]
+            } ?: clickableCandidates.maxByOrNull {
                 val loc = IntArray(2)
                 it.getLocationOnScreen(loc)
                 loc[1]
@@ -2031,31 +2063,62 @@ object OrderInterceptor {
         val viewW = targetView.width.toFloat()
         val viewH = targetView.height.toFloat()
 
+        val isRtl = (activity.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL)
+
         val startScreenX: Float
         val endScreenX: Float
         val screenY: Float
 
-        if (viewW > 200f && location[0] >= 0) {
-            startScreenX = location[0].toFloat() + 60f
-            endScreenX = location[0].toFloat() + viewW - 50f
+        if (viewW > 180f && location[0] >= 0) {
             screenY = location[1].toFloat() + (viewH / 2f)
+            if (isRtl) {
+                startScreenX = location[0].toFloat() + viewW - 40f
+                endScreenX = location[0].toFloat() + 20f
+            } else {
+                startScreenX = location[0].toFloat() + 40f
+                endScreenX = location[0].toFloat() + viewW - 20f
+            }
         } else {
-            startScreenX = 140f
-            endScreenX = screenW - 140f
-            screenY = screenH * 0.88f
+            screenY = if (location[1] > 0) location[1].toFloat() + 45f else screenH * 0.88f
+            if (isRtl) {
+                startScreenX = screenW - 100f
+                endScreenX = 80f
+            } else {
+                startScreenX = 100f
+                endScreenX = screenW - 80f
+            }
+        }
+
+        // Immediate direct clicks and reflection callback triggers
+        triggerClick(view)
+        triggerClick(targetView)
+
+        var curr: View? = targetView
+        while (curr != null) {
+            try {
+                for (m in curr.javaClass.declaredMethods) {
+                    val name = m.name.lowercase()
+                    if (name.contains("complete") || name.contains("slide") || name.contains("swipe") || name.contains("accept") || name.contains("confirm")) {
+                        m.isAccessible = true
+                        if (m.parameterTypes.isEmpty()) {
+                            m.invoke(curr)
+                        } else if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Boolean::class.javaPrimitiveType) {
+                            m.invoke(curr, true)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+            curr = curr.parent as? View
         }
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                // Immediate direct clicks on all relevant views
-                try { view.performClick(); view.callOnClick() } catch (_: Throwable) {}
-                try { targetView.performClick(); targetView.callOnClick() } catch (_: Throwable) {}
-
                 fun dispatchToAll(ev: MotionEvent) {
                     try { dialogRoot.dispatchTouchEvent(ev) } catch (_: Throwable) {}
                     try { targetView.dispatchTouchEvent(ev) } catch (_: Throwable) {}
                     try { view.dispatchTouchEvent(ev) } catch (_: Throwable) {}
                     try { targetView.rootView?.dispatchTouchEvent(ev) } catch (_: Throwable) {}
+                    try { activity.window?.decorView?.dispatchTouchEvent(ev) } catch (_: Throwable) {}
                     try { activity.dispatchTouchEvent(ev) } catch (_: Throwable) {}
                 }
 
@@ -2064,10 +2127,10 @@ object OrderInterceptor {
                 dispatchToAll(downEvent)
                 downEvent.recycle()
 
-                val steps = 25
-                for (i in 1..steps) {
-                    val eventTime = downTime + (i * 8L)
-                    val curX = startScreenX + (endScreenX - startScreenX) * (i.toFloat() / steps.toFloat())
+                val steps = 28
+                for (step in 1..steps) {
+                    val eventTime = downTime + (step * 8L)
+                    val curX = startScreenX + (endScreenX - startScreenX) * (step.toFloat() / steps.toFloat())
                     val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, curX, screenY, 0)
                     dispatchToAll(moveEvent)
                     moveEvent.recycle()
@@ -2078,31 +2141,10 @@ object OrderInterceptor {
                 dispatchToAll(upEvent)
                 upEvent.recycle()
 
-                // Final direct clicks
+                // Post-swipe clicks
                 try { targetView.performClick() } catch (_: Throwable) {}
                 try { view.performClick() } catch (_: Throwable) {}
             } catch (_: Throwable) {}
-        }
-
-        triggerClick(view)
-        triggerClick(targetView)
-
-        var current: View? = targetView
-        while (current != null) {
-            try {
-                for (m in current.javaClass.declaredMethods) {
-                    val name = m.name.lowercase()
-                    if (name.contains("complete") || name.contains("slide") || name.contains("swipe") || name.contains("accept") || name.contains("confirm")) {
-                        m.isAccessible = true
-                        if (m.parameterTypes.isEmpty()) {
-                            m.invoke(current)
-                        } else if (m.parameterTypes.size == 1 && m.parameterTypes[0] == Boolean::class.javaPrimitiveType) {
-                            m.invoke(current, true)
-                        }
-                    }
-                }
-            } catch (_: Throwable) {}
-            current = current.parent as? View
         }
     }
 
