@@ -1,6 +1,8 @@
 package dev.saned.assistant
 
 import android.app.Activity
+import android.database.Cursor
+import android.database.sqlite.SQLiteDatabase
 import android.app.Dialog
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -148,26 +150,130 @@ object OrderInterceptor {
         currentActivity = activity
         try {
             val intent = activity.intent
-            val extras = intent?.extras
-            if (extras != null) {
-                for (k in extras.keySet()) {
-                    val v = extras.get(k) ?: continue
-                    val str = v.toString()
-                    if (str.startsWith("{") && str.endsWith("}")) {
-                        try {
-                            val json = JSONObject(str)
-                            extractAndProcessOrderJson(json, "Activity Intent Extra ()")
-                        } catch (_: Throwable) {}
-                    }
-                }
+            if (intent != null) {
+                extractAndProcessOrderFromIntent(intent, activity)
             }
         } catch (_: Throwable) {}
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                scanJahezDatabases(activity)
+            } catch (_: Throwable) {}
+        }
 
         activity.runOnUiThread {
             try {
                 scanAllRoots()
             } catch (_: Throwable) {}
         }
+    }
+
+    private fun extractAndProcessOrderFromIntent(intent: Intent, activity: Activity) {
+        try {
+            val extras = intent.extras ?: return
+
+            // 1. Check for embedded JSON strings in any extra
+            for (k in extras.keySet()) {
+                val v = extras.get(k) ?: continue
+                val str = v.toString().trim()
+                if (str.startsWith("{") && str.endsWith("}")) {
+                    try {
+                        val json = JSONObject(str)
+                        extractAndProcessOrderJson(json, "Activity Intent ()")
+                    } catch (_: Throwable) {}
+                }
+            }
+
+            // 2. Direct bundle field extraction matching Ls20 / Jahez order intent
+            var foundId = ""
+            var foundPrice = 0.0
+            var foundDist = 0.0
+            var foundCustDist = 0.0
+            var foundStore = ""
+            var foundCustomer = ""
+            var foundPhone = ""
+            var foundAddress = ""
+            var foundCash = 0.0
+
+            for (k in extras.keySet()) {
+                val lk = k.lowercase()
+                val v = extras.get(k) ?: continue
+                val strVal = v.toString().trim()
+
+                if (foundId.isEmpty() && (lk == "order_id" || lk == "orderid" || lk == "id" || lk == "code" || lk == "trip_id" || lk == "tripid" || lk == "ordernumber" || lk == "order_number")) {
+                    val digits = strVal.filter { it.isDigit() }
+                    if (digits.length in 5..12) foundId = "#"
+                }
+
+                if (foundPrice == 0.0 && (lk.contains("price") || lk.contains("fee") || lk.contains("cost") || lk.contains("earning") || lk.contains("amount") || lk == "total")) {
+                    val p = when (v) {
+                        is Number -> v.toDouble()
+                        else -> strVal.toDoubleOrNull() ?: 0.0
+                    }
+                    if (p in 1.0..500.0) foundPrice = p
+                }
+
+                if (foundDist == 0.0 && (lk.contains("distance") || lk.contains("km") || lk.contains("dist"))) {
+                    val d = when (v) {
+                        is Number -> v.toDouble()
+                        else -> strVal.toDoubleOrNull() ?: 0.0
+                    }
+                    if (d in 0.1..100.0) {
+                        if (lk.contains("customer") || lk.contains("dropoff")) foundCustDist = d else foundDist = d
+                    }
+                }
+
+                if (foundStore.isEmpty() && (lk.contains("store") || lk.contains("restaurant") || lk.contains("shop") || lk.contains("vendor"))) {
+                    if (strVal.length > 1 && !strVal.startsWith("{") && !strVal.startsWith("[")) {
+                        foundStore = strVal
+                    }
+                }
+
+                if (foundCustomer.isEmpty() && (lk.contains("customer") || lk.contains("client") || lk.contains("recipient")) && !lk.contains("phone") && !lk.contains("address")) {
+                    if (strVal.length > 1 && !strVal.startsWith("{")) foundCustomer = strVal
+                }
+
+                if (foundPhone.isEmpty() && (lk.contains("phone") || lk.contains("mobile"))) {
+                    val digits = strVal.filter { it.isDigit() }
+                    if (digits.length in 9..14) foundPhone = digits
+                }
+
+                if (foundAddress.isEmpty() && (lk.contains("address") || lk.contains("location") || lk.contains("dropoff"))) {
+                    if (strVal.length > 3 && !strVal.startsWith("{")) foundAddress = strVal
+                }
+
+                if (foundCash == 0.0 && (lk.contains("cash") || lk.contains("cod"))) {
+                    val c = when (v) {
+                        is Number -> v.toDouble()
+                        else -> strVal.toDoubleOrNull() ?: 0.0
+                    }
+                    if (c > 0.0) foundCash = c
+                }
+            }
+
+            if (foundId.isNotEmpty() || (foundPrice > 0.0 && foundStore.isNotEmpty())) {
+                if (foundId.isEmpty()) foundId = if (foundStore.isNotEmpty()) "#" else return
+                if (loggedOrderIds.add(foundId)) {
+                    val cleanPrice = String.format(Locale.US, "%.2f", foundPrice).toDoubleOrNull() ?: foundPrice
+                    lastOrderEvent = "Order  detected via Activity Intent"
+                    sendOrderToLog(
+                        orderId = foundId,
+                        price = cleanPrice,
+                        dist = foundDist,
+                        restaurant = foundStore,
+                        status = "Activity Intent (Accepted ✅)",
+                        customerName = foundCustomer,
+                        customerPhone = foundPhone,
+                        address = foundAddress,
+                        cashAmount = foundCash,
+                        currency = "SAR",
+                        reference = foundId.replace("#", "")
+                    )
+                    if (isSoundEnabled) playAlertSound()
+                    handleOrderViaApi(foundId, cleanPrice, foundDist, foundStore)
+                }
+            }
+        } catch (_: Throwable) {}
     }
 
     fun onDialogShown(dialog: Dialog) {
@@ -1096,7 +1202,7 @@ object OrderInterceptor {
 
     private fun hookSQLite(module: XposedModule) {
         try {
-            val dbClass = android.database.sqlite.SQLiteDatabase::class.java
+            val dbClass = SQLiteDatabase::class.java
             for (m in dbClass.declaredMethods) {
                 if (m.name in listOf("insert", "insertWithOnConflict", "insertOrThrow")) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -1111,7 +1217,7 @@ object OrderInterceptor {
                                     for (key in values.keySet()) {
                                         json.put(key, values.get(key))
                                     }
-                                    extractAndProcessOrderJson(json, "SQLite ($table) 💾")
+                                    extractAndProcessOrderJson(json, "SQLite () 💾")
                                 }
                             } catch (_: Throwable) {}
                             return chain.proceed()
@@ -1120,6 +1226,98 @@ object OrderInterceptor {
                 }
             }
         } catch (_: Throwable) {}
+    }
+
+    /**
+     * Proactive direct SQLite database scanner matching original app Lb11.f
+     * Directly opens Jahez local SQLite/Room databases via SQLiteDatabase.openDatabase
+     */
+    fun scanJahezDatabases(context: Context) {
+        try {
+            val dbDir = File(context.applicationInfo.dataDir, "databases")
+            if (dbDir.exists() && dbDir.isDirectory) {
+                val files = dbDir.listFiles() ?: emptyArray()
+                for (f in files) {
+                    if (f.isFile && !f.name.endsWith("-wal") && !f.name.endsWith("-shm") && !f.name.endsWith("-journal")) {
+                        scanDatabaseFile(f)
+                    }
+                }
+            }
+
+            val dbList = try { context.databaseList() } catch (_: Throwable) { null } ?: emptyArray()
+            for (dbName in dbList) {
+                val dbFile = context.getDatabasePath(dbName)
+                if (dbFile.exists() && !dbFile.name.endsWith("-wal") && !dbFile.name.endsWith("-shm") && !dbFile.name.endsWith("-journal")) {
+                    scanDatabaseFile(dbFile)
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun scanDatabaseFile(file: File) {
+        var db: SQLiteDatabase? = null
+        var cursor: Cursor? = null
+        try {
+            db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            val tableCursor = db.rawQuery(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_%' AND name NOT LIKE 'room_%'",
+                null
+            )
+            val tableNames = mutableListOf<String>()
+            while (tableCursor.moveToNext()) {
+                val name = tableCursor.getString(0)
+                if (name.contains("order", ignoreCase = true) || 
+                    name.contains("trip", ignoreCase = true) || 
+                    name.contains("dispatch", ignoreCase = true) ||
+                    name.contains("request", ignoreCase = true) ||
+                    name.contains("task", ignoreCase = true)) {
+                    tableNames.add(name)
+                }
+            }
+            tableCursor.close()
+
+            for (table in tableNames) {
+                try {
+                    cursor = db.rawQuery("SELECT * FROM  ORDER BY rowid DESC LIMIT 15", null)
+                    val colCount = cursor.columnCount
+                    val colNames = cursor.columnNames
+                    while (cursor.moveToNext()) {
+                        val json = JSONObject()
+                        for (i in 0 until colCount) {
+                            when (cursor.getType(i)) {
+                                Cursor.FIELD_TYPE_INTEGER -> json.put(colNames[i], cursor.getLong(i))
+                                Cursor.FIELD_TYPE_FLOAT -> json.put(colNames[i], cursor.getDouble(i))
+                                Cursor.FIELD_TYPE_STRING -> {
+                                    val strVal = cursor.getString(i)
+                                    json.put(colNames[i], strVal)
+                                    if (strVal != null && strVal.startsWith("{") && strVal.endsWith("}")) {
+                                        try {
+                                            extractAndProcessOrderJson(JSONObject(strVal), "DB Row JSON (.) 💾")
+                                        } catch (_: Throwable) {}
+                                    }
+                                }
+                                Cursor.FIELD_TYPE_BLOB -> {
+                                    val bytes = cursor.getBlob(i)
+                                    if (bytes != null) {
+                                        val s = String(bytes, Charsets.UTF_8).trim()
+                                        if (s.startsWith("{") && s.endsWith("}")) {
+                                            try {
+                                                extractAndProcessOrderJson(JSONObject(s), "DB Blob JSON (.) 💾")
+                                            } catch (_: Throwable) {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        extractAndProcessOrderJson(json, "DB Table () 💾")
+                    }
+                    cursor.close()
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {} finally {
+            try { cursor?.close() } catch (_: Throwable) {}
+            try { db?.close() } catch (_: Throwable) {}
+        }
     }
 
     private fun hookCipher(module: XposedModule) {
@@ -2056,30 +2254,41 @@ object OrderInterceptor {
             if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
                 shouldReject = true
                 val fmtP = String.format(Locale.US, "%.1f", price)
-            rejectReason = "Price (" + fmtP + " SAR) below minimum (" + minOrderPrice + " SAR)"
+                rejectReason = "Price (" + fmtP + " SAR) below minimum (" + minOrderPrice + " SAR)"
             } else if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
                 shouldReject = true
-                rejectReason = "Distance to restaurant (${distRest} km) exceeds limit (${maxDistToRestaurant} km)"
+                rejectReason = "Distance to restaurant ( km) exceeds limit ( km)"
             } else if (maxDistCustomer > 0.0 && distCust > 0.0 && distCust > maxDistCustomer) {
                 shouldReject = true
-                rejectReason = "Customer distance (${distCust} km) exceeds limit (${maxDistCustomer} km)"
+                rejectReason = "Customer distance ( km) exceeds limit ( km)"
             }
         }
 
         if (shouldReject) {
-            lastOrderEvent = "Order $orderId auto-rejected ($rejectReason)"
-            showToast(act, "❌ Auto-Rejected Order $orderId: $rejectReason")
-            sendOrderToLog(orderId, price, distRest, "", "Auto-Rejected ❌ ($rejectReason)")
+            lastOrderEvent = "Order  auto-rejected ()"
+            showToast(act, "❌ Auto-Rejected Order : ")
+            sendOrderToLog(orderId, price, distRest, "", "Auto-Rejected ❌ ()")
             if (btnReject != null) {
                 triggerClick(btnReject)
+            }
+            // Dismiss dialog / finish activity matching original app Ljx.e
+            act.runOnUiThread {
+                try {
+                    if (dialogRoot is ViewGroup && dialogRoot !== act.window?.decorView) {
+                        dialogRoot.visibility = View.GONE
+                    }
+                    if (!act.isFinishing && !act.isDestroyed) {
+                        act.finish()
+                    }
+                } catch (_: Throwable) {}
             }
             executeDirectApiCall(orderId.replace("#", ""), "REJECT")
             return
         }
 
         if (isDryRun) {
-            lastOrderEvent = "Order $orderId dry-run (would accept)"
-            showToast(act, "🔍 [Dry-Run]: Would accept Order $orderId")
+            lastOrderEvent = "Order  dry-run (would accept)"
+            showToast(act, "🔍 [Dry-Run]: Would accept Order ")
             sendOrderToLog(orderId, price, distRest, "", "Dry-Run (Would Accept) 🔍")
             return
         }
@@ -2092,9 +2301,9 @@ object OrderInterceptor {
                         simulateSwipe(btnAccept, dialogRoot, act)
                         executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
 
-                        lastOrderEvent = "Order $orderId accepted successfully in ${latency}ms"
-                        showToast(act, "⚡ Accepted Order $orderId in ${latency}ms!")
-                        sendOrderToLog(orderId, price, distRest, "", "Accepted Successfully ✅ (${latency}ms)")
+                        lastOrderEvent = "Order  accepted successfully in ms"
+                        showToast(act, "⚡ Accepted Order  in ms!")
+                        sendOrderToLog(orderId, price, distRest, "", "Accepted Successfully ✅ (ms)")
                         playAlertSound()
                     } finally {
                         delay(600)
@@ -2108,41 +2317,41 @@ object OrderInterceptor {
     private fun simulateSwipe(view: View, dialogRoot: View, activity: Activity) {
         val targetView = findSliderRoot(view)
 
-        val location = IntArray(2)
-        targetView.getLocationOnScreen(location)
+        val targetLoc = IntArray(2)
+        targetView.getLocationOnScreen(targetLoc)
 
-        val displayMetrics = activity.resources.displayMetrics
-        val screenW = displayMetrics.widthPixels.toFloat()
-        val screenH = displayMetrics.heightPixels.toFloat()
+        val rootLoc = IntArray(2)
+        dialogRoot.getLocationOnScreen(rootLoc)
 
-        val viewW = targetView.width.toFloat()
-        val viewH = targetView.height.toFloat()
+        val decorLoc = IntArray(2)
+        activity.window?.decorView?.getLocationOnScreen(decorLoc)
+
+        val viewLoc = IntArray(2)
+        view.getLocationOnScreen(viewLoc)
+
+        val viewW = targetView.width.toFloat().coerceAtLeast(200f)
+        val viewH = targetView.height.toFloat().coerceAtLeast(50f)
 
         val isRtl = (activity.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL)
 
-        val startScreenX: Float
-        val endScreenX: Float
-        val screenY: Float
+        // 1. Local coordinates relative to targetView
+        val localY = (viewH / 2f).coerceAtLeast(15f)
+        val localStartX = if (isRtl) (viewW - 40f).coerceAtLeast(20f) else 40f.coerceAtMost(viewW - 20f)
+        val localEndX = if (isRtl) 20f.coerceAtMost(viewW - 20f) else (viewW - 40f).coerceAtLeast(20f)
 
-        if (viewW > 180f && location[0] >= 0) {
-            screenY = location[1].toFloat() + (viewH / 2f)
-            if (isRtl) {
-                startScreenX = location[0].toFloat() + viewW - 40f
-                endScreenX = location[0].toFloat() + 20f
-            } else {
-                startScreenX = location[0].toFloat() + 40f
-                endScreenX = location[0].toFloat() + viewW - 20f
-            }
-        } else {
-            screenY = if (location[1] > 0) location[1].toFloat() + 45f else screenH * 0.88f
-            if (isRtl) {
-                startScreenX = screenW - 100f
-                endScreenX = 80f
-            } else {
-                startScreenX = 100f
-                endScreenX = screenW - 80f
-            }
-        }
+        // 2. Relative coordinates for dialogRoot (bounds-safe)
+        val rootOffsetX = targetLoc[0] - rootLoc[0]
+        val rootOffsetY = targetLoc[1] - rootLoc[1]
+        val rootY = rootOffsetY + localY
+        val rootStartX = rootOffsetX + localStartX
+        val rootEndX = rootOffsetX + localEndX
+
+        // 3. Relative coordinates for decorView
+        val decorOffsetX = targetLoc[0] - decorLoc[0]
+        val decorOffsetY = targetLoc[1] - decorLoc[1]
+        val decorY = decorOffsetY + localY
+        val decorStartX = decorOffsetX + localStartX
+        val decorEndX = decorOffsetX + localEndX
 
         // Immediate direct clicks and reflection callback triggers
         triggerClick(view)
@@ -2168,34 +2377,67 @@ object OrderInterceptor {
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                fun dispatchToAll(ev: MotionEvent) {
-                    try { dialogRoot.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                    try { targetView.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                    try { view.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                    try { targetView.rootView?.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                    try { activity.window?.decorView?.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                    try { activity.dispatchTouchEvent(ev) } catch (_: Throwable) {}
-                }
-
                 val downTime = SystemClock.uptimeMillis()
-                val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, startScreenX, screenY, 0)
-                dispatchToAll(downEvent)
-                downEvent.recycle()
 
-                val steps = 28
-                for (step in 1..steps) {
-                    val eventTime = downTime + (step * 8L)
-                    val curX = startScreenX + (endScreenX - startScreenX) * (step.toFloat() / steps.toFloat())
-                    val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, curX, screenY, 0)
-                    dispatchToAll(moveEvent)
-                    moveEvent.recycle()
+                fun dispatchEvent(action: Int, eventTime: Long, progress: Float) {
+                    val curLocalX = localStartX + (localEndX - localStartX) * progress
+                    val curRootX = rootStartX + (rootEndX - rootStartX) * progress
+                    val curDecorX = decorStartX + (decorEndX - decorStartX) * progress
+
+                    // A) targetView dispatch (in targetView local coordinates)
+                    try {
+                        val ev = MotionEvent.obtain(downTime, eventTime, action, curLocalX, localY, 0)
+                        targetView.dispatchTouchEvent(ev)
+                        ev.recycle()
+                    } catch (_: Throwable) {}
+
+                    // B) dialogRoot dispatch (in dialogRoot relative coordinates)
+                    try {
+                        val ev = MotionEvent.obtain(downTime, eventTime, action, curRootX, rootY, 0)
+                        dialogRoot.dispatchTouchEvent(ev)
+                        ev.recycle()
+                    } catch (_: Throwable) {}
+
+                    // C) view dispatch (if separate child)
+                    if (view !== targetView) {
+                        try {
+                            val vLocalX = (targetLoc[0] - viewLoc[0]) + curLocalX
+                            val vLocalY = (targetLoc[1] - viewLoc[1]) + localY
+                            val ev = MotionEvent.obtain(downTime, eventTime, action, vLocalX, vLocalY, 0)
+                            view.dispatchTouchEvent(ev)
+                            ev.recycle()
+                        } catch (_: Throwable) {}
+                    }
+
+                    // D) decorView dispatch (in decorView relative coordinates)
+                    try {
+                        val decor = activity.window?.decorView
+                        if (decor != null && decor !== dialogRoot) {
+                            val ev = MotionEvent.obtain(downTime, eventTime, action, curDecorX, decorY, 0)
+                            decor.dispatchTouchEvent(ev)
+                            ev.recycle()
+                        }
+                    } catch (_: Throwable) {}
                 }
 
-                val upTime = downTime + (steps * 8L) + 15L
-                val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, endScreenX, screenY, 0)
-                dispatchToAll(upEvent)
-                upEvent.recycle()
+                // 1. ACTION_DOWN
+                dispatchEvent(MotionEvent.ACTION_DOWN, downTime, 0f)
+                delay(12)
 
+                // 2. Smooth ACTION_MOVE with delays for velocity & gesture detection
+                val steps = 24
+                for (step in 1..steps) {
+                    val progress = step.toFloat() / steps.toFloat()
+                    val eventTime = downTime + (step * 8L)
+                    dispatchEvent(MotionEvent.ACTION_MOVE, eventTime, progress)
+                    delay(7)
+                }
+
+                // 3. ACTION_UP
+                val upTime = SystemClock.uptimeMillis()
+                dispatchEvent(MotionEvent.ACTION_UP, upTime, 1.0f)
+
+                delay(30)
                 // Post-swipe clicks
                 try { targetView.performClick() } catch (_: Throwable) {}
                 try { view.performClick() } catch (_: Throwable) {}
@@ -2210,10 +2452,8 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
 
         try {
-            val location = IntArray(2)
-            view.getLocationOnScreen(location)
-            val cx = location[0].toFloat() + (view.width / 2f).coerceAtLeast(20f)
-            val cy = location[1].toFloat() + (view.height / 2f).coerceAtLeast(20f)
+            val cx = (view.width / 2f).coerceAtLeast(10f)
+            val cy = (view.height / 2f).coerceAtLeast(10f)
             val downTime = SystemClock.uptimeMillis()
 
             val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, cx, cy, 0)

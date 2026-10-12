@@ -11,7 +11,6 @@
 
     <queries>
         <package android:name="net.jahez.fleets" />
-        <package android:name="com.muzahid.gps" />
     </queries>
 
     <application

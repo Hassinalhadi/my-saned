@@ -69,18 +69,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SanedAssistant-PRO-APK
-          path: |
-            SanedAssistant-PRO.apk
-            MUZAHID GPS_2.0.0.apk
+          path: SanedAssistant-PRO.apk
           retention-days: 14
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         with:
-          files: |
-            SanedAssistant-PRO.apk
-            MUZAHID GPS_2.0.0.apk
+          files: SanedAssistant-PRO.apk
           tag_name: "v3.0.0-build-${{ github.run_number }}"
           name: "Saned Assistant PRO v3.0.0 (Build #${{ github.run_number }})"
           body: |

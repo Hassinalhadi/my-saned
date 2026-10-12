@@ -29,47 +29,6 @@ object LocationEngine {
         } catch (_: Throwable) {}
     }
 
-    fun checkMuzahidGpsLocation(context: android.content.Context?): Boolean {
-        try {
-            val targetContext = try {
-                context?.createPackageContext("com.muzahid.gps", android.content.Context.CONTEXT_IGNORE_SECURITY)
-            } catch (_: Throwable) { null }
-
-            val prefs = targetContext?.getSharedPreferences("com.muzahid.gps_prefs", android.content.Context.MODE_PRIVATE)
-            if (prefs != null) {
-                val started = prefs.getBoolean("start", false)
-                val mLat = prefs.getString("latitude", null)?.toDoubleOrNull()
-                    ?: prefs.getFloat("latitude", 0f).toDouble()
-                val mLng = prefs.getString("longitude", null)?.toDoubleOrNull()
-                    ?: prefs.getFloat("longitude", 0f).toDouble()
-                if (started && mLat != 0.0 && mLng != 0.0) {
-                    currentLat = mLat
-                    currentLng = mLng
-                    isFakeLocationEnabled = true
-                    return true
-                }
-            }
-
-            val xmlFile = java.io.File("/data/data/com.muzahid.gps/shared_prefs/com.muzahid.gps_prefs.xml")
-            if (xmlFile.exists() && xmlFile.canRead()) {
-                val text = xmlFile.readText()
-                if (text.contains("name="start" value="true"") || text.contains(">true</boolean>")) {
-                    val latMatch = Regex("name="latitude"[^>]*>([^<]+)<").find(text)
-                    val lngMatch = Regex("name="longitude"[^>]*>([^<]+)<").find(text)
-                    val lat = latMatch?.groupValues?.get(1)?.toDoubleOrNull()
-                    val lng = lngMatch?.groupValues?.get(1)?.toDoubleOrNull()
-                    if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
-                        currentLat = lat
-                        currentLng = lng
-                        isFakeLocationEnabled = true
-                        return true
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
-        return false
-    }
-
     fun syncLocationSettings() {
         remotePrefs?.let { p ->
             isMasterRunning = p.getBoolean("master_running", false)
@@ -78,8 +37,6 @@ object LocationEngine {
             currentLat = p.getString("fake_lat", "0.0")?.toDoubleOrNull() ?: 0.0
             currentLng = p.getString("fake_lng", "0.0")?.toDoubleOrNull() ?: 0.0
         }
-        val appCtx = OrderInterceptor.appContext ?: OrderInterceptor.currentActivity
-        checkMuzahidGpsLocation(appCtx)
     }
 
     fun createAccurateLocation(provider: String = "gps"): Location {
