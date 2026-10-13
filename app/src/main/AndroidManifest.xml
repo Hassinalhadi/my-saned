@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <package android:name="net.jahez.fleets" />
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="Saned Assistant"
+        android:roundIcon="@android:drawable/sym_def_app_icon"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.SanedAssistant">
+
+        <!-- Modern LibXposed Provider (Used by LSPosed for SendBinder & Settings IPC) -->
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="dev.jing.sanedhook.XposedService"
+            android:exported="true" />
+
+        <!-- High-Speed Inter-Process Broadcast Receiver for Settings, Orders & Ping -->
+        <receiver
+            android:name=".SanedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.saned.assistant.ACTION_LOG_ORDER" />
+                <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
+                <action android:name="dev.saned.assistant.ACTION_PING" />
+                <action android:name="dev.saned.assistant.ACTION_PONG" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API_RESULT" />
+            </intent-filter>
+        </receiver>
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustPan">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
