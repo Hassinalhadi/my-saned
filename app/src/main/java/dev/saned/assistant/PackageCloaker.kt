@@ -19,7 +19,16 @@ object PackageCloaker {
         "com.noshufou.android.su",
         "com.koushikdutta.superuser",
         "com.thirdparty.superuser",
-        "com.yellowes.su"
+        "com.yellowes.su",
+        "com.lexa.fakegps",
+        "com.incorporateapps.fakegps",
+        "com.incorporateapps.fakegps_route",
+        "com.rosteam.gpsemulator",
+        "com.gsmartstudio.fakegps",
+        "com.location.gps.fakelocation",
+        "com.fakegps.mock",
+        "com.mockloc",
+        "com.app.fakegps"
     )
 
     private val ROOT_PATHS = setOf(

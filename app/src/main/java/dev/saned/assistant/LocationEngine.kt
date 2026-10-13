@@ -146,5 +146,95 @@ object LocationEngine {
                 }
             }
         } catch (_: Throwable) {}
+
+        // 6. Anti-Shadowban: Hook Location.isFromMockProvider() -> always false
+        try {
+            val mMock = Location::class.java.getDeclaredMethod("isFromMockProvider")
+            module.hook(mMock).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    return false
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 7. Anti-Shadowban: Hook Location.isMock() on Android 12/13/14+ -> always false
+        try {
+            val mMock31 = Location::class.java.getDeclaredMethod("isMock")
+            module.hook(mMock31).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    return false
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 8. Anti-Shadowban: Clean mock extras from Location.getExtras()
+        try {
+            val mExtras = Location::class.java.getDeclaredMethod("getExtras")
+            module.hook(mExtras).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val bundle = chain.proceed() as? android.os.Bundle
+                    bundle?.remove("mockLocation")
+                    return bundle
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 9. Ensure GPS is always reported as enabled
+        try {
+            val mEnabled = LocationManager::class.java.getDeclaredMethod("isProviderEnabled", String::class.java)
+            module.hook(mEnabled).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val prov = chain.args.getOrNull(0) as? String
+                    if (prov == "gps" || prov == "network") return true
+                    return chain.proceed()
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 10. Realistic Movement matching Ltz0: Hook getSpeed & hasSpeed
+        try {
+            val mSpeed = Location::class.java.getDeclaredMethod("getSpeed")
+            module.hook(mSpeed).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    syncLocationSettings()
+                    if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                        return 4.5f // ~16 km/h realistic inner city driving speed
+                    }
+                    return chain.proceed()
+                }
+            })
+            val mHasSpeed = Location::class.java.getDeclaredMethod("hasSpeed")
+            module.hook(mHasSpeed).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                        return true
+                    }
+                    return chain.proceed()
+                }
+            })
+        } catch (_: Throwable) {}
+
+        // 11. Realistic Movement matching Ltz0: Hook getBearing & hasBearing
+        try {
+            val mBearing = Location::class.java.getDeclaredMethod("getBearing")
+            module.hook(mBearing).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    syncLocationSettings()
+                    if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                        return 120.0f
+                    }
+                    return chain.proceed()
+                }
+            })
+            val mHasBearing = Location::class.java.getDeclaredMethod("hasBearing")
+            module.hook(mHasBearing).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    if (isMasterRunning && (isFakeLocationEnabled || isFixLocationUnknownEnabled)) {
+                        return true
+                    }
+                    return chain.proceed()
+                }
+            })
+        } catch (_: Throwable) {}
     }
 }

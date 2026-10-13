@@ -16,6 +16,7 @@ import android.media.ToneGenerator
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Base64
 import android.view.MotionEvent
@@ -291,6 +292,7 @@ object OrderInterceptor {
                 } catch (_: Throwable) {}
             }
         }
+        if (failedPollingCount < 100) failedPollingCount++
     }
 
     private val settingsReceiver = object : BroadcastReceiver() {
@@ -536,6 +538,25 @@ object OrderInterceptor {
         currentActivity?.let { showToast(it, "🧪 Simulated Order : Processing auto-accept pipeline...") }
 
         handleOrderViaApi(testId, testPrice, testDist, testStore)
+    }
+
+    
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    /**
+     * Acquire WakeLock matching Luc1.a from SanedAssistant:
+     * Tag: sanedhook:keepalive
+     * Keeps CPU and Jahez socket permanently active without Doze Mode timeout
+     */
+    fun acquireWakeLock(context: Context) {
+        try {
+            if (wakeLock?.isHeld == true) return
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sanedhook:keepalive").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Throwable) {}
     }
 
     fun initAppContext(context: Context) {
@@ -1516,9 +1537,19 @@ object OrderInterceptor {
         }
     }
 
+    private var failedPollingCount = 0
+
     private fun pollServerForAvailableOrders() {
         val token = cachedAuthToken
         if (token.isEmpty()) return
+
+        // Backoff if endpoints return 404 to avoid WAF rate-limiting / shadowban
+        if (lastOrdersListUrl.isEmpty() && failedPollingCount > 6) {
+            if (failedPollingCount % 12 != 0) {
+                failedPollingCount++
+                return
+            }
+        }
 
         val candidateEndpoints = listOf(
             "/api/fleets/orders/available",
@@ -1548,6 +1579,7 @@ object OrderInterceptor {
                     resp.close()
 
                     if (code in 200..299 && body.isNotEmpty()) {
+                        failedPollingCount = 0
                         if (cachedApiHost.isEmpty()) {
                             val uri = java.net.URI(url)
                             cachedApiHost = "${uri.scheme}://${uri.host}"
