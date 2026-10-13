@@ -189,6 +189,10 @@ object SettingsStore {
                 putExtra("max_dist_cust", maxCust)
                 putExtra("spoof_android_id", isSpoofAndroidId(context))
                 putExtra("spoofed_android_id", getSpoofedAndroidId(context))
+                putExtra("fix_location_unknown", isFixLocation(context))
+                putExtra("fake_location_enabled", isFakeLocation(context))
+                putExtra("fake_lat", getFakeLat(context))
+                putExtra("fake_lng", getFakeLng(context))
                 putExtra("sound_enabled", isSoundEnabled(context))
                 putExtra("show_toasts", isShowToasts(context))
             }
@@ -208,6 +212,12 @@ object SettingsStore {
                 putExtra("min_price", minPrice)
                 putExtra("max_dist_rest", maxRest)
                 putExtra("max_dist_cust", maxCust)
+                putExtra("fix_location_unknown", isFixLocation(context))
+                putExtra("fake_location_enabled", isFakeLocation(context))
+                putExtra("fake_lat", getFakeLat(context))
+                putExtra("fake_lng", getFakeLng(context))
+                putExtra("sound_enabled", isSoundEnabled(context))
+                putExtra("show_toasts", isShowToasts(context))
             }
             context.sendBroadcast(gIntent)
         } catch (_: Throwable) {}
@@ -216,6 +226,7 @@ object SettingsStore {
         try {
             val json = JSONObject().apply {
                 put("master_running", master)
+                put("enabled", master)
                 put("auto_accept", autoAccept)
                 put("auto_reject", autoReject)
                 put("dry_run", dryRun)
@@ -227,6 +238,10 @@ object SettingsStore {
                 put("max_dist_cust", maxCust)
                 put("spoof_android_id", isSpoofAndroidId(context))
                 put("spoofed_android_id", getSpoofedAndroidId(context))
+                put("fix_location_unknown", isFixLocation(context))
+                put("fake_location_enabled", isFakeLocation(context))
+                put("fake_lat", getFakeLat(context))
+                put("fake_lng", getFakeLng(context))
             }
             val file = File("/data/local/tmp/saned_config.json")
             file.writeText(json.toString())

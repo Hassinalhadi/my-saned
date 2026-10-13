@@ -354,7 +354,7 @@ class MainActivity : AppCompatActivity() {
             val testNum = (100000..999999).random()
             val simOrder = OrderModel(
                 id = testNum,
-                reference = "JH-",
+                reference = "JH-$testNum",
                 status = "Accepted (Auto-Accept ⚡)",
                 restaurant = "شاورما كلاسك (Al Classic Shawarma)",
                 customerName = "عبدالله الشمري (Abdullah)",

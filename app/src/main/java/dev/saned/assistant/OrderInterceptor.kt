@@ -180,7 +180,7 @@ object OrderInterceptor {
                 if (str.startsWith("{") && str.endsWith("}")) {
                     try {
                         val json = JSONObject(str)
-                        extractAndProcessOrderJson(json, "Activity Intent ()")
+                        extractAndProcessOrderJson(json, "Activity Intent ($k)")
                     } catch (_: Throwable) {}
                 }
             }
@@ -203,7 +203,7 @@ object OrderInterceptor {
 
                 if (foundId.isEmpty() && (lk == "order_id" || lk == "orderid" || lk == "id" || lk == "code" || lk == "trip_id" || lk == "tripid" || lk == "ordernumber" || lk == "order_number")) {
                     val digits = strVal.filter { it.isDigit() }
-                    if (digits.length in 5..12) foundId = "#"
+                    if (digits.length in 5..12) foundId = "#$digits"
                 }
 
                 if (foundPrice == 0.0 && (lk.contains("price") || lk.contains("fee") || lk.contains("cost") || lk.contains("earning") || lk.contains("amount") || lk == "total")) {
@@ -253,10 +253,10 @@ object OrderInterceptor {
             }
 
             if (foundId.isNotEmpty() || (foundPrice > 0.0 && foundStore.isNotEmpty())) {
-                if (foundId.isEmpty()) foundId = if (foundStore.isNotEmpty()) "#" else return
+                if (foundId.isEmpty()) foundId = if (foundStore.isNotEmpty()) "#$foundStore" else return
                 if (loggedOrderIds.add(foundId)) {
                     val cleanPrice = String.format(Locale.US, "%.2f", foundPrice).toDoubleOrNull() ?: foundPrice
-                    lastOrderEvent = "Order  detected via Activity Intent"
+                    lastOrderEvent = "Order $foundId detected via Activity Intent"
                     sendOrderToLog(
                         orderId = foundId,
                         price = cleanPrice,
@@ -535,7 +535,7 @@ object OrderInterceptor {
             reference = testRef
         )
         playAlertSound()
-        currentActivity?.let { showToast(it, "🧪 Simulated Order : Processing auto-accept pipeline...") }
+        currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
 
         handleOrderViaApi(testId, testPrice, testDist, testStore)
     }
@@ -585,7 +585,8 @@ object OrderInterceptor {
         readPersistedToken()
         readPersistedHost()
         scanAllSharedPreferencesForTokens(app)
-        startScreenWatcher()
+        LocationEngine.seedLocationManager(app)
+        acquireWakeLock(app)
         startActiveServerPolling()
     }
 
@@ -617,6 +618,13 @@ object OrderInterceptor {
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
         isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
+        LocationEngine.isMasterRunning = isMasterRunning
+        LocationEngine.isFakeLocationEnabled = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+        LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", LocationEngine.isFixLocationUnknownEnabled)
+        val lat = intent.getDoubleExtra("fake_lat", LocationEngine.currentLat)
+        val lng = intent.getDoubleExtra("fake_lng", LocationEngine.currentLng)
+        if (lat != 0.0) LocationEngine.currentLat = lat
+        if (lng != 0.0) LocationEngine.currentLng = lng
     }
 
     private fun loadFallbackConfigFile() {
@@ -875,33 +883,18 @@ object OrderInterceptor {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        var hookCount = 0
+        // Matches Ldv1.onPackageReady hook registration in SanedAssistant-98-7bac1ec.apk:
+        // Removed heavy/unnecessary hooks (hookJsonConstructors, hookSharedPreferences,
+        // hookSQLite, hookWebSocket, hookDialogShow) that do not exist in the original APK.
 
-        // 1. Hook OkHttpClient across all possible class names
-        hookCount += hookOkHttp(module, classLoader)
-
-        // 2. WebSocket Listeners & Readers
-        hookWebSocket(module, classLoader)
-
-        // 3. SharedPreferences Editor & getString hooks
-        hookSharedPreferences(module, classLoader)
-
-        // 4. Firebase Cloud Messaging (FCM Push Notifications)
+        // 1. Firebase Cloud Messaging (matching Ls90.f)
         hookFirebase(module, classLoader)
 
-        // 5. SQLite Database (Room & raw SQLite order inserts)
-        hookSQLite(module)
-
-        // 6. Hook javax.crypto.Cipher.doFinal
+        // 2. javax.crypto.Cipher.doFinal for "driverId : " (matching Lkh.b)
         hookCipher(module)
 
-        // 7. Universal JSON constructors
-        hookJsonConstructors(module)
-
-        // 8. Dialog show & UI Lifecycle
-        hookDialogShow(module)
-        hookUI(module, classLoader)
-
+        // 3. Minimal passive OkHttp metadata capture (without stream-corrupting interceptors)
+        val hookCount = hookOkHttp(module, classLoader)
         isOkHttpHooked = (hookCount > 0)
     }
 
@@ -966,16 +959,23 @@ object OrderInterceptor {
 
                                     val originalCb = chain.args.getOrNull(0)
                                     if (originalCb != null) {
-                                        val proxyCb = Proxy.newProxyInstance(classLoader, arrayOf(callbackClass)) { _, method, args ->
-                                            if (method.name == "onResponse" && args != null && args.size >= 2) {
-                                                val resp = args[1]
-                                                if (resp != null) {
-                                                    try { processHttpResponse(resp) } catch (_: Throwable) {}
+                                        val proxyCb = Proxy.newProxyInstance(classLoader, arrayOf(callbackClass)) { proxy, method, args ->
+                                            when (method.name) {
+                                                "equals" -> proxy === args?.getOrNull(0)
+                                                "hashCode" -> System.identityHashCode(proxy)
+                                                "toString" -> originalCb.toString()
+                                                else -> {
+                                                    if (method.name == "onResponse" && args != null && args.size >= 2) {
+                                                        val resp = args[1]
+                                                        if (resp != null) {
+                                                            try { processHttpResponse(resp) } catch (_: Throwable) {}
+                                                        }
+                                                    }
+                                                    method.invoke(originalCb, *(args ?: emptyArray()))
                                                 }
                                             }
-                                            method.invoke(originalCb, *(args ?: emptyArray()))
                                         }
-                                        chain.args[0] = proxyCb
+                                        return chain.proceed(arrayOf(proxyCb))
                                     }
                                     return chain.proceed()
                                 }
@@ -1033,21 +1033,29 @@ object OrderInterceptor {
                         val mInterceptors = builder.javaClass.getMethod("interceptors")
                         val list = mInterceptors.invoke(builder) as? MutableList<Any>
                         if (list != null) {
-                            val interceptorProxy = Proxy.newProxyInstance(classLoader, arrayOf(interceptorClass)) { _, method, args ->
-                                if (method.name == "intercept" && args != null && args.isNotEmpty()) {
-                                    val chainObj = args[0]
-                                    val requestMethod = chainObj.javaClass.getMethod("request")
-                                    val request = requestMethod.invoke(chainObj)
-                                    captureRequestMetadata(request)
+                            val interceptorProxy = Proxy.newProxyInstance(classLoader, arrayOf(interceptorClass)) { proxy, method, args ->
+                                when (method.name) {
+                                    "equals" -> proxy === args?.getOrNull(0)
+                                    "hashCode" -> System.identityHashCode(proxy)
+                                    "toString" -> "SanedOkHttpInterceptor"
+                                    "intercept" -> {
+                                        if (args != null && args.isNotEmpty()) {
+                                            val chainObj = args[0]
+                                            val requestMethod = chainObj.javaClass.getMethod("request")
+                                            val request = requestMethod.invoke(chainObj)
+                                            captureRequestMetadata(request)
 
-                                    val proceedMethod = chainObj.javaClass.getMethod("proceed", request.javaClass)
-                                    val response = proceedMethod.invoke(chainObj, request)
-                                    if (response != null) {
-                                        try { processHttpResponse(response) } catch (_: Throwable) {}
+                                            val proceedMethod = chainObj.javaClass.getMethod("proceed", request.javaClass)
+                                            val response = proceedMethod.invoke(chainObj, request)
+                                            if (response != null) {
+                                                try { processHttpResponse(response) } catch (_: Throwable) {}
+                                            }
+                                            response
+                                        } else {
+                                            null
+                                        }
                                     }
-                                    response
-                                } else {
-                                    null
+                                    else -> null
                                 }
                             }
                             if (!list.contains(interceptorProxy)) {
@@ -1202,8 +1210,14 @@ object OrderInterceptor {
                             try {
                                 val remoteMessage = chain.args.getOrNull(0)
                                 if (remoteMessage != null) {
-                                    val getDataMethod = remoteMessage.javaClass.getMethod("getData")
-                                    val dataMap = getDataMethod.invoke(remoteMessage) as? Map<*, *>
+                                    val getDataMethod = try {
+                                        remoteMessage.javaClass.getMethod("getData")
+                                    } catch (_: Throwable) {
+                                        remoteMessage.javaClass.methods.firstOrNull {
+                                            it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType)
+                                        }
+                                    }
+                                    val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
                                     if (dataMap != null && dataMap.isNotEmpty()) {
                                         val json = JSONObject()
                                         for ((k, v) in dataMap) {
@@ -1238,7 +1252,7 @@ object OrderInterceptor {
                                     for (key in values.keySet()) {
                                         json.put(key, values.get(key))
                                     }
-                                    extractAndProcessOrderJson(json, "SQLite () 💾")
+                                    extractAndProcessOrderJson(json, "SQLite ($table) 💾")
                                 }
                             } catch (_: Throwable) {}
                             return chain.proceed()
@@ -1299,7 +1313,7 @@ object OrderInterceptor {
 
             for (table in tableNames) {
                 try {
-                    cursor = db.rawQuery("SELECT * FROM  ORDER BY rowid DESC LIMIT 15", null)
+                    cursor = db.rawQuery("SELECT * FROM \"$table\" ORDER BY rowid DESC LIMIT 15", null)
                     val colCount = cursor.columnCount
                     val colNames = cursor.columnNames
                     while (cursor.moveToNext()) {
@@ -1313,7 +1327,7 @@ object OrderInterceptor {
                                     json.put(colNames[i], strVal)
                                     if (strVal != null && strVal.startsWith("{") && strVal.endsWith("}")) {
                                         try {
-                                            extractAndProcessOrderJson(JSONObject(strVal), "DB Row JSON (.) 💾")
+                                            extractAndProcessOrderJson(JSONObject(strVal), "DB Row JSON ($table.${colNames[i]}) 💾")
                                         } catch (_: Throwable) {}
                                     }
                                 }
@@ -1323,14 +1337,14 @@ object OrderInterceptor {
                                         val s = String(bytes, Charsets.UTF_8).trim()
                                         if (s.startsWith("{") && s.endsWith("}")) {
                                             try {
-                                                extractAndProcessOrderJson(JSONObject(s), "DB Blob JSON (.) 💾")
+                                                extractAndProcessOrderJson(JSONObject(s), "DB Blob JSON ($table.${colNames[i]}) 💾")
                                             } catch (_: Throwable) {}
                                         }
                                     }
                                 }
                             }
                         }
-                        extractAndProcessOrderJson(json, "DB Table () 💾")
+                        extractAndProcessOrderJson(json, "DB Table ($table) 💾")
                     }
                     cursor.close()
                 } catch (_: Throwable) {}
@@ -1341,25 +1355,29 @@ object OrderInterceptor {
         }
     }
 
+    @Volatile var capturedDriverCipherB64: String = ""
+
     private fun hookCipher(module: XposedModule) {
+        // Matches Lkh.b & Lkh$a in SanedAssistant-98-7bac1ec.apk:
+        // Hooks Cipher.doFinal([B)[B and checks for "driverId : " prefix
         try {
-            for (m in Cipher::class.java.declaredMethods) {
-                if (m.name == "doFinal" && m.returnType == ByteArray::class.java) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val result = chain.proceed()
-                            val bytes = result as? ByteArray
-                            if (bytes != null && bytes.isNotEmpty()) {
-                                try {
-                                    val text = String(bytes, Charsets.UTF_8)
-                                    findAndParseEmbeddedJson(text, "Decrypted (Cipher) 🔐")
-                                } catch (_: Throwable) {}
+            val mDoFinal = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
+            module.hook(mDoFinal).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val result = chain.proceed()
+                    val inputBytes = chain.args.getOrNull(0) as? ByteArray
+                    val outputBytes = result as? ByteArray
+                    if (outputBytes != null && outputBytes.isNotEmpty()) {
+                        try {
+                            val text = String(outputBytes, Charsets.UTF_8)
+                            if (text.contains("driverId : ") && inputBytes != null) {
+                                capturedDriverCipherB64 = Base64.encodeToString(inputBytes, Base64.NO_WRAP)
                             }
-                            return result
-                        }
-                    })
+                        } catch (_: Throwable) {}
+                    }
+                    return result
                 }
-            }
+            })
         } catch (_: Throwable) {}
     }
 
@@ -1543,12 +1561,9 @@ object OrderInterceptor {
         val token = cachedAuthToken
         if (token.isEmpty()) return
 
-        // Backoff if endpoints return 404 to avoid WAF rate-limiting / shadowban
-        if (lastOrdersListUrl.isEmpty() && failedPollingCount > 6) {
-            if (failedPollingCount % 12 != 0) {
-                failedPollingCount++
-                return
-            }
+        // Avoid hitting non-existent guessed paths (HTTP 404/403 WAF) until live orders endpoint is captured
+        if (lastOrdersListUrl.isEmpty()) {
+            return
         }
 
         val candidateEndpoints = listOf(
@@ -2037,7 +2052,7 @@ object OrderInterceptor {
                 }
             }
 
-            if (combined.equals("reject") || combined.equals("رفض") || combined.equals("dismiss") || combined.equals("تجاهل")) {
+            if (combined.contains("reject") || combined.contains("رفض") || combined.contains("dismiss") || combined.contains("تجاهل") || combined.contains("إلغاء")) {
                 rejectView = v
             }
 
@@ -2289,17 +2304,17 @@ object OrderInterceptor {
                 rejectReason = "Price (" + fmtP + " SAR) below minimum (" + minOrderPrice + " SAR)"
             } else if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
                 shouldReject = true
-                rejectReason = "Distance to restaurant ( km) exceeds limit ( km)"
+                rejectReason = "Distance to restaurant ($distRest km) exceeds limit ($maxDistToRestaurant km)"
             } else if (maxDistCustomer > 0.0 && distCust > 0.0 && distCust > maxDistCustomer) {
                 shouldReject = true
-                rejectReason = "Customer distance ( km) exceeds limit ( km)"
+                rejectReason = "Customer distance ($distCust km) exceeds limit ($maxDistCustomer km)"
             }
         }
 
         if (shouldReject) {
-            lastOrderEvent = "Order  auto-rejected ()"
-            showToast(act, "❌ Auto-Rejected Order : ")
-            sendOrderToLog(orderId, price, distRest, "", "Auto-Rejected ❌ ()")
+            lastOrderEvent = "Order $orderId auto-rejected ($rejectReason)"
+            showToast(act, "❌ Auto-Rejected Order $orderId: $rejectReason")
+            sendOrderToLog(orderId, price, distRest, "", "Auto-Rejected ❌ ($rejectReason)")
             if (btnReject != null) {
                 triggerClick(btnReject)
             }
@@ -2319,8 +2334,8 @@ object OrderInterceptor {
         }
 
         if (isDryRun) {
-            lastOrderEvent = "Order  dry-run (would accept)"
-            showToast(act, "🔍 [Dry-Run]: Would accept Order ")
+            lastOrderEvent = "Order $orderId dry-run (would accept)"
+            showToast(act, "🔍 [Dry-Run]: Would accept Order $orderId")
             sendOrderToLog(orderId, price, distRest, "", "Dry-Run (Would Accept) 🔍")
             return
         }
@@ -2333,9 +2348,9 @@ object OrderInterceptor {
                         simulateSwipe(btnAccept, dialogRoot, act)
                         executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
 
-                        lastOrderEvent = "Order  accepted successfully in ms"
-                        showToast(act, "⚡ Accepted Order  in ms!")
-                        sendOrderToLog(orderId, price, distRest, "", "Accepted Successfully ✅ (ms)")
+                        lastOrderEvent = "Order $orderId accepted successfully in ${latency}ms"
+                        showToast(act, "⚡ Accepted Order $orderId in ${latency}ms!")
+                        sendOrderToLog(orderId, price, distRest, "", "Accepted Successfully ✅ (${latency}ms)")
                         playAlertSound()
                     } finally {
                         delay(600)

@@ -1,17 +1,21 @@
 package dev.saned.assistant
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.SharedPreferences
 import android.provider.Settings
-import android.widget.TextView
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import org.json.JSONObject
+import java.io.File
 
+/**
+ * Matches Lly1 in SanedAssistant-98-7bac1ec.apk:
+ * Hooks ONLY Settings.Secure.getString(ContentResolver, String) for "android_id".
+ * Removes unnecessary TextView.setText, AlertDialog, and ClipboardManager hooks.
+ */
 object DeviceSpoofer {
 
-    @Volatile var isMasterRunning: Boolean = false
+    @Volatile var isMasterRunning: Boolean = true
     @Volatile var isSpoofAndroidId: Boolean = false
     @Volatile var spoofedAndroidId: String = ""
 
@@ -27,24 +31,20 @@ object DeviceSpoofer {
         } catch (_: Throwable) {}
     }
 
-    fun syncSettings(resolver: ContentResolver? = null) {
-        if (resolver != null) {
-            try {
-                val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
-                val bundle = resolver.call(uri, "getSettings", null, null)
-                if (bundle != null && !bundle.isEmpty) {
-                    isMasterRunning = bundle.getBoolean("master_running", isMasterRunning)
-                    isSpoofAndroidId = bundle.getBoolean("spoof_android_id", isSpoofAndroidId)
-                    val sId = bundle.getString("spoofed_android_id")
-                    if (!sId.isNullOrEmpty()) {
-                        spoofedAndroidId = sId
-                    }
-                    return
-                }
-            } catch (_: Throwable) {}
-        }
+    fun syncSettings() {
+        try {
+            val f = File("/data/local/tmp/saned_config.json")
+            if (f.exists()) {
+                val json = JSONObject(f.readText())
+                isMasterRunning = json.optBoolean("master_running", json.optBoolean("enabled", isMasterRunning))
+                isSpoofAndroidId = json.optBoolean("spoof_android_id", isSpoofAndroidId)
+                val sId = json.optString("spoofed_android_id", "")
+                if (sId.isNotEmpty()) spoofedAndroidId = sId
+            }
+        } catch (_: Throwable) {}
+
         remotePrefs?.let { p ->
-            isMasterRunning = p.getBoolean("master_running", isMasterRunning)
+            isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
             isSpoofAndroidId = p.getBoolean("spoof_android_id", isSpoofAndroidId)
             val sId = p.getString("spoofed_android_id", "")
             if (!sId.isNullOrEmpty()) {
@@ -55,14 +55,10 @@ object DeviceSpoofer {
 
     fun getEffectiveAndroidId(): String {
         syncSettings()
-        if (spoofedAndroidId.isNotEmpty() && spoofedAndroidId.length == 16) {
-            return spoofedAndroidId
-        }
-        return "7a8b9c0d1e2f3456"
+        return spoofedAndroidId.trim()
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        // 1. Hook Settings.Secure.getString(ContentResolver, String)
         try {
             val mGetString = Settings.Secure::class.java.getDeclaredMethod(
                 "getString",
@@ -71,111 +67,12 @@ object DeviceSpoofer {
             )
             module.hook(mGetString).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val resolver = chain.args[0] as? ContentResolver
-                    val name = chain.args[1] as? String
-                    syncSettings(resolver)
-                    if (name == Settings.Secure.ANDROID_ID && isMasterRunning && isSpoofAndroidId) {
-                        return getEffectiveAndroidId()
-                    }
-                    return chain.proceed()
-                }
-            })
-        } catch (_: Throwable) {}
-
-        // 2. Hook Settings.Secure.getStringForUser
-        for (m in Settings.Secure::class.java.declaredMethods) {
-            if (m.name == "getStringForUser") {
-                try {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val name = chain.args[1] as? String
-                            syncSettings()
-                            if (name == Settings.Secure.ANDROID_ID && isMasterRunning && isSpoofAndroidId) {
-                                return getEffectiveAndroidId()
-                            }
-                            return chain.proceed()
-                        }
-                    })
-                } catch (_: Throwable) {}
-            }
-        }
-
-        // 3. Hook android.app.AlertDialog.Builder.setMessage(CharSequence)
-        try {
-            val bClass = Class.forName("android.app.AlertDialog\$Builder", false, classLoader)
-            for (m in bClass.declaredMethods) {
-                if (m.name == "setMessage" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0])) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val msg = chain.args[0]?.toString() ?: ""
-                            syncSettings()
-                            if (isMasterRunning && isSpoofAndroidId && (msg.matches(Regex("^[0-9a-fA-F]{16}$")) || msg.contains("600d9587a82b2451"))) {
-                                val newId = getEffectiveAndroidId()
-                                val targetMethod = chain.thisObject.javaClass.getMethod("setMessage", CharSequence::class.java)
-                                return targetMethod.invoke(chain.thisObject, newId)
-                            }
-                            return chain.proceed()
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
-
-        // 4. Hook androidx.appcompat.app.AlertDialog.Builder.setMessage(CharSequence)
-        try {
-            val bClass = Class.forName("androidx.appcompat.app.AlertDialog\$Builder", false, classLoader)
-            for (m in bClass.declaredMethods) {
-                if (m.name == "setMessage" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0])) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val msg = chain.args[0]?.toString() ?: ""
-                            syncSettings()
-                            if (isMasterRunning && isSpoofAndroidId && (msg.matches(Regex("^[0-9a-fA-F]{16}$")) || msg.contains("600d9587a82b2451"))) {
-                                val newId = getEffectiveAndroidId()
-                                val targetMethod = chain.thisObject.javaClass.getMethod("setMessage", CharSequence::class.java)
-                                return targetMethod.invoke(chain.thisObject, newId)
-                            }
-                            return chain.proceed()
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
-
-        // 5. Hook TextView.setText
-        try {
-            for (m in TextView::class.java.declaredMethods) {
-                if (m.name == "setText" && m.parameterTypes.size == 1 && CharSequence::class.java.isAssignableFrom(m.parameterTypes[0])) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val text = chain.args[0]?.toString() ?: ""
-                            syncSettings()
-                            if (isMasterRunning && isSpoofAndroidId && (text.matches(Regex("^[0-9a-fA-F]{16}$")) || text == "600d9587a82b2451")) {
-                                val newId = getEffectiveAndroidId()
-                                val targetMethod = chain.thisObject.javaClass.getMethod("setText", CharSequence::class.java)
-                                return targetMethod.invoke(chain.thisObject, newId)
-                            }
-                            return chain.proceed()
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
-
-        // 6. Hook ClipboardManager.setPrimaryClip
-        try {
-            val mClip = ClipboardManager::class.java.getDeclaredMethod("setPrimaryClip", ClipData::class.java)
-            module.hook(mClip).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val clip = chain.args[0] as? ClipData
-                    syncSettings()
-                    if (isMasterRunning && isSpoofAndroidId && clip != null && clip.itemCount > 0) {
-                        val text = clip.getItemAt(0)?.text?.toString() ?: ""
-                        if (text.matches(Regex("^[0-9a-fA-F]{16}$")) || text == "600d9587a82b2451") {
-                            val newId = getEffectiveAndroidId()
-                            val newClip = ClipData.newPlainText("IMEI", newId)
-                            val targetMethod = chain.thisObject.javaClass.getMethod("setPrimaryClip", ClipData::class.java)
-                            return targetMethod.invoke(chain.thisObject, newClip)
+                    val name = chain.args.getOrNull(1) as? String
+                    if (name == Settings.Secure.ANDROID_ID) {
+                        syncSettings()
+                        val customId = getEffectiveAndroidId()
+                        if (isMasterRunning && isSpoofAndroidId && customId.isNotEmpty()) {
+                            return customId
                         }
                     }
                     return chain.proceed()

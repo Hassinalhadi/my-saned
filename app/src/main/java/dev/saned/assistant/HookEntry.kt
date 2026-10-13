@@ -2,9 +2,7 @@ package dev.saned.assistant
 
 import android.app.Activity
 import android.app.Application
-import android.content.Context
 import android.os.Bundle
-import android.widget.Toast
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
@@ -16,13 +14,12 @@ class HookEntry : XposedModule() {
     private val isAppHooked = AtomicBoolean(false)
 
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
-        if (!param.packageName.contains("jahez") && param.packageName != "net.jahez.fleets") return
+        if (param.packageName != "net.jahez.fleets") return
         hookSystemLifecycle()
-        // Do NOT call initAppHooks here with defaultClassLoader as it only contains boot classes
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-        if (!param.packageName.contains("jahez") && param.packageName != "net.jahez.fleets") return
+        if (param.packageName != "net.jahez.fleets") return
         val cl = param.classLoader
         if (cl != null) {
             initAppHooks(cl)
@@ -32,14 +29,14 @@ class HookEntry : XposedModule() {
     private fun hookSystemLifecycle() {
         if (!isSystemHooked.compareAndSet(false, true)) return
 
-        // 1. Hook Application.onCreate
+        // 1. Hook Application.onCreate (initializes app context & settings)
         try {
             val mAppCreate = Application::class.java.getDeclaredMethod("onCreate")
             hook(mAppCreate).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
                     val app = chain.thisObject as? Application
-                    if (app != null && (app.packageName == "net.jahez.fleets" || app.packageName.contains("jahez"))) {
+                    if (app != null && app.packageName == "net.jahez.fleets") {
                         try {
                             OrderInterceptor.initAppContext(app)
                             initAppHooks(app.classLoader)
@@ -50,20 +47,17 @@ class HookEntry : XposedModule() {
             })
         } catch (_: Throwable) {}
 
-        // 2. Hook Activity.onCreate
+        // 2. Hook Activity.onCreate matching Ls20.d (no Toast spam)
         try {
             val mOnCreate = Activity::class.java.getDeclaredMethod("onCreate", Bundle::class.java)
             hook(mOnCreate).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
                     val act = chain.thisObject as? Activity
-                    if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
+                    if (act != null && act.packageName == "net.jahez.fleets") {
                         OrderInterceptor.initAppContext(act.applicationContext)
                         OrderInterceptor.currentActivity = act
                         initAppHooks(act.classLoader)
-                        try {
-                            Toast.makeText(act, "⚡ Saned Assistant Connected!", Toast.LENGTH_SHORT).show()
-                        } catch (_: Throwable) {}
                         OrderInterceptor.onActivityCreated(act)
                     }
                     return res
@@ -78,26 +72,9 @@ class HookEntry : XposedModule() {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
                     val act = chain.thisObject as? Activity
-                    if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
+                    if (act != null && act.packageName == "net.jahez.fleets") {
                         OrderInterceptor.initAppContext(act.applicationContext)
                         OrderInterceptor.currentActivity = act
-                        initAppHooks(act.classLoader)
-                        OrderInterceptor.onActivityCreated(act)
-                    }
-                    return res
-                }
-            })
-        } catch (_: Throwable) {}
-
-        // 4. Hook Dialog.show for instant event-driven order popup detection
-        try {
-            val mDialogShow = android.app.Dialog::class.java.getDeclaredMethod("show")
-            hook(mDialogShow).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val res = chain.proceed()
-                    val dialog = chain.thisObject as? android.app.Dialog
-                    if (dialog != null) {
-                        OrderInterceptor.onDialogShown(dialog)
                     }
                     return res
                 }
@@ -113,11 +90,7 @@ class HookEntry : XposedModule() {
             OrderInterceptor.initRemotePrefs(remotePrefs)
         } catch (_: Throwable) {}
 
-        if (!isAppHooked.compareAndSet(false, true)) {
-            // Re-invoke OrderInterceptor hooks with new ClassLoader if not yet hooked
-            OrderInterceptor.hook(this, classLoader)
-            return
-        }
+        if (!isAppHooked.compareAndSet(false, true)) return
 
         try {
             PackageCloaker.hook(this, classLoader)
