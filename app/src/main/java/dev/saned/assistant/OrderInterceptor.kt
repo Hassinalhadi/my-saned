@@ -252,6 +252,40 @@ object OrderInterceptor {
                 }
             }
 
+            // Compute Haversine distances from coordinates if direct distance extra is 0.0 (matching Lqz.a & Ls20.e)
+            if (foundDist == 0.0) {
+                var pLat = 0.0
+                var pLng = 0.0
+                var dLat = 0.0
+                var dLng = 0.0
+                for (k in extras.keySet()) {
+                    val lk = k.lowercase()
+                    val v = extras.get(k) ?: continue
+                    val d = (v as? Number)?.toDouble() ?: v.toString().toDoubleOrNull() ?: continue
+                    if (d in 15.0..35.0) {
+                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLat == 0.0) {
+                            if (pLat == 0.0) pLat = d else if (dLat == 0.0) dLat = d
+                        } else if (dLat == 0.0) {
+                            dLat = d
+                        }
+                    } else if (d in 34.0..56.0) {
+                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLng == 0.0) {
+                            if (pLng == 0.0) pLng = d else if (dLng == 0.0) dLng = d
+                        } else if (dLng == 0.0) {
+                            dLng = d
+                        }
+                    }
+                }
+                val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
+                    foundDist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
+                }
+                if (foundCustDist == 0.0 && pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) {
+                    foundCustDist = LocationEngine.calculateDistance(pLat, pLng, dLat, dLng)
+                }
+            }
+
             if (foundId.isNotEmpty() || (foundPrice > 0.0 && foundStore.isNotEmpty())) {
                 if (foundId.isEmpty()) foundId = if (foundStore.isNotEmpty()) "#$foundStore" else return
                 if (loggedOrderIds.add(foundId)) {
@@ -890,7 +924,10 @@ object OrderInterceptor {
         // 1. Firebase Cloud Messaging (matching Ls90.f)
         hookFirebase(module, classLoader)
 
-        // 2. javax.crypto.Cipher.doFinal for "driverId : " (matching Lkh.b)
+        // 2. Instrumentation.execStartActivity (matching Lfs0.d)
+        hookInstrumentation(module)
+
+        // 3. javax.crypto.Cipher.doFinal for "driverId : " (matching Lkh.b)
         hookCipher(module)
 
         // 3. Minimal passive OkHttp metadata capture (without stream-corrupting interceptors)
@@ -1200,39 +1237,89 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
+    private val isInstrumentationHooked = AtomicBoolean(false)
+
+    private fun hookInstrumentation(module: XposedModule) {
+        if (!isInstrumentationHooked.compareAndSet(false, true)) return
         try {
-            val fmsClass = Class.forName("com.google.firebase.messaging.FirebaseMessagingService", false, classLoader)
-            for (m in fmsClass.declaredMethods) {
-                if (m.name == "onMessageReceived") {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            try {
-                                val remoteMessage = chain.args.getOrNull(0)
-                                if (remoteMessage != null) {
-                                    val getDataMethod = try {
-                                        remoteMessage.javaClass.getMethod("getData")
-                                    } catch (_: Throwable) {
-                                        remoteMessage.javaClass.methods.firstOrNull {
-                                            it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType)
-                                        }
+            val instClass = Class.forName("android.app.Instrumentation")
+            for (m in instClass.declaredMethods) {
+                if (m.name == "execStartActivity") {
+                    val paramTypes = m.parameterTypes
+                    val intentIdx = paramTypes.indexOfFirst { it == Intent::class.java }
+                    if (intentIdx >= 0) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                try {
+                                    val intent = chain.args.getOrNull(intentIdx) as? Intent
+                                    val act = currentActivity
+                                    if (intent != null && act != null) {
+                                        extractAndProcessOrderFromIntent(intent, act)
                                     }
-                                    val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
-                                    if (dataMap != null && dataMap.isNotEmpty()) {
-                                        val json = JSONObject()
-                                        for ((k, v) in dataMap) {
-                                            json.put(k.toString(), v.toString())
-                                        }
-                                        findAndParseEmbeddedJson(json.toString(), "FCM Push 📲")
-                                    }
-                                }
-                            } catch (_: Throwable) {}
-                            return chain.proceed()
-                        }
-                    })
+                                } catch (_: Throwable) {}
+                                return chain.proceed()
+                            }
+                        })
+                    }
                 }
             }
         } catch (_: Throwable) {}
+    }
+
+    private val hookedFcmClasses = ConcurrentHashMap.newKeySet<String>()
+
+    private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
+        val candidateClasses = mutableSetOf("com.google.firebase.messaging.FirebaseMessagingService")
+        try {
+            val ctx = appContext ?: currentActivity
+            if (ctx != null) {
+                val intent = Intent("com.google.firebase.messaging.MESSAGING_EVENT").apply {
+                    setPackage("net.jahez.fleets")
+                }
+                val services = ctx.packageManager.queryIntentServices(intent, 0)
+                services?.forEach { resolveInfo ->
+                    resolveInfo.serviceInfo?.name?.let { candidateClasses.add(it) }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        for (clsName in candidateClasses) {
+            if (!hookedFcmClasses.add(clsName)) continue
+            try {
+                val fmsClass = Class.forName(clsName, false, classLoader)
+                for (m in fmsClass.declaredMethods) {
+                    if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                try {
+                                    val remoteMessage = chain.args.getOrNull(0)
+                                    if (remoteMessage != null) {
+                                        val getDataMethod = try {
+                                            remoteMessage.javaClass.getMethod("getData")
+                                        } catch (_: Throwable) {
+                                            remoteMessage.javaClass.methods.firstOrNull {
+                                                it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType)
+                                            }
+                                        }
+                                        val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
+                                        if (dataMap != null && dataMap.isNotEmpty()) {
+                                            val json = JSONObject()
+                                            for ((k, v) in dataMap) {
+                                                if (k != null && v != null) {
+                                                    json.put(k.toString(), v.toString())
+                                                }
+                                            }
+                                            extractAndProcessOrderJson(json, "FCM Push 📲")
+                                        }
+                                    }
+                                } catch (_: Throwable) {}
+                                return chain.proceed()
+                            }
+                        })
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun hookSQLite(module: XposedModule) {
@@ -1753,9 +1840,30 @@ object OrderInterceptor {
                 if (address.isEmpty()) address = extractFirstString(dropoffObj, "address", "location_name", "formatted_address", "name")
             }
 
-            val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store")
+            val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store") ?: json.optJSONObject("branch") ?: dataObj?.optJSONObject("branch")
             if (pickupObj != null) {
                 if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
+            }
+
+            // Coordinate-based Haversine distance calculation matching Lb11.e, Ls90.g, and Lqz.a
+            if (dist == 0.0) {
+                var pLat = extractFirstDouble(json, "pickup_lat", "pickupLat", "store_lat", "branch_lat", "restaurant_lat")
+                var pLng = extractFirstDouble(json, "pickup_lng", "pickupLng", "pickup_lon", "store_lng", "branch_lng", "restaurant_lng")
+                if (pLat == 0.0 && pickupObj != null) {
+                    pLat = extractFirstDouble(pickupObj, "lat", "latitude")
+                    pLng = extractFirstDouble(pickupObj, "lng", "lon", "longitude")
+                    val coords = pickupObj.optJSONArray("coordinates") ?: pickupObj.optJSONArray("location")
+                    if (coords != null && coords.length() >= 2) {
+                        val c0 = coords.optDouble(0, 0.0)
+                        val c1 = coords.optDouble(1, 0.0)
+                        if (c0 in 15.0..35.0) { pLat = c0; pLng = c1 } else { pLat = c1; pLng = c0 }
+                    }
+                }
+                val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
+                    dist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
+                }
             }
 
             if (orderId.isNotEmpty() || (price > 0.0 && restaurant.isNotEmpty())) {
