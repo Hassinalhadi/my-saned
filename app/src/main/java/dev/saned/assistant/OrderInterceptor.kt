@@ -66,14 +66,35 @@ object OrderInterceptor {
     @Volatile var isStayInBackground: Boolean = false
     @Volatile var isSilenceAlertTone: Boolean = true
     @Volatile var isStrictVersionCheck: Boolean = false
+    @Volatile var licenseToken: String = ""
+    @Volatile var licenseBoundId: String = ""
+    @Volatile var detectedJahezVersionCode: Long = 0L
+    @Volatile var isJahezVersionOfficiallySupported: Boolean = true
+    private val unsupportedVersionNotified = AtomicBoolean(false)
 
-    // Matches Lev1$a & Lev1.e in SanedAssistant-98-7bac1ec.apk
-    data class HandledOrderEntry(
-        val decision: String,      // "ACCEPT", "REJECT", "MANUAL", "DRY_RUN"
-        val timestampRealtime: Long,
-        val wasInBackground: Boolean
-    )
+    fun checkJahezVersionSupport(versionCode: Long): Boolean {
+        if (versionCode <= 0L) return true
+        detectedJahezVersionCode = versionCode
+        val supported = PackageCloaker.checkVersionSupported(versionCode)
+        isJahezVersionOfficiallySupported = supported
+        return supported
+    }
+
+    fun notifyUnsupportedVersion(versionCode: Long) {
+        if (!unsupportedVersionNotified.compareAndSet(false, true)) return
+        val msg = "⛔ إصدار سند $versionCode غير مدعوم بعد — يرجى تحديث أداة المساعد"
+        lastOrderEvent = msg
+        mainHandler.post {
+  try {
+      val ctx = resolveApplicationContext() ?: currentActivity
+      if (ctx != null) Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+  } catch (_: Throwable) {}
+        }
+    }
+
+    data class HandledOrderEntry(val decision: String, val timestampRealtime: Long, val wasInBackground: Boolean)
     val handledOrdersMap = ConcurrentHashMap<Int, HandledOrderEntry>()
+
     @Volatile var minOrderPrice: Double = 0.0
     @Volatile var maxDistToRestaurant: Double = 0.0
     @Volatile var maxDistCustomer: Double = 0.0
@@ -164,118 +185,63 @@ object OrderInterceptor {
     @Volatile private var lastHandledOrderSignature = ""
     @Volatile private var lastHandledTimestamp = 0L
 
-    /**
-     * Matches Ls20$a.intercept BEFORE chain.proceed() in SanedAssistant-98-7bac1ec.apk:
-     * Reads IncomingDispatchActivity intent fields via Lby1 (Native.k) and triggers Ljx.f immediately.
-     */
-    fun onActivityPreCreated(activity: Activity) {
+    fun onActivityPreCreated(activity: Activity): Int {
         currentActivity = activity
         syncSettings(activity.contentResolver)
-        try {
-            val intent = activity.intent
-            if (intent != null) {
-                extractAndProcessOrderFromIntent(intent, activity)
-            }
-        } catch (_: Throwable) {}
-    }
-
-    /**
-     * Matches Ls20$a.intercept AFTER chain.proceed() -> Ljx.d(activity, orderId) in SanedAssistant-98-7bac1ec.apk:
-     * Silences MediaPlayer alert tone (Ljx.o) and finishes IncomingDispatchActivity (Ljx.e / Ljx.n) for handled orders.
-     */
-    fun onActivityCreated(activity: Activity) {
-        currentActivity = activity
-        syncSettings(activity.contentResolver)
-        startScreenWatcher()
-        try {
-            val intent = activity.intent
-            if (intent != null) {
-                val orderIdInt = extractExactOrderIdFromIntent(intent)
-                if (orderIdInt != 0) {
-                    handlePostOrderActivityCreate(activity, orderIdInt)
-                } else {
-                    extractAndProcessOrderFromIntent(intent, activity)
-                }
-            }
-        } catch (_: Throwable) {}
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                scanJahezDatabases(activity)
-            } catch (_: Throwable) {}
-        }
-
-        for (delayMs in listOf(0L, 100L, 250L, 500L, 900L)) {
-            mainHandler.postDelayed({
-                try {
-                    scanAllRoots()
-                } catch (_: Throwable) {}
-            }, delayMs)
-        }
-    }
-
-    private fun extractExactOrderIdFromIntent(intent: Intent): Int {
         return try {
-            val keys = Native.safeK()
-            val reqIdKey = keys.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: "EXTRA_DISPATCH_REQUEST_ID"
-            val idVal = intent.getIntExtra(reqIdKey, 0)
-            if (idVal != 0) idVal else intent.getIntExtra("order_id", 0)
-        } catch (_: Throwable) {
-            0
-        }
+  val intent = activity.intent
+  if (intent != null) {
+      val exactId = extractExactOrderIdFromIntent(intent)
+      extractAndProcessOrderFromIntent(intent, activity)
+      exactId
+  } else 0
+        } catch (_: Throwable) { 0 }
     }
 
-    /**
-     * Matches Ljx.d(Activity, int) & Ljx.e(Activity, int) & Ljx.n(Activity, int) & Ljx.o(Activity)
-     */
+    fun onOrderActivityPostCreate(activity: Activity, orderIdInt: Int) {
+        handlePostOrderActivityCreate(activity, orderIdInt)
+    }
+
+    private fun extractExactOrderIdFromIntent(intent: Intent): Int = try {
+        val keys = Native.safeK()
+        val reqIdKey = keys.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: "EXTRA_DISPATCH_REQUEST_ID"
+        val idVal = intent.getIntExtra(reqIdKey, 0)
+        if (idVal != 0) idVal else intent.getIntExtra("order_id", 0)
+    } catch (_: Throwable) { 0 }
+
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
         if (orderIdInt == 0) return
         val entry = handledOrdersMap[orderIdInt] ?: return
-        if (entry.decision != "ACCEPT" && entry.decision != "REJECT") return
-        if (isDryRun) return
-
+        if ((entry.decision != "ACCEPT" && entry.decision != "REJECT") || isDryRun) return
         if (isSilenceAlertTone) {
-            silenceActivityMediaPlayer(activity)
+  try {
+      for (field in activity.javaClass.declaredFields) {
+          if (MediaPlayer::class.java.isAssignableFrom(field.type)) {
+              field.isAccessible = true
+              (field.get(activity) as? MediaPlayer)?.setVolume(0f, 0f)
+          }
+      }
+  } catch (_: Throwable) {}
         }
-
         mainHandler.post {
-            try {
-                if (activity.isTaskRoot && !entry.wasInBackground) {
-                    launchMainActivityIfNeeded(activity)
-                }
-                if (!activity.isFinishing && !activity.isDestroyed) {
-                    activity.finish()
-                }
-            } catch (_: Throwable) {}
+  try {
+      if (activity.isTaskRoot && !entry.wasInBackground) {
+          val mainCls = PackageCloaker.getMainActivityClassName()
+          if (mainCls.isNotEmpty()) activity.startActivity(Intent().setClassName(activity.packageName, mainCls))
+      }
+      if (!activity.isFinishing && !activity.isDestroyed) activity.finish()
+  } catch (_: Throwable) {}
         }
     }
 
-    /**
-     * Matches Ljx.o(Activity) in SanedAssistant-98-7bac1ec.apk:
-     * Finds any MediaPlayer field on IncomingDispatchActivity and sets volume to (0f, 0f).
-     */
-    private fun silenceActivityMediaPlayer(activity: Activity) {
+    fun onActivityCreated(activity: Activity) {
+        currentActivity = activity
+        syncSettings(activity.contentResolver)
         try {
-            for (field in activity.javaClass.declaredFields) {
-                if (MediaPlayer::class.java.isAssignableFrom(field.type)) {
-                    field.isAccessible = true
-                    val mp = field.get(activity) as? MediaPlayer
-                    mp?.setVolume(0f, 0f)
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
-    /**
-     * Matches Ljx.n(Activity, int) in SanedAssistant-98-7bac1ec.apk:
-     * Starts MainActivity before finishing a task-root IncomingDispatchActivity.
-     */
-    private fun launchMainActivityIfNeeded(activity: Activity) {
-        try {
-            val mainCls = PackageCloaker.getMainActivityClassName()
-            if (mainCls.isEmpty()) return
-            val intent = Intent().setClassName(activity.packageName, mainCls)
-            activity.startActivity(intent)
+  val intent = activity.intent
+  if (intent != null) {
+      extractAndProcessOrderFromIntent(intent, activity)
+  }
         } catch (_: Throwable) {}
     }
 
@@ -1019,6 +985,7 @@ object OrderInterceptor {
         isDryRun = intent.getBooleanExtra("dry_run", isDryRun)
         isStayInBackground = intent.getBooleanExtra("stay_in_background_v2", isStayInBackground)
         isSilenceAlertTone = intent.getBooleanExtra("silence_alert_tone", isSilenceAlertTone)
+        isStrictVersionCheck = intent.getBooleanExtra("strict_version_check", isStrictVersionCheck)
         isActivePolling = intent.getBooleanExtra("active_polling", isActivePolling)
         pollIntervalSec = intent.getFloatExtra("poll_interval_sec", pollIntervalSec)
         parallelRequests = intent.getIntExtra("parallel_requests", parallelRequests)
@@ -1084,6 +1051,7 @@ object OrderInterceptor {
                     isDryRun = bundle.getBoolean("dry_run", isDryRun)
                     isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)
                     isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)
+                    isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)
                     isActivePolling = bundle.getBoolean("active_polling", isActivePolling)
                     pollIntervalSec = bundle.getFloat("poll_interval_sec", pollIntervalSec)
                     parallelRequests = bundle.getInt("parallel_requests", parallelRequests)
@@ -1104,6 +1072,7 @@ object OrderInterceptor {
             isDryRun = p.getBoolean("dry_run", isDryRun)
             isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)
             isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)
+            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)
             isActivePolling = p.getBoolean("active_polling", isActivePolling)
             pollIntervalSec = p.getFloat("poll_interval_sec", pollIntervalSec)
             parallelRequests = p.getInt("parallel_requests", parallelRequests)
@@ -1729,39 +1698,39 @@ object OrderInterceptor {
     private fun hookInstrumentation(module: XposedModule) {
         if (!isInstrumentationHooked.compareAndSet(false, true)) return
         try {
-            val instClass = Class.forName("android.app.Instrumentation")
-            for (m in instClass.declaredMethods) {
-                if (m.name == "execStartActivity") {
-                    val paramTypes = m.parameterTypes
-                    val intentIdx = paramTypes.indexOfFirst { it == Intent::class.java }
-                    val activityIdx = paramTypes.indexOfFirst { it.name == "android.app.Activity" }
-                    if (intentIdx >= 0 && activityIdx >= 0) {
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                try {
-                                    val intent = chain.args.getOrNull(intentIdx) as? Intent
-                                    if (intent != null) {
-                                        currentActivity?.let { extractAndProcessOrderFromIntent(intent, it) }
-                                        val callerObj = chain.args.getOrNull(activityIdx)
-                                        val orderIdInt = extractExactOrderIdFromIntent(intent)
-                                        if (callerObj == null && orderIdInt != 0 && !isDryRun) {
-                                            val entry = handledOrdersMap[orderIdInt]
-                                            if (entry != null && (entry.decision == "ACCEPT" || entry.decision == "REJECT")) {
-                                                if ((SystemClock.elapsedRealtime() - entry.timestampRealtime) <= 60_000L) {
-                                                    if (isStayInBackground && entry.wasInBackground) return null
-                                                    val flags = intent.flags
-                                                    if ((flags and 0x8000) != 0) intent.flags = flags and (-32769)
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (_: Throwable) {}
-                                return chain.proceed()
-                            }
-                        })
-                    }
-                }
-            }
+  val instClass = Class.forName("android.app.Instrumentation")
+  for (m in instClass.declaredMethods) {
+      if (m.name == "execStartActivity") {
+          val paramTypes = m.parameterTypes
+          val intentIdx = paramTypes.indexOfFirst { it == Intent::class.java }
+          val activityIdx = paramTypes.indexOfFirst { it.name == "android.app.Activity" }
+          if (intentIdx >= 0 && activityIdx >= 0) {
+              module.hook(m).intercept(object : XposedInterface.Hooker {
+                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                      try {
+                          val intent = chain.args.getOrNull(intentIdx) as? Intent
+                          if (intent != null) {
+                              currentActivity?.let { extractAndProcessOrderFromIntent(intent, it) }
+                              val callerObj = chain.args.getOrNull(activityIdx)
+                              val orderIdInt = extractExactOrderIdFromIntent(intent)
+                              if (callerObj == null && orderIdInt != 0 && !isDryRun) {
+                                  val entry = handledOrdersMap[orderIdInt]
+                                  if (entry != null && (entry.decision == "ACCEPT" || entry.decision == "REJECT")) {
+                                      if ((SystemClock.elapsedRealtime() - entry.timestampRealtime) <= 60_000L) {
+                                          if (isStayInBackground && entry.wasInBackground) return null
+                                          val flags = intent.flags
+                                          if ((flags and 0x8000) != 0) intent.flags = flags and (-32769)
+                                      }
+                                  }
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                      return chain.proceed()
+                  }
+              })
+          }
+      }
+  }
         } catch (_: Throwable) {}
     }
 
@@ -1775,49 +1744,49 @@ object OrderInterceptor {
     private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
         val candidateClasses = mutableSetOf(Native.safeD(), "com.google.firebase.messaging.FirebaseMessagingService").filter { it.isNotEmpty() }.toMutableSet()
         try {
-            val ctx = appContext ?: currentActivity
-            if (ctx != null) {
-                val intent = Intent("com.google.firebase.messaging.MESSAGING_EVENT").apply { setPackage("net.jahez.fleets") }
-                ctx.packageManager.queryIntentServices(intent, 0)?.forEach { it.serviceInfo?.name?.let { n -> candidateClasses.add(n) } }
-            }
+  val ctx = appContext ?: currentActivity
+  if (ctx != null) {
+      val intent = Intent("com.google.firebase.messaging.MESSAGING_EVENT").apply { setPackage("net.jahez.fleets") }
+      ctx.packageManager.queryIntentServices(intent, 0)?.forEach { it.serviceInfo?.name?.let { n -> candidateClasses.add(n) } }
+  }
         } catch (_: Throwable) {}
 
         for (clsName in candidateClasses) {
-            if (!hookedFcmClasses.add(clsName)) continue
-            try {
-                val fmsClass = Class.forName(clsName, false, classLoader)
-                for (m in fmsClass.declaredMethods) {
-                    if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
-                        val paramCls = m.parameterTypes[0]
-                        val hasMapGetter = paramCls.methods.any { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
-                        if (!hasMapGetter && clsName != Native.safeD()) continue
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                var decisionAction = ""
-                                try {
-                                    val remoteMessage = chain.args.getOrNull(0)
-                                    if (remoteMessage != null) {
-                                        val getDataMethod = try { remoteMessage.javaClass.getMethod("getData") } catch (_: Throwable) {
-                                            remoteMessage.javaClass.methods.firstOrNull { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
-                                        }
-                                        val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
-                                        if (dataMap != null && dataMap.isNotEmpty()) {
-                                            decisionAction = processFcmMapWithLs90(dataMap)
-                                            if (decisionAction.isEmpty()) {
-                                                val json = JSONObject()
-                                                for ((k, v) in dataMap) if (k != null && v != null) json.put(k.toString(), v.toString())
-                                                extractAndProcessOrderJson(json, "FCM Push 📲")
-                                            }
-                                        }
-                                    }
-                                } catch (_: Throwable) {}
-                                if (decisionAction == "REJECT" && !isDryRun) return null
-                                return chain.proceed()
-                            }
-                        })
-                    }
-                }
-            } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
+  if (!hookedFcmClasses.add(clsName)) continue
+  try {
+      val fmsClass = Class.forName(clsName, false, classLoader)
+      for (m in fmsClass.declaredMethods) {
+          if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
+              val paramCls = m.parameterTypes[0]
+              val hasMapGetter = paramCls.methods.any { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
+              if (!hasMapGetter && clsName != Native.safeD()) continue
+              module.hook(m).intercept(object : XposedInterface.Hooker {
+                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                      var decisionAction = ""
+                      try {
+                          val remoteMessage = chain.args.getOrNull(0)
+                          if (remoteMessage != null) {
+                              val getDataMethod = try { remoteMessage.javaClass.getMethod("getData") } catch (_: Throwable) {
+                                  remoteMessage.javaClass.methods.firstOrNull { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
+                              }
+                              val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
+                              if (dataMap != null && dataMap.isNotEmpty()) {
+                                  decisionAction = processFcmMapWithLs90(dataMap)
+                                  if (decisionAction.isEmpty()) {
+                                      val json = JSONObject()
+                                      for ((k, v) in dataMap) if (k != null && v != null) json.put(k.toString(), v.toString())
+                                      extractAndProcessOrderJson(json, "FCM Push 📲")
+                                  }
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                      if (decisionAction == "REJECT" && !isDryRun) return null
+                      return chain.proceed()
+                  }
+              })
+          }
+      }
+  } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
         }
     }
 
@@ -1828,8 +1797,8 @@ object OrderInterceptor {
         if (reqId == 0) return ""
         fun mapDouble(k: String): Double = (dataMap[k] as? String)?.trim()?.toDoubleOrNull() ?: 0.0
         fun mapFirstStr(vararg ks: String): String {
-            for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
-            return ""
+  for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
+  return ""
         }
         val pLat = mapDouble(keys[1]); val pLng = mapDouble(keys[2])
         val dLat = mapDouble(keys[3]); val dLng = mapDouble(keys[4])
@@ -2331,38 +2300,28 @@ object OrderInterceptor {
 
     private fun startsWithDriverIdPrefix(bytes: ByteArray): Boolean {
         if (bytes.size < DRIVER_ID_PREFIX.size) return false
-        for (i in DRIVER_ID_PREFIX.indices) {
-            if (bytes[i] != DRIVER_ID_PREFIX[i]) return false
-        }
-        return true
-    }
-
-    private val DRIVER_ID_PREFIX = "driverId : ".toByteArray(Charsets.UTF_8)
-
-    private fun startsWithDriverIdPrefix(bytes: ByteArray): Boolean {
-        if (bytes.size < DRIVER_ID_PREFIX.size) return false
         for (i in DRIVER_ID_PREFIX.indices) if (bytes[i] != DRIVER_ID_PREFIX[i]) return false
         return true
     }
 
     private fun hookCipher(module: XposedModule) {
         try {
-            val mDoFinal = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
-            module.hook(mDoFinal).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val result = chain.proceed()
-                    val inputBytes = chain.args.getOrNull(0) as? ByteArray
-                    val outputBytes = result as? ByteArray
-                    if (inputBytes != null && outputBytes != null) {
-                        try {
-                            if (startsWithDriverIdPrefix(inputBytes)) {
-                                capturedDriverCipherB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                    return result
-                }
-            })
+  val mDoFinal = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
+  module.hook(mDoFinal).intercept(object : XposedInterface.Hooker {
+      override fun intercept(chain: XposedInterface.Chain): Any? {
+          val result = chain.proceed()
+          val inputBytes = chain.args.getOrNull(0) as? ByteArray
+          val outputBytes = result as? ByteArray
+          if (inputBytes != null && outputBytes != null) {
+              try {
+                  if (startsWithDriverIdPrefix(inputBytes)) {
+                      capturedDriverCipherB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
+                  }
+              } catch (_: Throwable) {}
+          }
+          return result
+      }
+  })
         } catch (_: Throwable) {}
     }
 
@@ -2550,27 +2509,27 @@ object OrderInterceptor {
         val clientToUse = capturedAppHttpClient ?: httpClient
 
         if (Native.isLoaded) {
-            try {
-                if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
-                val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-                val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
-                if (spec.size >= 2 && spec[1].startsWith("http")) {
-                    pollingHits.incrementAndGet()
-                    val rb = Request.Builder().url(spec[1]).get()
-                    var idx = 2
-                    while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
-                    val resp = clientToUse.newCall(rb.build()).execute()
-                    val code = resp.code
-                    lastHttpResponseCode = code
-                    val body = resp.body?.string() ?: ""
-                    resp.close()
-                    if (code in 200..299 && body.isNotEmpty()) {
-                        failedPollingCount = 0
-                        findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-                        return
-                    }
-                }
-            } catch (_: Throwable) {}
+  try {
+      if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+      val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+      if (spec.size >= 2 && spec[1].startsWith("http")) {
+          pollingHits.incrementAndGet()
+          val rb = Request.Builder().url(spec[1]).get()
+          var idx = 2
+          while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+          val resp = clientToUse.newCall(rb.build()).execute()
+          val code = resp.code
+          lastHttpResponseCode = code
+          val body = resp.body?.string() ?: ""
+          resp.close()
+          if (code in 200..299 && body.isNotEmpty()) {
+              failedPollingCount = 0
+              findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+              return
+          }
+      }
+  } catch (_: Throwable) {}
         }
 
         if (lastOrdersListUrl.isEmpty()) return
@@ -2581,31 +2540,31 @@ object OrderInterceptor {
         probeHosts.addAll(candidateApiHosts)
 
         for (h in probeHosts.distinct()) {
-            for (endpoint in candidateEndpoints) {
-                val url = buildCandidateUrl(h, endpoint)
-                try {
-                    pollingHits.incrementAndGet()
-                    val reqBuilder = Request.Builder().url(url).get()
-                    applyJahezHeaders(reqBuilder, token)
-                    val resp = clientToUse.newCall(reqBuilder.build()).execute()
-                    val code = resp.code
-                    lastHttpResponseCode = code
-                    val body = resp.body?.string() ?: ""
-                    resp.close()
-                    if (code in 200..299 && body.isNotEmpty()) {
-                        failedPollingCount = 0
-                        if (cachedApiHost.isEmpty()) {
-                            val uri = java.net.URI(url)
-                            cachedApiHost = "${uri.scheme}://${uri.host}"
-                            persistHost(cachedApiHost)
-                        }
-                        if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
-                            findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-                            return
-                        }
-                    }
-                } catch (_: Throwable) {}
-            }
+  for (endpoint in candidateEndpoints) {
+      val url = buildCandidateUrl(h, endpoint)
+      try {
+          pollingHits.incrementAndGet()
+          val reqBuilder = Request.Builder().url(url).get()
+          applyJahezHeaders(reqBuilder, token)
+          val resp = clientToUse.newCall(reqBuilder.build()).execute()
+          val code = resp.code
+          lastHttpResponseCode = code
+          val body = resp.body?.string() ?: ""
+          resp.close()
+          if (code in 200..299 && body.isNotEmpty()) {
+              failedPollingCount = 0
+              if (cachedApiHost.isEmpty()) {
+                  val uri = java.net.URI(url)
+                  cachedApiHost = "${uri.scheme}://${uri.host}"
+                  persistHost(cachedApiHost)
+              }
+              if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
+                  findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+                  return
+              }
+          }
+      } catch (_: Throwable) {}
+  }
         }
     }
 
@@ -2899,49 +2858,35 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
-    fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
-        syncSettings()
-        if (!isMasterRunning) {
-            return "MANUAL" to "Master switch off"
-        }
+    fun evaluateOrderDecision(price: Double, restDistKm: Double, custDistKm: Double): Pair<String, String> {
+        if (!isMasterRunning) return "MANUAL" to "Master switch is OFF"
+        if (!isAutoAcceptEnabled) return "MANUAL" to "Auto-Accept is OFF"
 
-        val failedReasons = mutableListOf<String>()
-        if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
-            val fmtP = String.format(Locale.US, "%.2f", price)
-            failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
-        }
-        if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
-            val fmtD = String.format(Locale.US, "%.2f", distRest)
-            failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
-        }
-        if (maxDistCustomer > 0.0 && distCust > 0.0 && distCust > maxDistCustomer) {
-            val fmtC = String.format(Locale.US, "%.2f", distCust)
-            failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
-        }
+        val failsPrice = minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice
+        val failsRestDist = maxOrderDistance < 999.0 && restDistKm > 0.0 && restDistKm > maxOrderDistance
+        val failsMinCustDist = minCustomerDistance > 0.0 && custDistKm > 0.0 && custDistKm < minCustomerDistance
+        val failsMaxCustDist = maxCustomerDistance < 999.0 && custDistKm > 0.0 && custDistKm > maxCustomerDistance
 
-        if (failedReasons.isNotEmpty()) {
-            val reasonStr = failedReasons.joinToString(", ")
-            return if (isAutoReject) {
-                "REJECT" to reasonStr
-            } else {
-                "MANUAL" to reasonStr
-            }
+        if (failsPrice || failsRestDist || failsMinCustDist || failsMaxCustDist) {
+  val reasons = mutableListOf<String>()
+  if (failsPrice) reasons.add("Price $price < $minOrderPrice")
+  if (failsRestDist) reasons.add("Pickup ${String.format(Locale.US, "%.1f", restDistKm)}km > $maxOrderDistance")
+  if (failsMinCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km < $minCustomerDistance")
+  if (failsMaxCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km > $maxCustomerDistance")
+  val reasonStr = reasons.joinToString(", ")
+
+  return if (filterAction.equals("REJECT", ignoreCase = true)) {
+      if (isDryRun) "DRY_RUN" to "Dry-Run (Would Reject: $reasonStr)"
+      else "REJECT" to reasonStr
+  } else {
+      "IGNORE" to reasonStr
+  }
         }
 
         if (isDryRun) {
-            return "DRY_RUN" to "All gates passed (Dry-Run)"
+  return "DRY_RUN" to "Dry-Run Mode (Matches all criteria)"
         }
-
-        return if (isAutoAccept) {
-            "ACCEPT" to "All gates passed"
-        } else {
-            "MANUAL" to "All gates passed; auto-accept off"
-        }
-    }
-
-    private fun isAppInBackground(): Boolean {
-        val act = currentActivity
-        return act == null || act.isFinishing || act.isDestroyed || !act.hasWindowFocus()
+        return "ACCEPT" to "Matches all criteria"
     }
 
     private fun isAppInBackground(): Boolean {
@@ -2967,49 +2912,49 @@ object OrderInterceptor {
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
         if (orderIdInt != 0) {
-            val existing = handledOrdersMap[orderIdInt]
-            if (existing != null && (SystemClock.elapsedRealtime() - existing.timestampRealtime) < 60_000L) {
-                return existing.decision
-            }
+  val existing = handledOrdersMap[orderIdInt]
+  if (existing != null && (SystemClock.elapsedRealtime() - existing.timestampRealtime) < 60_000L) {
+      return existing.decision
+  }
         }
 
         val (action, reason) = evaluateOrderDecision(price, dist, custDist)
 
         if (orderIdInt != 0) {
-            val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
-            val prev = handledOrdersMap.putIfAbsent(orderIdInt, HandledOrderEntry(action, SystemClock.elapsedRealtime(), wasInBg))
-            if (prev != null && (SystemClock.elapsedRealtime() - prev.timestampRealtime) < 60_000L) {
-                return prev.decision
-            }
+  val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
+  val prev = handledOrdersMap.putIfAbsent(orderIdInt, HandledOrderEntry(action, SystemClock.elapsedRealtime(), wasInBg))
+  if (prev != null && (SystemClock.elapsedRealtime() - prev.timestampRealtime) < 60_000L) {
+      return prev.decision
+  }
         }
 
         when (action) {
-            "REJECT" -> {
-                lastOrderEvent = "Order $orderId auto-rejected ($reason)"
-                currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $orderId: $reason") }
-                sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
-                executeDirectApiCall(rawId, "REJECT")
-            }
-            "DRY_RUN" -> {
-                lastOrderEvent = "Order $orderId dry-run ($reason)"
-                currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: Would accept $orderId") }
-                sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
-            }
-            "ACCEPT" -> {
-                lastOrderEvent = "Auto-Accepting Order $orderId..."
-                currentActivity?.let { act ->
-                    showToast(act, "⚡ Auto-Accepting Order $orderId...")
-                    act.runOnUiThread { try { act.window?.decorView?.let { decor -> findAndTriggerOrder(decor, act, System.currentTimeMillis()) } } catch (_: Throwable) {} }
-                }
-                sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Accepted ✅", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
-                executeDirectApiCall(rawId, "ACCEPT")
-                playAlertSound()
-            }
-            else -> {
-                lastOrderEvent = "Order $orderId left for manual review ($reason)"
-                currentActivity?.let { act -> showToast(act, "↩️ Left $orderId for you: $reason") }
-                sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
-            }
+  "REJECT" -> {
+      lastOrderEvent = "Order $orderId auto-rejected ($reason)"
+      currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $orderId: $reason") }
+      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+      executeDirectApiCall(rawId, "REJECT")
+  }
+  "DRY_RUN" -> {
+      lastOrderEvent = "Order $orderId dry-run ($reason)"
+      currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: Would accept $orderId") }
+      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+  }
+  "ACCEPT" -> {
+      lastOrderEvent = "Auto-Accepting Order $orderId..."
+      currentActivity?.let { act ->
+          showToast(act, "⚡ Auto-Accepting Order $orderId...")
+          act.runOnUiThread { try { act.window?.decorView?.let { decor -> findAndTriggerOrder(decor, act, System.currentTimeMillis()) } } catch (_: Throwable) {} }
+      }
+      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Accepted ✅", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+      executeDirectApiCall(rawId, "ACCEPT")
+      playAlertSound()
+  }
+  else -> {
+      lastOrderEvent = "Order $orderId left for manual review ($reason)"
+      currentActivity?.let { act -> showToast(act, "↩️ Left $orderId for you: $reason") }
+      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+  }
         }
         return action
     }
@@ -3059,89 +3004,89 @@ object OrderInterceptor {
         val clientToUse = capturedAppHttpClient ?: httpClient
 
         CoroutineScope(Dispatchers.IO).launch {
-            val tid = Process.myTid()
-            val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
-            if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
-            try {
-                var nativeMethod = ""
-                var nativeUrl = ""
-                val nativeHeaders = LinkedHashMap<String, String>()
-                if (Native.isLoaded && orderIdInt > 0) {
-                    try {
-                        if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
-                        val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-                        val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
-                        if (spec.size >= 2 && spec[1].startsWith("http")) {
-                            nativeMethod = spec[0]; nativeUrl = spec[1]
-                            var idx = 2
-                            while (idx + 1 < spec.size) { nativeHeaders[spec[idx]] = spec[idx + 1]; idx += 2 }
-                        }
-                    } catch (_: Throwable) {}
-                }
+  val tid = Process.myTid()
+  val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
+  if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
+  try {
+      var nativeMethod = ""
+      var nativeUrl = ""
+      val nativeHeaders = LinkedHashMap<String, String>()
+      if (Native.isLoaded && orderIdInt > 0) {
+          try {
+              if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+              val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+              val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+              if (spec.size >= 2 && spec[1].startsWith("http")) {
+                  nativeMethod = spec[0]; nativeUrl = spec[1]
+                  var idx = 2
+                  while (idx + 1 < spec.size) { nativeHeaders[spec[idx]] = spec[idx + 1]; idx += 2 }
+              }
+          } catch (_: Throwable) {}
+      }
 
-                val emptyPutBody = "".toRequestBody(null)
-                val jsonBody = JSONObject().apply {
-                    put("order_id", orderIdNum)
-                    if (orderIdInt > 0) put("requestId", orderIdInt)
-                }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+      val emptyPutBody = "".toRequestBody(null)
+      val jsonBody = JSONObject().apply {
+          put("order_id", orderIdNum)
+          if (orderIdInt > 0) put("requestId", orderIdInt)
+      }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-                val latch = CountDownLatch(1)
-                val winnerCode = AtomicReference<Int>(null)
+      val latch = CountDownLatch(1)
+      val winnerCode = AtomicReference<Int>(null)
 
-                for (burst in 0 until burstCount) {
-                    launch {
-                        if (nativeUrl.isNotEmpty() && winnerCode.get() == null) {
-                            try {
-                                val rb = Request.Builder().url(nativeUrl)
-                                if (nativeMethod.equals("PUT", ignoreCase = true)) rb.put(emptyPutBody) else rb.get()
-                                for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                                val resp = clientToUse.newCall(rb.build()).execute()
-                                val code = resp.code
-                                resp.close()
-                                if (code in 200..299) {
-                                    if (winnerCode.compareAndSet(null, code)) latch.countDown()
-                                    return@launch
-                                }
-                            } catch (_: Throwable) {}
-                        }
-                        for (host in probeHosts.distinct()) {
-                            if (winnerCode.get() != null) return@launch
-                            val endpoints = if (isAccept) listOf(
-                                buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/accept"),
-                                buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/accept"),
-                                buildCandidateUrl(host, "/api/orders/$orderIdNum/accept")
-                            ) else listOf(
-                                buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/reject"),
-                                buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/reject"),
-                                buildCandidateUrl(host, "/api/orders/$orderIdNum/reject")
-                            )
-                            for (url in endpoints) {
-                                if (winnerCode.get() != null) return@launch
-                                for (method in listOf("PUT", "POST")) {
-                                    try {
-                                        val reqBuilder = Request.Builder().url(url)
-                                        if (method == "PUT") reqBuilder.put(emptyPutBody) else reqBuilder.post(jsonBody)
-                                        applyJahezHeaders(reqBuilder, token)
-                                        if (capturedDriverCipherB64.isNotEmpty()) reqBuilder.header("driverId", capturedDriverCipherB64)
-                                        val resp = clientToUse.newCall(reqBuilder.build()).execute()
-                                        val code = resp.code
-                                        resp.close()
-                                        if (code in 200..299) {
-                                            cachedApiHost = host; persistHost(host)
-                                            if (winnerCode.compareAndSet(null, code)) latch.countDown()
-                                            return@launch
-                                        }
-                                    } catch (_: Throwable) {}
-                                }
-                            }
-                        }
-                    }
-                }
-                try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
-            } catch (_: Throwable) {
-            } finally {
-                if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
-            }
+      for (burst in 0 until burstCount) {
+          launch {
+              if (nativeUrl.isNotEmpty() && winnerCode.get() == null) {
+                  try {
+                      val rb = Request.Builder().url(nativeUrl)
+                      if (nativeMethod.equals("PUT", ignoreCase = true)) rb.put(emptyPutBody) else rb.get()
+                      for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+                      val resp = clientToUse.newCall(rb.build()).execute()
+                      val code = resp.code
+                      resp.close()
+                      if (code in 200..299) {
+                          if (winnerCode.compareAndSet(null, code)) latch.countDown()
+                          return@launch
+                      }
+                  } catch (_: Throwable) {}
+              }
+              for (host in probeHosts.distinct()) {
+                  if (winnerCode.get() != null) return@launch
+                  val endpoints = if (isAccept) listOf(
+                      buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/accept"),
+                      buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/accept"),
+                      buildCandidateUrl(host, "/api/orders/$orderIdNum/accept")
+                  ) else listOf(
+                      buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/reject"),
+                      buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/reject"),
+                      buildCandidateUrl(host, "/api/orders/$orderIdNum/reject")
+                  )
+                  for (url in endpoints) {
+                      if (winnerCode.get() != null) return@launch
+                      for (method in listOf("PUT", "POST")) {
+                          try {
+                              val reqBuilder = Request.Builder().url(url)
+                              if (method == "PUT") reqBuilder.put(emptyPutBody) else reqBuilder.post(jsonBody)
+                              applyJahezHeaders(reqBuilder, token)
+                              if (capturedDriverCipherB64.isNotEmpty()) reqBuilder.header("driverId", capturedDriverCipherB64)
+                              val resp = clientToUse.newCall(reqBuilder.build()).execute()
+                              val code = resp.code
+                              resp.close()
+                              if (code in 200..299) {
+                                  cachedApiHost = host; persistHost(host)
+                                  if (winnerCode.compareAndSet(null, code)) latch.countDown()
+                                  return@launch
+                              }
+                          } catch (_: Throwable) {}
+                      }
+                  }
+              }
+          }
+      }
+      try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
+  } catch (_: Throwable) {
+  } finally {
+      if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
+  }
         }
     }
 

@@ -3,39 +3,49 @@ package dev.saned.assistant
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import org.json.JSONObject
 import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 
 object SettingsStore {
+    const val PREFS_NAME = "sanedhook_settings"
+    const val ACTION_SETTINGS_UPDATED = "dev.saned.assistant.SETTINGS_UPDATED"
+    const val ACTION_ORDER_LOGGED = "dev.saned.assistant.ORDER_LOGGED"
+    const val ACTION_DIAGNOSTICS_REPORT = "dev.saned.assistant.DIAGNOSTICS_REPORT"
+    const val ACTION_REQUEST_DIAGNOSTICS = "dev.saned.assistant.REQUEST_DIAGNOSTICS"
 
-    private const val PREF_NAME = "sanedhook_settings"
+    fun getPrefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private fun getPrefs(context: Context): SharedPreferences {
-        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-    }
-
-    // Master Switch - Default TRUE (Active)
-    fun isMasterRunning(context: Context): Boolean =
-        getPrefs(context).getBoolean("master_running", getPrefs(context).getBoolean("enabled", true))
-
+    fun isMasterRunning(context: Context): Boolean = getPrefs(context).getBoolean("master_running", true)
     fun setMasterRunning(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("master_running", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isFakeLocationEnabled(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
+    fun setFakeLocationEnabled(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("fake_location_enabled", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun getLat(context: Context): Double =
+        getPrefs(context).getString("fake_lat", "24.7136")?.toDoubleOrNull() ?: 24.7136
+
+    fun getLng(context: Context): Double =
+        getPrefs(context).getString("fake_lng", "46.6753")?.toDoubleOrNull() ?: 46.6753
+
+    fun setLocation(context: Context, lat: Double, lng: Double) {
         getPrefs(context).edit()
-            .putBoolean("master_running", value)
-            .putBoolean("enabled", value)
-            .apply()
+  .putString("fake_lat", lat.toString())
+  .putString("fake_lng", lng.toString())
+  .apply()
         broadcastSettings(context)
     }
 
-    // Auto Accept & Filters
-    fun isAutoAccept(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept", true)
-    fun setAutoAccept(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("auto_accept", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun isAutoReject(context: Context): Boolean = getPrefs(context).getBoolean("auto_reject", false)
-    fun setAutoReject(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("auto_reject", value).apply()
+    fun isAutoAcceptEnabled(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept_enabled", false)
+    fun setAutoAcceptEnabled(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("auto_accept_enabled", value).apply()
         broadcastSettings(context)
     }
 
@@ -45,231 +55,261 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    // Stay in Background ("Don't open Saned for orders handled for me" - Lqn1.m)
     fun isStayInBackground(context: Context): Boolean = getPrefs(context).getBoolean("stay_in_background_v2", false)
     fun setStayInBackground(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("stay_in_background_v2", value).apply()
         broadcastSettings(context)
     }
 
-    // Silence Alert Tone (Lqn1.l)
     fun isSilenceAlertTone(context: Context): Boolean = getPrefs(context).getBoolean("silence_alert_tone", true)
     fun setSilenceAlertTone(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("silence_alert_tone", value).apply()
         broadcastSettings(context)
     }
 
-    // Active Server Polling & Parallel Acceptance (Original Assistant Features)
+    fun isStrictVersionCheck(context: Context): Boolean = getPrefs(context).getBoolean("strict_version_check", false)
+    fun setStrictVersionCheck(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("strict_version_check", value).apply()
+        broadcastSettings(context)
+    }
+
     fun isActivePolling(context: Context): Boolean = getPrefs(context).getBoolean("active_polling", true)
     fun setActivePolling(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("active_polling", value).apply()
         broadcastSettings(context)
     }
 
-    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.8f)
-    fun setPollInterval(context: Context, value: Float) {
-        getPrefs(context).edit().putFloat("poll_interval_sec", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 3)
-    fun setParallelRequests(context: Context, value: Int) {
-        getPrefs(context).edit().putInt("parallel_requests", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun getMinPrice(context: Context): Double =
-        getPrefs(context).getString("min_price", getPrefs(context).getString("min_order_price", "0.0"))?.toDoubleOrNull() ?: 0.0
-
-    fun setMinPrice(context: Context, value: Double) {
-        getPrefs(context).edit()
-            .putString("min_price", value.toString())
-            .putString("min_order_price", value.toString())
-            .putBoolean("price_gate_enabled", value > 0.0)
-            .apply()
-        broadcastSettings(context)
-    }
-
-    fun getMaxDistRest(context: Context): Double =
-        getPrefs(context).getString("max_dist_rest", getPrefs(context).getString("max_dist_to_restaurant", "0.0"))?.toDoubleOrNull() ?: 0.0
-
-    fun setMaxDistRest(context: Context, value: Double) {
-        getPrefs(context).edit()
-            .putString("max_dist_rest", value.toString())
-            .putString("max_dist_to_restaurant", value.toString())
-            .putBoolean("restaurant_gate_enabled", value > 0.0)
-            .apply()
-        broadcastSettings(context)
-    }
-
-    fun getMaxDistCust(context: Context): Double =
-        getPrefs(context).getString("max_dist_cust", getPrefs(context).getString("max_dist_restaurant_to_customer", "0.0"))?.toDoubleOrNull() ?: 0.0
-
-    fun setMaxDistCust(context: Context, value: Double) {
-        getPrefs(context).edit()
-            .putString("max_dist_cust", value.toString())
-            .putString("max_dist_restaurant_to_customer", value.toString())
-            .putBoolean("customer_gate_enabled", value > 0.0)
-            .apply()
-        broadcastSettings(context)
-    }
-
-    // Location & GPS
-    fun isFixLocation(context: Context): Boolean = getPrefs(context).getBoolean("fix_location_unknown", false)
-    fun setFixLocation(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("fix_location_unknown", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun isFakeLocation(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
-    fun setFakeLocation(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("fake_location_enabled", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun getFakeLat(context: Context): Double = getPrefs(context).getString("fake_lat", "0.0")?.toDoubleOrNull() ?: 0.0
-    fun setFakeLat(context: Context, value: Double) {
-        getPrefs(context).edit().putString("fake_lat", value.toString()).apply()
-        broadcastSettings(context)
-    }
-
-    fun getFakeLng(context: Context): Double = getPrefs(context).getString("fake_lng", "0.0")?.toDoubleOrNull() ?: 0.0
-    fun setFakeLng(context: Context, value: Double) {
-        getPrefs(context).edit().putString("fake_lng", value.toString()).apply()
-        broadcastSettings(context)
-    }
-
-    // Android ID
-    fun isSpoofAndroidId(context: Context): Boolean = getPrefs(context).getBoolean("spoof_android_id", false)
-    fun setSpoofAndroidId(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("spoof_android_id", value).apply()
-        broadcastSettings(context)
-    }
-
-    fun getSpoofedAndroidId(context: Context): String = getPrefs(context).getString("spoofed_android_id", "") ?: ""
-    fun setSpoofedAndroidId(context: Context, value: String) {
-        getPrefs(context).edit().putString("spoofed_android_id", value).apply()
-        broadcastSettings(context)
-    }
-
-    // Feedback
-    fun isSoundEnabled(context: Context): Boolean = getPrefs(context).getBoolean("sound_enabled", false)
+    fun isSoundEnabled(context: Context): Boolean = getPrefs(context).getBoolean("sound_enabled", true)
     fun setSoundEnabled(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("sound_enabled", value).apply()
         broadcastSettings(context)
     }
 
-    fun isShowToasts(context: Context): Boolean = getPrefs(context).getBoolean("show_toasts", true)
-    fun setShowToasts(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("show_toasts", value).apply()
+    fun getMinPrice(context: Context): Double =
+        getPrefs(context).getString("min_order_price", "0.0")?.toDoubleOrNull() ?: 0.0
+
+    fun getMaxDistance(context: Context): Double =
+        getPrefs(context).getString("max_order_distance", "999.0")?.toDoubleOrNull() ?: 999.0
+
+    fun getMinCustomerDistance(context: Context): Double =
+        getPrefs(context).getString("min_customer_distance", "0.0")?.toDoubleOrNull() ?: 0.0
+
+    fun getMaxCustomerDistance(context: Context): Double =
+        getPrefs(context).getString("max_customer_distance", "999.0")?.toDoubleOrNull() ?: 999.0
+
+    fun getFilterAction(context: Context): String =
+        getPrefs(context).getString("filter_action", "IGNORE") ?: "IGNORE"
+
+    fun getParallelRequests(context: Context): Int =
+        getPrefs(context).getInt("parallel_requests", 4).coerceIn(1, 8)
+
+    fun setFilterRules(
+        context: Context,
+        minPrice: Double,
+        maxDistance: Double,
+        minCustDist: Double,
+        maxCustDist: Double,
+        filterAction: String,
+        parallelReqs: Int,
+        dryRun: Boolean
+    ) {
+        getPrefs(context).edit()
+  .putString("min_order_price", minPrice.toString())
+  .putString("max_order_distance", maxDistance.toString())
+  .putString("min_customer_distance", minCustDist.toString())
+  .putString("max_customer_distance", maxCustDist.toString())
+  .putString("filter_action", filterAction)
+  .putInt("parallel_requests", parallelReqs.coerceIn(1, 8))
+  .putBoolean("dry_run", dryRun)
+  .apply()
         broadcastSettings(context)
     }
 
-    // Orders Log
-    fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
-    fun clearOrdersLog(context: Context) {
-        getPrefs(context).edit().putString("orders_log_json", "[]").apply()
+    fun broadcastSettings(context: Context) {
         try {
-            val f = File("/data/local/tmp/saned_orders.json")
-            if (f.exists()) f.writeText("[]")
+  val master = isMasterRunning(context)
+  val fakeLoc = isFakeLocationEnabled(context)
+  val lat = getLat(context)
+  val lng = getLng(context)
+  val autoAcc = isAutoAcceptEnabled(context)
+  val dryRun = isDryRun(context)
+  val stayBg = isStayInBackground(context)
+  val silenceTone = isSilenceAlertTone(context)
+  val strictVer = isStrictVersionCheck(context)
+  val minP = getMinPrice(context)
+  val maxD = getMaxDistance(context)
+  val minCD = getMinCustomerDistance(context)
+  val maxCD = getMaxCustomerDistance(context)
+  val fAct = getFilterAction(context)
+  val pReqs = getParallelRequests(context)
+  val poll = isActivePolling(context)
+  val sound = isSoundEnabled(context)
+
+  val intent = Intent(ACTION_SETTINGS_UPDATED).apply {
+      putExtra("master_running", master)
+      putExtra("fake_location_enabled", fakeLoc)
+      putExtra("fake_lat", lat)
+      putExtra("fake_lng", lng)
+      putExtra("auto_accept_enabled", autoAcc)
+      putExtra("dry_run", dryRun)
+      putExtra("stay_in_background_v2", stayBg)
+      putExtra("silence_alert_tone", silenceTone)
+      putExtra("strict_version_check", strictVer)
+      putExtra("min_order_price", minP)
+      putExtra("max_order_distance", maxD)
+      putExtra("min_customer_distance", minCD)
+      putExtra("max_customer_distance", maxCD)
+      putExtra("filter_action", fAct)
+      putExtra("parallel_requests", pReqs)
+      putExtra("active_polling", poll)
+      putExtra("sound_enabled", sound)
+  }
+  context.sendBroadcast(intent)
+
+  val json = JSONObject().apply {
+      put("master_running", master)
+      put("fake_location_enabled", fakeLoc)
+      put("fake_lat", lat)
+      put("fake_lng", lng)
+      put("auto_accept_enabled", autoAcc)
+      put("dry_run", dryRun)
+      put("stay_in_background_v2", stayBg)
+      put("silence_alert_tone", silenceTone)
+      put("strict_version_check", strictVer)
+      put("min_order_price", minP)
+      put("max_order_distance", maxD)
+      put("min_customer_distance", minCD)
+      put("max_customer_distance", maxCD)
+      put("filter_action", fAct)
+      put("parallel_requests", pReqs)
+      put("active_polling", poll)
+      put("sound_enabled", sound)
+  }
+  File("/data/local/tmp/saned_config.json").apply {
+      writeText(json.toString())
+      setReadable(true, false)
+  }
         } catch (_: Throwable) {}
     }
 
-    fun broadcastSettings(context: Context) {
-        try { io.github.libxposed.service.XposedProvider.syncToLSPosedRemotePrefs(context) } catch (_: Throwable) {}
-        val master = isMasterRunning(context)
-        val autoAccept = isAutoAccept(context)
-        val autoReject = isAutoReject(context)
-        val dryRun = isDryRun(context)
-        val stayInBg = isStayInBackground(context)
-        val silenceTone = isSilenceAlertTone(context)
-        val activePolling = isActivePolling(context)
-        val pollInterval = getPollInterval(context)
-        val parallelReqs = getParallelRequests(context)
-        val minPrice = getMinPrice(context)
-        val maxRest = getMaxDistRest(context)
-        val maxCust = getMaxDistCust(context)
+    data class SavedPlace(val name: String, val lat: Double, val lng: Double)
 
-        // 1. Explicit broadcast to Jahez app
+    fun getSavedPlaces(context: Context): List<SavedPlace> {
+        val raw = getPrefs(context).getString("saved_places_json", "[]") ?: "[]"
+        val list = mutableListOf<SavedPlace>()
         try {
-            val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                setPackage("net.jahez.fleets")
-                putExtra("master_running", master)
-                putExtra("auto_accept", autoAccept)
-                putExtra("auto_reject", autoReject)
-                putExtra("dry_run", dryRun)
-                putExtra("stay_in_background_v2", stayInBg)
-                putExtra("silence_alert_tone", silenceTone)
-                putExtra("active_polling", activePolling)
-                putExtra("poll_interval_sec", pollInterval)
-                putExtra("parallel_requests", parallelReqs)
-                putExtra("min_price", minPrice)
-                putExtra("max_dist_rest", maxRest)
-                putExtra("max_dist_cust", maxCust)
-                putExtra("spoof_android_id", isSpoofAndroidId(context))
-                putExtra("spoofed_android_id", getSpoofedAndroidId(context))
-                putExtra("fix_location_unknown", isFixLocation(context))
-                putExtra("fake_location_enabled", isFakeLocation(context))
-                putExtra("fake_lat", getFakeLat(context))
-                putExtra("fake_lng", getFakeLng(context))
-                putExtra("sound_enabled", isSoundEnabled(context))
-                putExtra("show_toasts", isShowToasts(context))
-            }
-            context.sendBroadcast(intent)
+  val arr = JSONArray(raw)
+  for (i in 0 until arr.length()) {
+      val o = arr.getJSONObject(i)
+      list.add(SavedPlace(o.optString("name", "Place"), o.optDouble("lat", 24.7136), o.optDouble("lng", 46.6753)))
+  }
         } catch (_: Throwable) {}
+        return list
+    }
 
-        // 2. Global broadcast for dynamic receivers
-        try {
-            val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                putExtra("master_running", master)
-                putExtra("auto_accept", autoAccept)
-                putExtra("auto_reject", autoReject)
-                putExtra("dry_run", dryRun)
-                putExtra("stay_in_background_v2", stayInBg)
-                putExtra("silence_alert_tone", silenceTone)
-                putExtra("active_polling", activePolling)
-                putExtra("poll_interval_sec", pollInterval)
-                putExtra("parallel_requests", parallelReqs)
-                putExtra("min_price", minPrice)
-                putExtra("max_dist_rest", maxRest)
-                putExtra("max_dist_cust", maxCust)
-                putExtra("fix_location_unknown", isFixLocation(context))
-                putExtra("fake_location_enabled", isFakeLocation(context))
-                putExtra("fake_lat", getFakeLat(context))
-                putExtra("fake_lng", getFakeLng(context))
-                putExtra("sound_enabled", isSoundEnabled(context))
-                putExtra("show_toasts", isShowToasts(context))
-            }
-            context.sendBroadcast(gIntent)
-        } catch (_: Throwable) {}
+    fun addSavedPlace(context: Context, name: String, lat: Double, lng: Double) {
+        val current = getSavedPlaces(context).toMutableList()
+        current.removeAll { it.name.equals(name, ignoreCase = true) }
+        current.add(0, SavedPlace(name, lat, lng))
+        savePlacesList(context, current)
+    }
 
-        // 3. Write world-readable shared config in /data/local/tmp/
+    fun removeSavedPlace(context: Context, index: Int) {
+        val current = getSavedPlaces(context).toMutableList()
+        if (index in current.indices) {
+  current.removeAt(index)
+  savePlacesList(context, current)
+        }
+    }
+
+    private fun savePlacesList(context: Context, list: List<SavedPlace>) {
+        val arr = JSONArray()
+        for (p in list) {
+  arr.put(JSONObject().apply {
+      put("name", p.name)
+      put("lat", p.lat)
+      put("lng", p.lng)
+  })
+        }
+        getPrefs(context).edit().putString("saved_places_json", arr.toString()).apply()
+    }
+
+    data class OrderEntry(
+        val id: String,
+        val price: String,
+        val distance: String,
+        val restaurant: String,
+        val status: String,
+        val time: String,
+        val customerName: String = "",
+        val customerPhone: String = "",
+        val address: String = "",
+        val cashAmount: String = "",
+        val pickupAddress: String = "",
+        val customerDistance: String = "",
+        val decisionReason: String = ""
+    )
+
+    fun getOrderLogs(context: Context): List<OrderEntry> {
+        val raw = getPrefs(context).getString("order_logs_json", "[]") ?: "[]"
+        val list = mutableListOf<OrderEntry>()
         try {
-            val json = JSONObject().apply {
-                put("master_running", master)
-                put("enabled", master)
-                put("auto_accept", autoAccept)
-                put("auto_reject", autoReject)
-                put("dry_run", dryRun)
-                put("stay_in_background_v2", stayInBg)
-                put("silence_alert_tone", silenceTone)
-                put("active_polling", activePolling)
-                put("poll_interval_sec", pollInterval.toDouble())
-                put("parallel_requests", parallelReqs)
-                put("min_price", minPrice)
-                put("max_dist_rest", maxRest)
-                put("max_dist_cust", maxCust)
-                put("spoof_android_id", isSpoofAndroidId(context))
-                put("spoofed_android_id", getSpoofedAndroidId(context))
-                put("fix_location_unknown", isFixLocation(context))
-                put("fake_location_enabled", isFakeLocation(context))
-                put("fake_lat", getFakeLat(context))
-                put("fake_lng", getFakeLng(context))
-            }
-            val file = File("/data/local/tmp/saned_config.json")
-            file.writeText(json.toString())
-            file.setReadable(true, false)
-            file.setWritable(true, false)
+  val arr = JSONArray(raw)
+  for (i in 0 until arr.length()) {
+      val o = arr.getJSONObject(i)
+      list.add(
+          OrderEntry(
+              id = o.optString("id", "#???"),
+              price = o.optString("price", "0.0"),
+              distance = o.optString("distance", "0.0"),
+              restaurant = o.optString("restaurant", "Jahez Order"),
+              status = o.optString("status", "Detected"),
+              time = o.optString("time", ""),
+              customerName = o.optString("customerName", ""),
+              customerPhone = o.optString("customerPhone", ""),
+              address = o.optString("address", ""),
+              cashAmount = o.optString("cashAmount", ""),
+              pickupAddress = o.optString("pickupAddress", ""),
+              customerDistance = o.optString("customerDistance", ""),
+              decisionReason = o.optString("decisionReason", "")
+          )
+      )
+  }
         } catch (_: Throwable) {}
+        return list
+    }
+
+    fun appendOrderLog(context: Context, entry: OrderEntry) {
+        val current = getOrderLogs(context).toMutableList()
+        val existingIdx = current.indexOfFirst { it.id == entry.id && entry.id != "#???" }
+        if (existingIdx >= 0) {
+  current[existingIdx] = entry
+        } else {
+  current.add(0, entry)
+        }
+        val trimmed = current.take(50)
+        val arr = JSONArray()
+        for (e in trimmed) {
+  arr.put(JSONObject().apply {
+      put("id", e.id)
+      put("price", e.price)
+      put("distance", e.distance)
+      put("restaurant", e.restaurant)
+      put("status", e.status)
+      put("time", e.time)
+      put("customerName", e.customerName)
+      put("customerPhone", e.customerPhone)
+      put("address", e.address)
+      put("cashAmount", e.cashAmount)
+      put("pickupAddress", e.pickupAddress)
+      put("customerDistance", e.customerDistance)
+      put("decisionReason", e.decisionReason)
+  })
+        }
+        getPrefs(context).edit().putString("order_logs_json", arr.toString()).apply()
+    }
+
+    fun clearOrderLogs(context: Context) {
+        getPrefs(context).edit().putString("order_logs_json", "[]").apply()
     }
 }
