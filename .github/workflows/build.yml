@@ -1,20 +1,22 @@
-name: Convert SanedAssistant-98 to 100% Open-Source & Build PRO APK
+name: Android CI & Release APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  convert-and-build:
+  build:
     name: Decompile APK to Open-Source, Sync 100% Parity & Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -22,16 +24,16 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
           java-version: '17'
+          distribution: 'temurin'
 
-      - name: Set up Gradle 8.5
+      - name: Setup Gradle 8.5
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Install Android Reversing & Build Tools (JADX + Apktool + Apksigner)
+      - name: Install Android Build & Decompilation Tools (JADX + Apktool)
         run: |
           sudo apt-get update
           sudo apt-get install -y zipalign apksigner apktool zip unzip wget curl python3
@@ -43,7 +45,7 @@ jobs:
             sudo chmod +x /opt/jadx/bin/jadx || true
           fi
 
-      - name: Convert SanedAssistant-98-7bac1ec.apk to Complete Open-Source Project
+      - name: Decompile SanedAssistant-98-7bac1ec.apk into Full Open-Source Export
         run: |
           mkdir -p SanedAssistant-98-OpenSource
           if [ -f "SanedAssistant-98-7bac1ec.apk" ]; then
@@ -55,12 +57,11 @@ jobs:
             apktool d -f SanedAssistant-98-7bac1ec.apk \
               -o SanedAssistant-98-OpenSource/apktool-exact || unzip -q -o SanedAssistant-98-7bac1ec.apk -d SanedAssistant-98-OpenSource/apk-unpacked
           fi
-          zip -r -q SanedAssistant-98-OpenSource.zip SanedAssistant-98-OpenSource app build.gradle.kts settings.gradle.kts gradle.properties
 
-      - name: Sync 100% SanedAssistant-98 Parity (Icons, UI, Audio, libshnative, Ls20, Lfs0, Ls90, Lb11, Ljx)
+      - name: Sync 100% SanedAssistant-98 Parity (Native, Icons, Audio, UI & All 4 Order Sources)
         run: |
           python3 - << 'PYEOF'
-          import os, zipfile
+          import os, re, zipfile
 
           def replace_block(src, start_marker, end_marker, replacement):
               i1 = src.find(start_marker)
@@ -101,7 +102,7 @@ jobs:
 
           # 2. Write Native.kt with JNI bindings + exact decoded constants from libshnative.so
           os.makedirs("app/src/main/java/dev/jing/sanedhook/util", exist_ok=True)
-          open("app/src/main/java/dev/jing/sanedhook/util/Native.kt", "w").write('''package dev.jing.sanedhook.util
+          open("app/src/main/java/dev/jing/sanedhook/util/Native.kt", "w").write("""package dev.jing.sanedhook.util
 
           object Native {
               @JvmField val a: Native = this
@@ -206,10 +207,10 @@ jobs:
               fun safeT(): Array<String> = try { if (isLoaded) t().takeIf { it.isNotEmpty() } ?: FALLBACK_GUARD_CLASSES else FALLBACK_GUARD_CLASSES } catch (_: Throwable) { FALLBACK_GUARD_CLASSES }
               fun safeU(): Array<String> = try { if (isLoaded) u().takeIf { it.isNotEmpty() } ?: FALLBACK_FEATURE_FLAGS else FALLBACK_FEATURE_FLAGS } catch (_: Throwable) { FALLBACK_FEATURE_FLAGS }
           }
-          '''.replace("\n          ", "\n"))
+          """.replace("\n          ", "\n"))
 
-          # 3. Update HookEntry.kt
-          open("app/src/main/java/dev/saned/assistant/HookEntry.kt", "w").write('''package dev.saned.assistant
+          # 3. Write HookEntry.kt in full
+          open("app/src/main/java/dev/saned/assistant/HookEntry.kt", "w").write("""package dev.saned.assistant
 
           import android.app.Activity
           import android.app.Application
@@ -369,10 +370,10 @@ jobs:
                   } catch (_: Throwable) {}
               }
           }
-          '''.replace("\n          ", "\n"))
+          """.replace("\n          ", "\n"))
 
-          # 4. Update PackageCloaker.kt
-          open("app/src/main/java/dev/saned/assistant/PackageCloaker.kt", "w").write('''package dev.saned.assistant
+          # 4. Write PackageCloaker.kt in full
+          open("app/src/main/java/dev/saned/assistant/PackageCloaker.kt", "w").write("""package dev.saned.assistant
 
           import android.app.Activity
           import android.content.pm.ApplicationInfo
@@ -705,49 +706,347 @@ jobs:
                   } catch (_: Throwable) {}
               }
           }
-          '''.replace("\n          ", "\n"))
+          """.replace("\n          ", "\n"))
 
-          # 5. Update SettingsStore.kt
-          ss_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
-          ss = open(ss_path).read()
-          if "isStayInBackground" not in ss:
-              ss = ss.replace(
-                  "fun isActivePolling(context: Context):",
-                  """fun isStayInBackground(context: Context): Boolean = getPrefs(context).getBoolean("stay_in_background_v2", false)
-              fun setStayInBackground(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("stay_in_background_v2", value).apply(); broadcastSettings(context) }
+          # 5. Write SettingsStore.kt in full so no methods are ever skipped
+          open("app/src/main/java/dev/saned/assistant/SettingsStore.kt", "w").write("""package dev.saned.assistant
+
+          import android.content.Context
+          import android.content.Intent
+          import android.content.SharedPreferences
+          import java.io.File
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          object SettingsStore {
+              const val PREFS_NAME = "sanedhook_settings"
+              const val ACTION_SETTINGS_UPDATED = "dev.saned.assistant.SETTINGS_UPDATED"
+              const val ACTION_ORDER_LOGGED = "dev.saned.assistant.ORDER_LOGGED"
+              const val ACTION_DIAGNOSTICS_REPORT = "dev.saned.assistant.DIAGNOSTICS_REPORT"
+              const val ACTION_REQUEST_DIAGNOSTICS = "dev.saned.assistant.REQUEST_DIAGNOSTICS"
+
+              fun getPrefs(context: Context): SharedPreferences =
+                  context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+              fun isMasterRunning(context: Context): Boolean = getPrefs(context).getBoolean("master_running", true)
+              fun setMasterRunning(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("master_running", value).apply()
+                  broadcastSettings(context)
+              }
+
+              fun isFakeLocationEnabled(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
+              fun setFakeLocationEnabled(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("fake_location_enabled", value).apply()
+                  broadcastSettings(context)
+              }
+
+              fun getLat(context: Context): Double =
+                  getPrefs(context).getString("fake_lat", "24.7136")?.toDoubleOrNull() ?: 24.7136
+
+              fun getLng(context: Context): Double =
+                  getPrefs(context).getString("fake_lng", "46.6753")?.toDoubleOrNull() ?: 46.6753
+
+              fun setLocation(context: Context, lat: Double, lng: Double) {
+                  getPrefs(context).edit()
+                      .putString("fake_lat", lat.toString())
+                      .putString("fake_lng", lng.toString())
+                      .apply()
+                  broadcastSettings(context)
+              }
+
+              fun isAutoAcceptEnabled(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept_enabled", false)
+              fun setAutoAcceptEnabled(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("auto_accept_enabled", value).apply()
+                  broadcastSettings(context)
+              }
+
+              fun isDryRun(context: Context): Boolean = getPrefs(context).getBoolean("dry_run", false)
+              fun setDryRun(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("dry_run", value).apply()
+                  broadcastSettings(context)
+              }
+
+              fun isStayInBackground(context: Context): Boolean = getPrefs(context).getBoolean("stay_in_background_v2", false)
+              fun setStayInBackground(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("stay_in_background_v2", value).apply()
+                  broadcastSettings(context)
+              }
+
               fun isSilenceAlertTone(context: Context): Boolean = getPrefs(context).getBoolean("silence_alert_tone", true)
-              fun setSilenceAlertTone(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("silence_alert_tone", value).apply(); broadcastSettings(context) }
+              fun setSilenceAlertTone(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("silence_alert_tone", value).apply()
+                  broadcastSettings(context)
+              }
+
               fun isStrictVersionCheck(context: Context): Boolean = getPrefs(context).getBoolean("strict_version_check", false)
-              fun setStrictVersionCheck(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("strict_version_check", value).apply(); broadcastSettings(context) }
+              fun setStrictVersionCheck(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("strict_version_check", value).apply()
+                  broadcastSettings(context)
+              }
 
-              fun isActivePolling(context: Context):""",
-                  1
-              )
-              ss = ss.replace(
-                  'putExtra("dry_run", dryRun)',
-                  'putExtra("dry_run", dryRun)\n                putExtra("stay_in_background_v2", isStayInBackground(context))\n                putExtra("silence_alert_tone", isSilenceAlertTone(context))\n                putExtra("strict_version_check", isStrictVersionCheck(context))'
-              )
-              ss = ss.replace(
-                  'put("dry_run", dryRun)',
-                  'put("dry_run", dryRun)\n                put("stay_in_background_v2", isStayInBackground(context))\n                put("silence_alert_tone", isSilenceAlertTone(context))\n                put("strict_version_check", isStrictVersionCheck(context))'
-              )
-              open(ss_path, "w").write(ss)
+              fun isActivePolling(context: Context): Boolean = getPrefs(context).getBoolean("active_polling", true)
+              fun setActivePolling(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("active_polling", value).apply()
+                  broadcastSettings(context)
+              }
 
-          # 6. Update OrderInterceptor.kt with all 4 exact sources (Ls20, Lfs0, Ls90, Lb11/Lnz/Lkh/Ljh/Ljx)
+              fun isSoundEnabled(context: Context): Boolean = getPrefs(context).getBoolean("sound_enabled", true)
+              fun setSoundEnabled(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("sound_enabled", value).apply()
+                  broadcastSettings(context)
+              }
+
+              fun getMinPrice(context: Context): Double =
+                  getPrefs(context).getString("min_order_price", "0.0")?.toDoubleOrNull() ?: 0.0
+
+              fun getMaxDistance(context: Context): Double =
+                  getPrefs(context).getString("max_order_distance", "999.0")?.toDoubleOrNull() ?: 999.0
+
+              fun getMinCustomerDistance(context: Context): Double =
+                  getPrefs(context).getString("min_customer_distance", "0.0")?.toDoubleOrNull() ?: 0.0
+
+              fun getMaxCustomerDistance(context: Context): Double =
+                  getPrefs(context).getString("max_customer_distance", "999.0")?.toDoubleOrNull() ?: 999.0
+
+              fun getFilterAction(context: Context): String =
+                  getPrefs(context).getString("filter_action", "IGNORE") ?: "IGNORE"
+
+              fun getParallelRequests(context: Context): Int =
+                  getPrefs(context).getInt("parallel_requests", 4).coerceIn(1, 8)
+
+              fun setFilterRules(
+                  context: Context,
+                  minPrice: Double,
+                  maxDistance: Double,
+                  minCustDist: Double,
+                  maxCustDist: Double,
+                  filterAction: String,
+                  parallelReqs: Int,
+                  dryRun: Boolean
+              ) {
+                  getPrefs(context).edit()
+                      .putString("min_order_price", minPrice.toString())
+                      .putString("max_order_distance", maxDistance.toString())
+                      .putString("min_customer_distance", minCustDist.toString())
+                      .putString("max_customer_distance", maxCustDist.toString())
+                      .putString("filter_action", filterAction)
+                      .putInt("parallel_requests", parallelReqs.coerceIn(1, 8))
+                      .putBoolean("dry_run", dryRun)
+                      .apply()
+                  broadcastSettings(context)
+              }
+
+              fun broadcastSettings(context: Context) {
+                  try {
+                      val master = isMasterRunning(context)
+                      val fakeLoc = isFakeLocationEnabled(context)
+                      val lat = getLat(context)
+                      val lng = getLng(context)
+                      val autoAcc = isAutoAcceptEnabled(context)
+                      val dryRun = isDryRun(context)
+                      val stayBg = isStayInBackground(context)
+                      val silenceTone = isSilenceAlertTone(context)
+                      val strictVer = isStrictVersionCheck(context)
+                      val minP = getMinPrice(context)
+                      val maxD = getMaxDistance(context)
+                      val minCD = getMinCustomerDistance(context)
+                      val maxCD = getMaxCustomerDistance(context)
+                      val fAct = getFilterAction(context)
+                      val pReqs = getParallelRequests(context)
+                      val poll = isActivePolling(context)
+                      val sound = isSoundEnabled(context)
+
+                      val intent = Intent(ACTION_SETTINGS_UPDATED).apply {
+                          putExtra("master_running", master)
+                          putExtra("fake_location_enabled", fakeLoc)
+                          putExtra("fake_lat", lat)
+                          putExtra("fake_lng", lng)
+                          putExtra("auto_accept_enabled", autoAcc)
+                          putExtra("dry_run", dryRun)
+                          putExtra("stay_in_background_v2", stayBg)
+                          putExtra("silence_alert_tone", silenceTone)
+                          putExtra("strict_version_check", strictVer)
+                          putExtra("min_order_price", minP)
+                          putExtra("max_order_distance", maxD)
+                          putExtra("min_customer_distance", minCD)
+                          putExtra("max_customer_distance", maxCD)
+                          putExtra("filter_action", fAct)
+                          putExtra("parallel_requests", pReqs)
+                          putExtra("active_polling", poll)
+                          putExtra("sound_enabled", sound)
+                      }
+                      context.sendBroadcast(intent)
+
+                      val json = JSONObject().apply {
+                          put("master_running", master)
+                          put("fake_location_enabled", fakeLoc)
+                          put("fake_lat", lat)
+                          put("fake_lng", lng)
+                          put("auto_accept_enabled", autoAcc)
+                          put("dry_run", dryRun)
+                          put("stay_in_background_v2", stayBg)
+                          put("silence_alert_tone", silenceTone)
+                          put("strict_version_check", strictVer)
+                          put("min_order_price", minP)
+                          put("max_order_distance", maxD)
+                          put("min_customer_distance", minCD)
+                          put("max_customer_distance", maxCD)
+                          put("filter_action", fAct)
+                          put("parallel_requests", pReqs)
+                          put("active_polling", poll)
+                          put("sound_enabled", sound)
+                      }
+                      File("/data/local/tmp/saned_config.json").apply {
+                          writeText(json.toString())
+                          setReadable(true, false)
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              data class SavedPlace(val name: String, val lat: Double, val lng: Double)
+
+              fun getSavedPlaces(context: Context): List<SavedPlace> {
+                  val raw = getPrefs(context).getString("saved_places_json", "[]") ?: "[]"
+                  val list = mutableListOf<SavedPlace>()
+                  try {
+                      val arr = JSONArray(raw)
+                      for (i in 0 until arr.length()) {
+                          val o = arr.getJSONObject(i)
+                          list.add(SavedPlace(o.optString("name", "Place"), o.optDouble("lat", 24.7136), o.optDouble("lng", 46.6753)))
+                      }
+                  } catch (_: Throwable) {}
+                  return list
+              }
+
+              fun addSavedPlace(context: Context, name: String, lat: Double, lng: Double) {
+                  val current = getSavedPlaces(context).toMutableList()
+                  current.removeAll { it.name.equals(name, ignoreCase = true) }
+                  current.add(0, SavedPlace(name, lat, lng))
+                  savePlacesList(context, current)
+              }
+
+              fun removeSavedPlace(context: Context, index: Int) {
+                  val current = getSavedPlaces(context).toMutableList()
+                  if (index in current.indices) {
+                      current.removeAt(index)
+                      savePlacesList(context, current)
+                  }
+              }
+
+              private fun savePlacesList(context: Context, list: List<SavedPlace>) {
+                  val arr = JSONArray()
+                  for (p in list) {
+                      arr.put(JSONObject().apply {
+                          put("name", p.name)
+                          put("lat", p.lat)
+                          put("lng", p.lng)
+                      })
+                  }
+                  getPrefs(context).edit().putString("saved_places_json", arr.toString()).apply()
+              }
+
+              data class OrderEntry(
+                  val id: String,
+                  val price: String,
+                  val distance: String,
+                  val restaurant: String,
+                  val status: String,
+                  val time: String,
+                  val customerName: String = "",
+                  val customerPhone: String = "",
+                  val address: String = "",
+                  val cashAmount: String = "",
+                  val pickupAddress: String = "",
+                  val customerDistance: String = "",
+                  val decisionReason: String = ""
+              )
+
+              fun getOrderLogs(context: Context): List<OrderEntry> {
+                  val raw = getPrefs(context).getString("order_logs_json", "[]") ?: "[]"
+                  val list = mutableListOf<OrderEntry>()
+                  try {
+                      val arr = JSONArray(raw)
+                      for (i in 0 until arr.length()) {
+                          val o = arr.getJSONObject(i)
+                          list.add(
+                              OrderEntry(
+                                  id = o.optString("id", "#???"),
+                                  price = o.optString("price", "0.0"),
+                                  distance = o.optString("distance", "0.0"),
+                                  restaurant = o.optString("restaurant", "Jahez Order"),
+                                  status = o.optString("status", "Detected"),
+                                  time = o.optString("time", ""),
+                                  customerName = o.optString("customerName", ""),
+                                  customerPhone = o.optString("customerPhone", ""),
+                                  address = o.optString("address", ""),
+                                  cashAmount = o.optString("cashAmount", ""),
+                                  pickupAddress = o.optString("pickupAddress", ""),
+                                  customerDistance = o.optString("customerDistance", ""),
+                                  decisionReason = o.optString("decisionReason", "")
+                              )
+                          )
+                      }
+                  } catch (_: Throwable) {}
+                  return list
+              }
+
+              fun appendOrderLog(context: Context, entry: OrderEntry) {
+                  val current = getOrderLogs(context).toMutableList()
+                  val existingIdx = current.indexOfFirst { it.id == entry.id && entry.id != "#???" }
+                  if (existingIdx >= 0) {
+                      current[existingIdx] = entry
+                  } else {
+                      current.add(0, entry)
+                  }
+                  val trimmed = current.take(50)
+                  val arr = JSONArray()
+                  for (e in trimmed) {
+                      arr.put(JSONObject().apply {
+                          put("id", e.id)
+                          put("price", e.price)
+                          put("distance", e.distance)
+                          put("restaurant", e.restaurant)
+                          put("status", e.status)
+                          put("time", e.time)
+                          put("customerName", e.customerName)
+                          put("customerPhone", e.customerPhone)
+                          put("address", e.address)
+                          put("cashAmount", e.cashAmount)
+                          put("pickupAddress", e.pickupAddress)
+                          put("customerDistance", e.customerDistance)
+                          put("decisionReason", e.decisionReason)
+                      })
+                  }
+                  getPrefs(context).edit().putString("order_logs_json", arr.toString()).apply()
+              }
+
+              fun clearOrderLogs(context: Context) {
+                  getPrefs(context).edit().putString("order_logs_json", "[]").apply()
+              }
+          }
+          """.replace("\n          ", "\n"))
+
+          # 6. Update OrderInterceptor.kt deterministically (idempotent across any commit state)
           oi_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
           oi = open(oi_path).read()
 
-          if "import dev.jing.sanedhook.util.Native" not in oi:
-              oi = oi.replace(
-                  "import android.media.ToneGenerator",
-                  "import android.media.MediaPlayer\nimport android.media.ToneGenerator\nimport android.os.Process\nimport dev.jing.sanedhook.util.Native\nimport java.util.concurrent.CountDownLatch\nimport java.util.concurrent.atomic.AtomicReference",
-                  1
-              )
+          # Ensure required imports exist without duplicates
+          for imp in [
+              "import android.media.MediaPlayer",
+              "import android.os.Process",
+              "import dev.jing.sanedhook.util.Native",
+              "import java.util.concurrent.CountDownLatch",
+              "import java.util.concurrent.atomic.AtomicReference"
+          ]:
+              if imp not in oi:
+                  oi = oi.replace("import android.media.ToneGenerator", imp + "\nimport android.media.ToneGenerator", 1)
 
-          if "handledOrdersMap" not in oi:
-              oi = oi.replace(
-                  "@Volatile var isDryRun: Boolean = false",
-                  """@Volatile var isDryRun: Boolean = false
+          # Replace header fields block cleanly between isDryRun and minOrderPrice
+          oi = replace_block(
+              oi,
+              "@Volatile var isDryRun: Boolean = false",
+              "@Volatile var minOrderPrice: Double = 0.0",
+              """@Volatile var isDryRun: Boolean = false
               @Volatile var isStayInBackground: Boolean = false
               @Volatile var isSilenceAlertTone: Boolean = true
               @Volatile var isStrictVersionCheck: Boolean = false
@@ -778,14 +1077,17 @@ jobs:
               }
 
               data class HandledOrderEntry(val decision: String, val timestampRealtime: Long, val wasInBackground: Boolean)
-              val handledOrdersMap = ConcurrentHashMap<Int, HandledOrderEntry>()""",
-                  1
-              )
+              val handledOrdersMap = ConcurrentHashMap<Int, HandledOrderEntry>()""".replace("\n          ", "\n")
+          )
 
-          if "fun onActivityPreCreated(" not in oi:
-              oi = oi.replace(
-                  "fun onActivityCreated(activity: Activity) {",
-                  """fun onActivityPreCreated(activity: Activity): Int {
+          # Replace Activity lifecycle pre/post hooks cleanly between lastHandledTimestamp and onActivityResumed
+          oi = replace_block(
+              oi,
+              "@Volatile private var lastHandledTimestamp = 0L",
+              "fun onActivityResumed(activity: Activity) {",
+              """@Volatile private var lastHandledTimestamp = 0L
+
+              fun onActivityPreCreated(activity: Activity): Int {
                   currentActivity = activity
                   syncSettings(activity.contentResolver)
                   return try {
@@ -834,10 +1136,19 @@ jobs:
                   }
               }
 
-              fun onActivityCreated(activity: Activity) {""",
-                  1
-              )
+              fun onActivityCreated(activity: Activity) {
+                  currentActivity = activity
+                  syncSettings(activity.contentResolver)
+                  try {
+                      val intent = activity.intent
+                      if (intent != null) {
+                          extractAndProcessOrderFromIntent(intent, activity)
+                      }
+                  } catch (_: Throwable) {}
+              }""".replace("\n          ", "\n")
+          )
 
+          # Source 1: IncomingDispatchActivity Intent extras (Ls20)
           if "val k = Native.safeK()" not in oi:
               oi = oi.replace(
                   "val extras = intent.extras ?: return",
@@ -867,7 +1178,7 @@ jobs:
                                   return
                               }
                           }
-                      } catch (_: Throwable) {}""",
+                      } catch (_: Throwable) {}""".replace("\n          ", "\n"),
                   1
               )
 
@@ -892,7 +1203,7 @@ jobs:
               }
 
               fun scanAllSharedPreferencesForTokens(context: Context) {
-                  readExactJahezEncryptedPrefs(context)""",
+                  readExactJahezEncryptedPrefs(context)""".replace("\n          ", "\n"),
                   1
               )
 
@@ -928,7 +1239,7 @@ jobs:
               }
 
               fun hook(module: XposedModule, classLoader: ClassLoader) {
-                  hookIncomingDispatchActivity(module, classLoader)""",
+                  hookIncomingDispatchActivity(module, classLoader)""".replace("\n          ", "\n"),
                   1
               )
 
@@ -974,7 +1285,7 @@ jobs:
                           }
                       }
                   } catch (_: Throwable) {}
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
           # Source 3: Ls90.f / Ls90.g / Ls90.b SanedFCMNotificationHandler
@@ -1053,7 +1364,7 @@ jobs:
                   val cleanPrice = String.format(Locale.US, "%.2f", delivPrice + bonusAmt).toDoubleOrNull() ?: (delivPrice + bonusAmt)
                   lastOrderEvent = "Order #$reqId detected via FCM Push (Ls90)"
                   return handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = restName, custDist = calcCustDist, sourceChannel = "PUSH")
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
           # Source 4A: invokeNativeString -> Native.safeD..safeQ
@@ -1075,15 +1386,17 @@ jobs:
                   "j" -> Native.safeJ()
                   "q" -> Native.safeQ()
                   else -> ""
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
-          # Source 4B: Lkh.b Cipher.doFinal("driverId : ") fix
+          # Source 4B: Lkh.b Cipher.doFinal("driverId : ") fix (anchored at capturedDriverCipherB64 to prevent duplicate DRIVER_ID_PREFIX)
           oi = replace_block(
               oi,
-              "private fun hookCipher(module: XposedModule) {",
+              '@Volatile var capturedDriverCipherB64: String = ""',
               "private fun hookJsonConstructors(module: XposedModule) {",
-              """private val DRIVER_ID_PREFIX = "driverId : ".toByteArray(Charsets.UTF_8)
+              """@Volatile var capturedDriverCipherB64: String = ""
+
+              private val DRIVER_ID_PREFIX = "driverId : ".toByteArray(Charsets.UTF_8)
 
               private fun startsWithDriverIdPrefix(bytes: ByteArray): Boolean {
                   if (bytes.size < DRIVER_ID_PREFIX.size) return false
@@ -1110,10 +1423,10 @@ jobs:
                           }
                       })
                   } catch (_: Throwable) {}
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
-          # Source 4B2: Lb11.h pollServerForAvailableOrders via Native.safeB(2, 0, ...) & Ljx.f handleOrderViaApi with Lev1
+          # Source 4B2: Lb11.h pollServerForAvailableOrders via Native.safeB(2, 0, ...)
           oi = replace_block(
               oi,
               "private fun pollServerForAvailableOrders() {",
@@ -1183,14 +1496,46 @@ jobs:
                           } catch (_: Throwable) {}
                       }
                   }
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
+          # Source 4B3: Ljx.f handleOrderViaApi with Lev1 (anchored at evaluateOrderDecision to prevent duplicate isAppInBackground)
           oi = replace_block(
               oi,
-              "private fun handleOrderViaApi(",
+              "fun evaluateOrderDecision(",
               "fun scanJahezSharedPreferencesForToken(",
-              """private fun isAppInBackground(): Boolean {
+              """fun evaluateOrderDecision(price: Double, restDistKm: Double, custDistKm: Double): Pair<String, String> {
+                  if (!isMasterRunning) return "MANUAL" to "Master switch is OFF"
+                  if (!isAutoAcceptEnabled) return "MANUAL" to "Auto-Accept is OFF"
+
+                  val failsPrice = minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice
+                  val failsRestDist = maxOrderDistance < 999.0 && restDistKm > 0.0 && restDistKm > maxOrderDistance
+                  val failsMinCustDist = minCustomerDistance > 0.0 && custDistKm > 0.0 && custDistKm < minCustomerDistance
+                  val failsMaxCustDist = maxCustomerDistance < 999.0 && custDistKm > 0.0 && custDistKm > maxCustomerDistance
+
+                  if (failsPrice || failsRestDist || failsMinCustDist || failsMaxCustDist) {
+                      val reasons = mutableListOf<String>()
+                      if (failsPrice) reasons.add("Price $price < $minOrderPrice")
+                      if (failsRestDist) reasons.add("Pickup ${String.format(Locale.US, "%.1f", restDistKm)}km > $maxOrderDistance")
+                      if (failsMinCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km < $minCustomerDistance")
+                      if (failsMaxCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km > $maxCustomerDistance")
+                      val reasonStr = reasons.joinToString(", ")
+
+                      return if (filterAction.equals("REJECT", ignoreCase = true)) {
+                          if (isDryRun) "DRY_RUN" to "Dry-Run (Would Reject: $reasonStr)"
+                          else "REJECT" to reasonStr
+                      } else {
+                          "IGNORE" to reasonStr
+                      }
+                  }
+
+                  if (isDryRun) {
+                      return "DRY_RUN" to "Dry-Run Mode (Matches all criteria)"
+                  }
+                  return "ACCEPT" to "Matches all criteria"
+              }
+
+              private fun isAppInBackground(): Boolean {
                   val act = currentActivity
                   return act == null || act.isFinishing || act.isDestroyed || !act.hasWindowFocus()
               }
@@ -1258,7 +1603,7 @@ jobs:
                       }
                   }
                   return action
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
           # Source 4C: Ljx.h / Ljx$c / Ly0 parallel priority -8 execution with Native.safeB & CountDownLatch(1)
@@ -1364,41 +1709,50 @@ jobs:
                           if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
                       }
                   }
-              }"""
+              }""".replace("\n          ", "\n")
           )
 
-          if 'intent.getBooleanExtra("stay_in_background_v2"' not in oi:
-              oi = oi.replace(
-                  'isDryRun = intent.getBooleanExtra("dry_run", isDryRun)',
-                  'isDryRun = intent.getBooleanExtra("dry_run", isDryRun)\n        isStayInBackground = intent.getBooleanExtra("stay_in_background_v2", isStayInBackground)\n        isSilenceAlertTone = intent.getBooleanExtra("silence_alert_tone", isSilenceAlertTone)\n        isStrictVersionCheck = intent.getBooleanExtra("strict_version_check", isStrictVersionCheck)'
+          # Ensure settings sync includes stay_in_background_v2, silence_alert_tone, strict_version_check
+          if 'intent.getBooleanExtra("strict_version_check"' not in oi:
+              oi = re.sub(
+                  r'isDryRun = intent\.getBooleanExtra\("dry_run", isDryRun\)(\s*isStayInBackground = [^\n]+)?(\s*isSilenceAlertTone = [^\n]+)?(\s*isStrictVersionCheck = [^\n]+)?',
+                  'isDryRun = intent.getBooleanExtra("dry_run", isDryRun)\n        isStayInBackground = intent.getBooleanExtra("stay_in_background_v2", isStayInBackground)\n        isSilenceAlertTone = intent.getBooleanExtra("silence_alert_tone", isSilenceAlertTone)\n        isStrictVersionCheck = intent.getBooleanExtra("strict_version_check", isStrictVersionCheck)',
+                  oi
               )
-              oi = oi.replace(
-                  'isDryRun = bundle.getBoolean("dry_run", isDryRun)',
-                  'isDryRun = bundle.getBoolean("dry_run", isDryRun)\n                    isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)\n                    isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)\n                    isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)'
+          if 'bundle.getBoolean("strict_version_check"' not in oi:
+              oi = re.sub(
+                  r'isDryRun = bundle\.getBoolean\("dry_run", isDryRun\)(\s*isStayInBackground = [^\n]+)?(\s*isSilenceAlertTone = [^\n]+)?(\s*isStrictVersionCheck = [^\n]+)?',
+                  'isDryRun = bundle.getBoolean("dry_run", isDryRun)\n                    isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)\n                    isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)\n                    isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)',
+                  oi
               )
-              oi = oi.replace(
-                  'isDryRun = p.getBoolean("dry_run", isDryRun)',
-                  'isDryRun = p.getBoolean("dry_run", isDryRun)\n            isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)\n            isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)\n            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)'
+          if 'p.getBoolean("strict_version_check"' not in oi:
+              oi = re.sub(
+                  r'isDryRun = p\.getBoolean\("dry_run", isDryRun\)(\s*isStayInBackground = [^\n]+)?(\s*isSilenceAlertTone = [^\n]+)?(\s*isStrictVersionCheck = [^\n]+)?',
+                  'isDryRun = p.getBoolean("dry_run", isDryRun)\n            isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)\n            isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)\n            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)',
+                  oi
               )
+
           open(oi_path, "w").write(oi)
 
           # 7. Update MainActivity.kt with original UI switches (stay_in_background_v2, silence_alert_tone, sound_enabled, strict_version_check)
           ma_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
           if os.path.exists(ma_path):
               ma = open(ma_path).read()
-              if "chkStayInBackground" not in ma:
-                  ma = ma.replace(
-                      "private lateinit var chkDryRun: CheckBox",
+              if "chkStrictVersionCheck" not in ma:
+                  ma = re.sub(
+                      r'private lateinit var chkDryRun: CheckBox(\s*private lateinit var chkStayInBackground: CheckBox)?(\s*private lateinit var chkSilenceAlertTone: CheckBox)?(\s*private lateinit var chkSoundAlert: CheckBox)?(\s*private lateinit var chkStrictVersionCheck: CheckBox)?',
                       """private lateinit var chkDryRun: CheckBox
               private lateinit var chkStayInBackground: CheckBox
               private lateinit var chkSilenceAlertTone: CheckBox
               private lateinit var chkSoundAlert: CheckBox
-              private lateinit var chkStrictVersionCheck: CheckBox""",
-                      1
+              private lateinit var chkStrictVersionCheck: CheckBox""".replace("\n          ", "\n"),
+                      ma,
+                      count=1
                   )
-                  ma = ma.replace(
-                      "layout.addView(chkDryRun)",
-                      """layout.addView(chkDryRun)
+                  if "chkStayInBackground = CheckBox(this)" not in ma:
+                      ma = ma.replace(
+                          "layout.addView(chkDryRun)",
+                          """layout.addView(chkDryRun)
 
                   chkStayInBackground = CheckBox(this).apply {
                       text = "Don't open Saned for orders handled for me (Stay in Background)"
@@ -1422,80 +1776,113 @@ jobs:
                       text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
                       isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
                   }
-                  layout.addView(chkStrictVersionCheck)""",
-                      1
-                  )
-                  ma = ma.replace(
-                      "SettingsStore.setDryRun(this, dryRun)",
+                  layout.addView(chkStrictVersionCheck)""".replace("\n          ", "\n"),
+                          1
+                      )
+                  elif "chkStrictVersionCheck = CheckBox(this)" not in ma:
+                      ma = ma.replace(
+                          "layout.addView(chkSoundAlert)",
+                          """layout.addView(chkSoundAlert)
+
+                  chkStrictVersionCheck = CheckBox(this).apply {
+                      text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
+                      isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
+                  }
+                  layout.addView(chkStrictVersionCheck)""".replace("\n          ", "\n"),
+                          1
+                      )
+                  ma = re.sub(
+                      r'SettingsStore\.setDryRun\(this, dryRun\)(\s*SettingsStore\.setStayInBackground\(this, chkStayInBackground\.isChecked\))?(\s*SettingsStore\.setSilenceAlertTone\(this, chkSilenceAlertTone\.isChecked\))?(\s*SettingsStore\.setSoundEnabled\(this, chkSoundAlert\.isChecked\))?(\s*SettingsStore\.setStrictVersionCheck\(this, chkStrictVersionCheck\.isChecked\))?',
                       """SettingsStore.setDryRun(this, dryRun)
                   SettingsStore.setStayInBackground(this, chkStayInBackground.isChecked)
                   SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
                   SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
-                  SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)""",
-                      1
+                  SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)""".replace("\n          ", "\n"),
+                      ma,
+                      count=1
                   )
                   open(ma_path, "w").write(ma)
 
-          print("Successfully synced all 4 sources, icons, audio controls, and UI switches!")
+          # 8. Create SanedAssistant-98-OpenSource.zip directly in Python
+          with zipfile.ZipFile("SanedAssistant-98-OpenSource.zip", "w", zipfile.ZIP_DEFLATED) as zout:
+              for item in ["SanedAssistant-98-OpenSource", "app", "build.gradle.kts", "settings.gradle.kts", "gradle.properties"]:
+                  if os.path.isfile(item):
+                      zout.write(item)
+                  elif os.path.isdir(item):
+                      for root_dir, _, files in os.walk(item):
+                          for f in files:
+                              fp = os.path.join(root_dir, f)
+                              zout.write(fp)
+
+          print("Successfully synced all 4 sources, icons, audio controls, UI switches, and packaged SanedAssistant-98-OpenSource.zip!")
           PYEOF
 
-      - name: Commit Open-Source Parity Updates to Repository
+      - name: Commit Open-Source Parity Sync to Repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/src/main/ || true
           if ! git diff --cached --quiet; then
             git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (icons + UI + audio + libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
-            git push origin HEAD:${{ github.ref_name }} || true
+            git push origin HEAD:main || true
           fi
 
-      - name: Configure AndroidX & Build Open-Source APK with Gradle
+      - name: Build APK with Gradle
         run: |
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.nonTransitiveRClass=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
           gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
 
-      - name: Align & Sign SanedAssistant-PRO.apk
+      - name: Sign & Prepare Final APK
         run: |
-          APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
-          if [ -z "$APK_FOUND" ]; then
-            echo "Error: No APK found after build!"
+          APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found!"
             exit 1
           fi
+          echo "Found built APK: $APK_PATH"
 
-          keytool -genkeypair -v -keystore release.keystore -alias saned_key \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "saned123" -keypass "saned123" \
-            -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
+          if [[ "$APK_PATH" == *"unsigned"* ]]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            zipalign -v -p 4 "$APK_PATH" app-aligned.apk
+            apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out SanedAssistant-98-OpenSource-Full.apk app-aligned.apk
+          else
+            cp "$APK_PATH" SanedAssistant-98-OpenSource-Full.apk
+          fi
 
-          zipalign -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
-
-          apksigner sign --ks release.keystore \
-            --ks-pass pass:"saned123" \
-            --key-pass pass:"saned123" \
-            --ks-key-alias saned_key \
-            --out SanedAssistant-PRO.apk aligned.apk
-
-      - name: Upload Signed APK & Decompiled Open-Source Project Artifacts
+      - name: Upload Built APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SanedAssistant-PRO-and-OpenSource
-          path: |
-            SanedAssistant-PRO.apk
-            SanedAssistant-98-OpenSource.zip
-          retention-days: 30
+          name: SanedAssistant-98-OpenSource-APK
+          path: SanedAssistant-98-OpenSource-Full.apk
 
-      - name: Create GitHub Release (APK + Full Open-Source Code)
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      - name: Upload Full Open-Source Code Artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            SanedAssistant-PRO.apk
-            SanedAssistant-98-OpenSource.zip
-          tag_name: "v3.1.0-build-${{ github.run_number }}"
-          name: "Saned Assistant PRO v3.1.0 (100% Open-Source Parity #${{ github.run_number }})"
+          name: SanedAssistant-98-OpenSource-SourceCode
+          path: SanedAssistant-98-OpenSource.zip
+
+      - name: Publish Release to GitHub
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.0.0-build-${{ github.run_number }}
+          name: "Saned Assistant v3.0.0 (100% Open-Source Parity #${{ github.run_number }})"
           body: |
-            ### مخرجات البناء التلقائي (Workflow Outputs):
-            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد استخراج الأيقونات الأصلية (`DQ.jpg`, `ZI.png`, `iQ.png`) وحقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض والأصوات (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
-            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool**.
+            ### التحديثات في هذه النسخة (مطابقة 100% للنسخة 98 مفتوحة المصدر)
+            - **استخراج المشروع مفتوح المصدر بالكامل (`SanedAssistant-98-OpenSource.zip`)**: تفكيك كامل لـ `SanedAssistant-98-7bac1ec.apk` باستخدام JADX و Apktool مع تضمين الكود المصدري النظيف `app/src/main`.
+            - **الأيقونات الأصلية**: استخراج وتضمين أيقونة التطبيق الأصلية (`DQ.jpg`) وأيقونات الإشعارات (`ZI.png`, `iQ.png`).
+            - **المكتبة الأصلية (`libshnative.so` + `Native.kt`)**: دمج مكتبة `libshnative.so` مع جميع الـ 21 دالة والـ Fallbacks الكاملة.
+            - **المصادر الأربعة لالتقاط الطلبات وقبولها تلقائياً**:
+              1. `IncomingDispatchActivity` (`Ls20`) مع كتم صوت تنبيه جاهز (`MediaPlayer.setVolume(0f, 0f)`) وإغلاق الشاشة أو البقاء في الخلفية.
+              2. `Instrumentation.execStartActivity` (`Lfs0`) لمنع فتح شاشة الطلب عند تفعيل خيار البقاء في الخلفية وإزالة `FLAG_ACTIVITY_CLEAR_TASK`.
+              3. `SanedFCMNotificationHandler` (`Ls90`) لاعتراض إشعارات FCM وقراءة الـ 18 مفتاحاً وحجب الإشعار عند الرفض التلقائي.
+              4. `Cipher.doFinal("driverId : ")` (`Lkh.b`) + `EncryptedSharedPreferences` (`Lnz`) + `Lb11.h` (Polling) + `Ljx.h` (إرسال متوازٍ بأولوية قصوى `-8` عبر `CountDownLatch(1)`).
+          files: |
+            SanedAssistant-98-OpenSource-Full.apk
+            SanedAssistant-98-OpenSource.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
