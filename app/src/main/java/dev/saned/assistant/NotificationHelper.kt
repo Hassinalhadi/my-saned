@@ -112,7 +112,7 @@ object NotificationHelper {
             builder.setContentTitle(title)
                 .setContentText(summaryParts.joinToString(" · "))
                 .setStyle(Notification.BigTextStyle().bigText(bigText))
-                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setSmallIcon(R.drawable.ic_notif_original)
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_EVENT)

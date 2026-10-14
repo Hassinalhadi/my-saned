@@ -84,6 +84,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chkAutoAccept: CheckBox
     private lateinit var chkAutoReject: CheckBox
     private lateinit var chkDryRun: CheckBox
+    private lateinit var chkStayInBackground: CheckBox
+    private lateinit var chkSilenceAlertTone: CheckBox
+    private lateinit var chkSoundAlert: CheckBox
+    private lateinit var chkStrictVersionCheck: CheckBox
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
@@ -1531,6 +1535,30 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkDryRun)
 
+        chkStayInBackground = CheckBox(this).apply {
+            text = "Don't open Saned for orders handled for me (Stay in Background)"
+            isChecked = SettingsStore.isStayInBackground(this@MainActivity)
+        }
+        layout.addView(chkStayInBackground)
+
+        chkSilenceAlertTone = CheckBox(this).apply {
+            text = "Silence Jahez order alert tone when handled automatically"
+            isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
+        }
+        layout.addView(chkSilenceAlertTone)
+
+        chkSoundAlert = CheckBox(this).apply {
+            text = "Play beep sound when an order is auto-accepted"
+            isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+        }
+        layout.addView(chkSoundAlert)
+
+        chkStrictVersionCheck = CheckBox(this).apply {
+            text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
+            isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
+        }
+        layout.addView(chkStrictVersionCheck)
+
         layout.addView(createLabel("Minimum Order Price (SAR) - Set 0 to disable limit:"))
         edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
         layout.addView(edtMinPrice)
@@ -1665,6 +1693,10 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setAutoAccept(this, autoAccept)
         SettingsStore.setAutoReject(this, autoReject)
         SettingsStore.setDryRun(this, dryRun)
+        SettingsStore.setStayInBackground(this, chkStayInBackground.isChecked)
+        SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
+        SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
+        SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)
         SettingsStore.setMinPrice(this, minPrice)
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)
