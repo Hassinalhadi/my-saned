@@ -1352,4 +1352,150 @@ jobs:
                                                       if (winnerCode.compareAndSet(null, code)) latch.countDown()
                                                       return@launch
                                                   }
-                                              } catch (_: Throwable)
+                                              } catch (_: Throwable) {}
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                          try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
+                      } catch (_: Throwable) {
+                      } finally {
+                          if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
+                      }
+                  }
+              }"""
+          )
+
+          if 'intent.getBooleanExtra("stay_in_background_v2"' not in oi:
+              oi = oi.replace(
+                  'isDryRun = intent.getBooleanExtra("dry_run", isDryRun)',
+                  'isDryRun = intent.getBooleanExtra("dry_run", isDryRun)\n        isStayInBackground = intent.getBooleanExtra("stay_in_background_v2", isStayInBackground)\n        isSilenceAlertTone = intent.getBooleanExtra("silence_alert_tone", isSilenceAlertTone)\n        isStrictVersionCheck = intent.getBooleanExtra("strict_version_check", isStrictVersionCheck)'
+              )
+              oi = oi.replace(
+                  'isDryRun = bundle.getBoolean("dry_run", isDryRun)',
+                  'isDryRun = bundle.getBoolean("dry_run", isDryRun)\n                    isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)\n                    isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)\n                    isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)'
+              )
+              oi = oi.replace(
+                  'isDryRun = p.getBoolean("dry_run", isDryRun)',
+                  'isDryRun = p.getBoolean("dry_run", isDryRun)\n            isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)\n            isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)\n            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)'
+              )
+          open(oi_path, "w").write(oi)
+
+          # 7. Update MainActivity.kt with original UI switches (stay_in_background_v2, silence_alert_tone, sound_enabled, strict_version_check)
+          ma_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
+          if os.path.exists(ma_path):
+              ma = open(ma_path).read()
+              if "chkStayInBackground" not in ma:
+                  ma = ma.replace(
+                      "private lateinit var chkDryRun: CheckBox",
+                      """private lateinit var chkDryRun: CheckBox
+              private lateinit var chkStayInBackground: CheckBox
+              private lateinit var chkSilenceAlertTone: CheckBox
+              private lateinit var chkSoundAlert: CheckBox
+              private lateinit var chkStrictVersionCheck: CheckBox""",
+                      1
+                  )
+                  ma = ma.replace(
+                      "layout.addView(chkDryRun)",
+                      """layout.addView(chkDryRun)
+
+                  chkStayInBackground = CheckBox(this).apply {
+                      text = "Don't open Saned for orders handled for me (Stay in Background)"
+                      isChecked = SettingsStore.isStayInBackground(this@MainActivity)
+                  }
+                  layout.addView(chkStayInBackground)
+
+                  chkSilenceAlertTone = CheckBox(this).apply {
+                      text = "Silence Jahez order alert tone when handled automatically"
+                      isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
+                  }
+                  layout.addView(chkSilenceAlertTone)
+
+                  chkSoundAlert = CheckBox(this).apply {
+                      text = "Play beep sound when an order is auto-accepted"
+                      isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+                  }
+                  layout.addView(chkSoundAlert)
+
+                  chkStrictVersionCheck = CheckBox(this).apply {
+                      text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
+                      isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
+                  }
+                  layout.addView(chkStrictVersionCheck)""",
+                      1
+                  )
+                  ma = ma.replace(
+                      "SettingsStore.setDryRun(this, dryRun)",
+                      """SettingsStore.setDryRun(this, dryRun)
+                  SettingsStore.setStayInBackground(this, chkStayInBackground.isChecked)
+                  SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
+                  SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
+                  SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)""",
+                      1
+                  )
+                  open(ma_path, "w").write(ma)
+
+          print("Successfully synced all 4 sources, icons, audio controls, and UI switches!")
+          PYEOF
+
+      - name: Commit Open-Source Parity Updates to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (icons + UI + audio + libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
+            git push origin HEAD:${{ github.ref_name }} || true
+          fi
+
+      - name: Configure AndroidX & Build Open-Source APK with Gradle
+        run: |
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.nonTransitiveRClass=true" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
+
+      - name: Align & Sign SanedAssistant-PRO.apk
+        run: |
+          APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
+          if [ -z "$APK_FOUND" ]; then
+            echo "Error: No APK found after build!"
+            exit 1
+          fi
+
+          keytool -genkeypair -v -keystore release.keystore -alias saned_key \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "saned123" -keypass "saned123" \
+            -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
+
+          zipalign -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
+
+          apksigner sign --ks release.keystore \
+            --ks-pass pass:"saned123" \
+            --key-pass pass:"saned123" \
+            --ks-key-alias saned_key \
+            --out SanedAssistant-PRO.apk aligned.apk
+
+      - name: Upload Signed APK & Decompiled Open-Source Project Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SanedAssistant-PRO-and-OpenSource
+          path: |
+            SanedAssistant-PRO.apk
+            SanedAssistant-98-OpenSource.zip
+          retention-days: 30
+
+      - name: Create GitHub Release (APK + Full Open-Source Code)
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          files: |
+            SanedAssistant-PRO.apk
+            SanedAssistant-98-OpenSource.zip
+          tag_name: "v3.1.0-build-${{ github.run_number }}"
+          name: "Saned Assistant PRO v3.1.0 (100% Open-Source Parity #${{ github.run_number }})"
+          body: |
+            ### مخرجات البناء التلقائي (Workflow Outputs):
+            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد استخراج الأيقونات الأصلية (`DQ.jpg`, `ZI.png`, `iQ.png`) وحقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض والأصوات (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
+            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool**.
