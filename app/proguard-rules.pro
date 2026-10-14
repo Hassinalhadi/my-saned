@@ -1,0 +1,5 @@
+-keep class dev.saned.assistant.HookEntry { *; }
+-keep class io.github.libxposed.** { *; }
+-keep interface io.github.libxposed.** { *; }
+-keep class dev.saned.assistant.** { *; }
+-keepclassmembers class dev.saned.assistant.** { *; }
