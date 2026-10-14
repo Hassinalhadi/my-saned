@@ -2858,35 +2858,45 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
-    fun evaluateOrderDecision(price: Double, restDistKm: Double, custDistKm: Double): Pair<String, String> {
-        if (!isMasterRunning) return "MANUAL" to "Master switch is OFF"
-        if (!isAutoAcceptEnabled) return "MANUAL" to "Auto-Accept is OFF"
+    fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
+        syncSettings()
+        if (!isMasterRunning) {
+  return "MANUAL" to "Master switch off"
+        }
 
-        val failsPrice = minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice
-        val failsRestDist = maxOrderDistance < 999.0 && restDistKm > 0.0 && restDistKm > maxOrderDistance
-        val failsMinCustDist = minCustomerDistance > 0.0 && custDistKm > 0.0 && custDistKm < minCustomerDistance
-        val failsMaxCustDist = maxCustomerDistance < 999.0 && custDistKm > 0.0 && custDistKm > maxCustomerDistance
+        val failedReasons = mutableListOf<String>()
+        if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
+  val fmtP = String.format(Locale.US, "%.2f", price)
+  failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
+        }
+        if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
+  val fmtD = String.format(Locale.US, "%.2f", distRest)
+  failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
+        }
+        if (maxDistCustomer > 0.0 && distCust > 0.0 && distCust > maxDistCustomer) {
+  val fmtC = String.format(Locale.US, "%.2f", distCust)
+  failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
+        }
 
-        if (failsPrice || failsRestDist || failsMinCustDist || failsMaxCustDist) {
-  val reasons = mutableListOf<String>()
-  if (failsPrice) reasons.add("Price $price < $minOrderPrice")
-  if (failsRestDist) reasons.add("Pickup ${String.format(Locale.US, "%.1f", restDistKm)}km > $maxOrderDistance")
-  if (failsMinCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km < $minCustomerDistance")
-  if (failsMaxCustDist) reasons.add("Dropoff ${String.format(Locale.US, "%.1f", custDistKm)}km > $maxCustomerDistance")
-  val reasonStr = reasons.joinToString(", ")
-
-  return if (filterAction.equals("REJECT", ignoreCase = true)) {
+        if (failedReasons.isNotEmpty()) {
+  val reasonStr = failedReasons.joinToString(", ")
+  return if (isAutoReject) {
       if (isDryRun) "DRY_RUN" to "Dry-Run (Would Reject: $reasonStr)"
       else "REJECT" to reasonStr
   } else {
-      "IGNORE" to reasonStr
+      "MANUAL" to reasonStr
   }
         }
 
         if (isDryRun) {
-  return "DRY_RUN" to "Dry-Run Mode (Matches all criteria)"
+  return "DRY_RUN" to "All gates passed (Dry-Run)"
         }
-        return "ACCEPT" to "Matches all criteria"
+
+        return if (isAutoAccept) {
+  "ACCEPT" to "All gates passed"
+        } else {
+  "MANUAL" to "All gates passed; auto-accept off"
+        }
     }
 
     private fun isAppInBackground(): Boolean {
