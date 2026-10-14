@@ -73,7 +73,7 @@ jobs:
           # Package the complete Open-Source conversion archive
           zip -r -q SanedAssistant-98-OpenSource.zip SanedAssistant-98-OpenSource
 
-      - name: Sync 100% SanedAssistant-98 Parity into Main Kotlin Project (Ls20, Lfs0, Ls90, Lb11, Ljx, Ldv1, Lvh1)
+      - name: Sync 100% SanedAssistant-98 Parity (Icons, UI, Audio, libshnative, Ls20, Lfs0, Ls90, Lb11, Ljx)
         run: |
           python3 - << 'PYEOF'
           import os, zipfile
@@ -85,15 +85,35 @@ jobs:
                   return src[:i1] + replacement + "\n\n    " + src[i2:]
               return src
 
-          # 1. Extract lib/arm64-v8a/libshnative.so into app/src/main/jniLibs/arm64-v8a/
+          # 1. Extract libshnative.so and original icons (DQ.jpg, ZI.png, iQ.png) from SanedAssistant-98-7bac1ec.apk
           apk_path = "SanedAssistant-98-7bac1ec.apk"
           if os.path.exists(apk_path):
               os.makedirs("app/src/main/jniLibs/arm64-v8a", exist_ok=True)
+              os.makedirs("app/src/main/res/drawable", exist_ok=True)
               with zipfile.ZipFile(apk_path, "r") as zf:
-                  if "lib/arm64-v8a/libshnative.so" in zf.namelist():
-                      with open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb") as f:
-                          f.write(zf.read("lib/arm64-v8a/libshnative.so"))
-                      print("Extracted libshnative.so into app/src/main/jniLibs/arm64-v8a/")
+                  names = set(zf.namelist())
+                  if "lib/arm64-v8a/libshnative.so" in names:
+                      open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb").write(zf.read("lib/arm64-v8a/libshnative.so"))
+                  if "res/DQ.jpg" in names:
+                      open("app/src/main/res/drawable/ic_launcher_original.jpg", "wb").write(zf.read("res/DQ.jpg"))
+                  if "res/ZI.png" in names:
+                      open("app/src/main/res/drawable/ic_notif_original.png", "wb").write(zf.read("res/ZI.png"))
+                  if "res/iQ.png" in names:
+                      open("app/src/main/res/drawable/ic_badge_original.png", "wb").write(zf.read("res/iQ.png"))
+              print("Extracted libshnative.so and original icons (DQ.jpg, ZI.png, iQ.png)")
+
+          # 1B. Update AndroidManifest.xml & NotificationHelper.kt to use original icons
+          manifest_path = "app/src/main/AndroidManifest.xml"
+          if os.path.exists(manifest_path):
+              mf = open(manifest_path).read()
+              mf = mf.replace("@android:drawable/sym_def_app_icon", "@drawable/ic_launcher_original")
+              open(manifest_path, "w").write(mf)
+
+          notif_path = "app/src/main/java/dev/saned/assistant/NotificationHelper.kt"
+          if os.path.exists(notif_path):
+              nf = open(notif_path).read()
+              nf = nf.replace("android.R.drawable.stat_notify_chat", "R.drawable.ic_notif_original")
+              open(notif_path, "w").write(nf)
 
           # 2. Write Native.kt with JNI bindings + exact decoded constants from libshnative.so
           os.makedirs("app/src/main/java/dev/jing/sanedhook/util", exist_ok=True)
@@ -1356,7 +1376,62 @@ jobs:
           )
 
           open(oi_path, "w").write(oi)
-          print("Successfully synced all 4 sources and version checks into OrderInterceptor.kt")
+
+          # 7. Update MainActivity.kt with original UI switches (stay_in_background_v2, silence_alert_tone, sound_enabled, strict_version_check)
+          ma_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
+          if os.path.exists(ma_path):
+              ma = open(ma_path).read()
+              if "chkStayInBackground" not in ma:
+                  ma = ma.replace(
+                      "private lateinit var chkDryRun: CheckBox",
+                      """private lateinit var chkDryRun: CheckBox
+              private lateinit var chkStayInBackground: CheckBox
+              private lateinit var chkSilenceAlertTone: CheckBox
+              private lateinit var chkSoundAlert: CheckBox
+              private lateinit var chkStrictVersionCheck: CheckBox""",
+                      1
+                  )
+                  ma = ma.replace(
+                      "layout.addView(chkDryRun)",
+                      """layout.addView(chkDryRun)
+
+                  chkStayInBackground = CheckBox(this).apply {
+                      text = "Don't open Saned for orders handled for me (Stay in Background)"
+                      isChecked = SettingsStore.isStayInBackground(this@MainActivity)
+                  }
+                  layout.addView(chkStayInBackground)
+
+                  chkSilenceAlertTone = CheckBox(this).apply {
+                      text = "Silence Jahez order alert tone when handled automatically"
+                      isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
+                  }
+                  layout.addView(chkSilenceAlertTone)
+
+                  chkSoundAlert = CheckBox(this).apply {
+                      text = "Play beep sound when an order is auto-accepted"
+                      isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+                  }
+                  layout.addView(chkSoundAlert)
+
+                  chkStrictVersionCheck = CheckBox(this).apply {
+                      text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
+                      isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
+                  }
+                  layout.addView(chkStrictVersionCheck)""",
+                      1
+                  )
+                  ma = ma.replace(
+                      "SettingsStore.setDryRun(this, dryRun)",
+                      """SettingsStore.setDryRun(this, dryRun)
+                  SettingsStore.setStayInBackground(this, chkStayInBackground.isChecked)
+                  SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
+                  SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
+                  SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)""",
+                      1
+                  )
+                  open(ma_path, "w").write(ma)
+
+          print("Successfully synced all 4 sources, icons, audio controls, and UI switches!")
           PYEOF
 
       - name: Commit Open-Source Parity Updates to Repository
@@ -1365,7 +1440,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/src/main/ || true
           if ! git diff --cached --quiet; then
-            git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
+            git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (icons + UI + audio + libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
             git push origin HEAD:${{ github.ref_name }} || true
           fi
 
@@ -1417,5 +1492,5 @@ jobs:
           name: "Saned Assistant PRO v3.1.0 (100% Open-Source Parity #${{ github.run_number }})"
           body: |
             ### مخرجات البناء التلقائي (Workflow Outputs):
-            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد حقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
-            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool** (يحتوي على مشروع Gradle الكامل + الكود المصدري Java/Kotlin + ملفات الـ Resources والـ Smali + مكتبة `libshnative.so`).
+            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد استخراج الأيقونات الأصلية (`DQ.jpg`, `ZI.png`, `iQ.png`) وحقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض والأصوات (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
+            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool**.
