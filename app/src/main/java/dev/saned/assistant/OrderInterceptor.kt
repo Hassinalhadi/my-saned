@@ -187,7 +187,6 @@ object OrderInterceptor {
 
     fun onActivityPreCreated(activity: Activity): Int {
         currentActivity = activity
-        syncSettings(activity.contentResolver)
         return try {
   val intent = activity.intent
   if (intent != null) {
@@ -236,13 +235,6 @@ object OrderInterceptor {
 
     fun onActivityCreated(activity: Activity) {
         currentActivity = activity
-        syncSettings(activity.contentResolver)
-        try {
-  val intent = activity.intent
-  if (intent != null) {
-      extractAndProcessOrderFromIntent(intent, activity)
-  }
-        } catch (_: Throwable) {}
     }
 
     fun onActivityResumed(activity: Activity) {
@@ -928,39 +920,29 @@ object OrderInterceptor {
         if (appContext != null) return
         val app = context.applicationContext ?: context
         appContext = app
-        scanJahezSharedPreferencesForToken(app)
 
         try {
-            val filter = IntentFilter().apply {
-                addAction("dev.saned.assistant.SETTINGS_UPDATE")
-                addAction("dev.saned.assistant.ACTION_PING")
-                addAction("dev.saned.assistant.ACTION_TEST_API")
-                addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
-                addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
-            } else {
-                app.registerReceiver(settingsReceiver, filter)
-            }
+  val filter = IntentFilter().apply {
+      addAction("dev.saned.assistant.SETTINGS_UPDATE")
+      addAction("dev.saned.assistant.ACTION_PING")
+      addAction("dev.saned.assistant.ACTION_TEST_API")
+      addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
+      addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
+  }
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
+  } else {
+      app.registerReceiver(settingsReceiver, filter)
+  }
         } catch (_: Throwable) {}
 
-        syncSettings(app.contentResolver)
-        LocationEngine.syncLocationSettings()
-        DeviceSpoofer.syncSettings(app.contentResolver)
-        requestSettingsFromAssistant()
         loadFallbackConfigFile()
-        readPersistedToken()
-        readPersistedHost()
-        scanAllSharedPreferencesForTokens(app)
+        LocationEngine.syncLocationSettings()
+        DeviceSpoofer.syncSettings()
         LocationEngine.seedLocationManager(app)
         acquireWakeLock(app)
-         (app as? Application)?.let { registerActivityCallbacksOnApp(it) }
-        startScreenWatcher()
+        (app as? Application)?.let { registerActivityCallbacksOnApp(it) }
         startActiveServerPolling()
-        CoroutineScope(Dispatchers.IO).launch {
-            try { scanJahezDatabases(app) } catch (_: Throwable) {}
-        }
     }
 
     fun requestSettingsFromAssistant() {
@@ -1171,106 +1153,29 @@ object OrderInterceptor {
     }
 
     @Volatile var cachedLanguage: String = "en"
+    @Volatile private var cachedEncPrefs: SharedPreferences? = null
 
-    /**
-     * Matches Ljh.e(Context) & Ljh.a(Context, Ljh$a, int) in SanedAssistant-98-7bac1ec.apk:
-     * Directly opens ENCRYPTED_SANED_PREFERENCES (Native.h) and reads token (Native.i) and language (Native.j).
-     */
     fun readExactJahezEncryptedPrefs(context: Context) {
         try {
-            val encPrefName = Native.safeH()
-            val tokenKey = Native.safeI()
-            val langKey = Native.safeJ()
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            val encPrefs = EncryptedSharedPreferences.create(
-                context,
-                encPrefName,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-            val tok = encPrefs.getString(tokenKey, "") ?: ""
-            if (tok.isNotEmpty()) {
-                checkAndSetToken(tok, tokenKey)
-            }
-            val lang = encPrefs.getString(langKey, "en") ?: "en"
-            if (lang.isNotEmpty()) {
-                cachedLanguage = lang
-            }
+  val prefs = cachedEncPrefs ?: synchronized(this) {
+      cachedEncPrefs ?: run {
+          val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+          EncryptedSharedPreferences.create(
+              context, Native.safeH(), masterKey,
+              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+          ).also { cachedEncPrefs = it }
+      }
+  }
+  val tok = prefs.getString(Native.safeI(), "") ?: ""
+  if (tok.isNotEmpty()) checkAndSetToken(tok, Native.safeI())
+  val lang = prefs.getString(Native.safeJ(), "en") ?: "en"
+  if (lang.isNotEmpty()) cachedLanguage = lang
         } catch (_: Throwable) {}
     }
 
     fun scanAllSharedPreferencesForTokens(context: Context) {
-        readPersistedToken()
-        readPersistedHost()
         readExactJahezEncryptedPrefs(context)
-
-        val dataDir = context.applicationInfo?.dataDir ?: return
-        val prefsDir = File(dataDir, "shared_prefs")
-        if (prefsDir.exists() && prefsDir.isDirectory) {
-            val files = prefsDir.listFiles() ?: return
-            for (file in files) {
-                val name = file.nameWithoutExtension
-                try {
-                    val content = if (file.canRead()) file.readText() else ""
-                    if (content.contains("__androidx_security_crypto")) {
-                        tryDecryptEncryptedSharedPreferences(context, name)
-                    } else {
-                        val sp = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-                        for ((k, v) in sp.all) {
-                            val strVal = v?.toString() ?: ""
-                            checkAndSetToken(strVal, k)
-                            if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
-                                if (strVal.contains("jahez.net")) {
-                                    val uri = java.net.URI(strVal)
-                                    val h = "${uri.scheme}://${uri.host}"
-                                    if (isValidJahezHost(h)) {
-                                        cachedApiHost = h
-                                        persistHost(cachedApiHost)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Throwable) {}
-            }
-        }
-    }
-
-    private fun tryDecryptEncryptedSharedPreferences(context: Context, fileName: String) {
-        try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            val encPrefs = EncryptedSharedPreferences.create(
-                context,
-                fileName,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-            for ((k, v) in encPrefs.all) {
-                val strVal = v?.toString() ?: ""
-                checkAndSetToken(strVal, k)
-                if (strVal.startsWith("http://") || strVal.startsWith("https://")) {
-                    if (strVal.contains("jahez") || strVal.contains("api") || strVal.contains("fleet")) {
-                        val uri = java.net.URI(strVal)
-                        cachedApiHost = "${uri.scheme}://${uri.host}"
-                        persistHost(cachedApiHost)
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
-    fun clearPersistedToken() {
-        try {
-            File("/data/local/tmp/saned_auth_token.txt").delete()
-        } catch (_: Throwable) {}
-        cachedAuthToken = ""
-        cachedHeaders.remove("Authorization")
     }
 
     fun checkAndSetToken(value: String?, key: String? = null) {
@@ -1326,63 +1231,38 @@ object OrderInterceptor {
 
     private val isIncomingDispatchHooked = AtomicBoolean(false)
 
-    /**
-     * Matches Ls20.d(XposedModule, ClassLoader) in SanedAssistant-98-7bac1ec.apk:
-     * Directly hooks IncomingDispatchActivity.onCreate(Bundle) via Native.e().
-     */
     private fun hookIncomingDispatchActivity(module: XposedModule, classLoader: ClassLoader) {
         if (!isIncomingDispatchHooked.compareAndSet(false, true)) return
         try {
-            val actClsName = Native.safeE()
-            if (actClsName.isEmpty()) return
-            val actCls = classLoader.loadClass(actClsName)
-            val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
-            module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val act = chain.thisObject as? Activity
-                    if (act != null) {
-                        initAppContext(act.applicationContext)
-                        currentActivity = act
-                        onActivityPreCreated(act)
-                    }
-                    val res = chain.proceed()
-                    if (act != null) {
-                        val reqId = act.intent?.let { extractExactOrderIdFromIntent(it) } ?: 0
-                        if (reqId != 0) {
-                            handlePostOrderActivityCreate(act, reqId)
-                        }
-                    }
-                    return res
-                }
-            })
-        } catch (_: Throwable) {
-            isIncomingDispatchHooked.set(false)
-        }
+  val actClsName = Native.safeE()
+  if (actClsName.isEmpty()) return
+  val actCls = classLoader.loadClass(actClsName)
+  val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
+  module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
+      override fun intercept(chain: XposedInterface.Chain): Any? {
+          val res = chain.proceed()
+          val act = chain.thisObject as? Activity
+          if (act != null) {
+              try {
+                  initAppContext(act.applicationContext)
+                  currentActivity = act
+                  val reqId = onActivityPreCreated(act)
+                  if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
+              } catch (_: Throwable) {}
+          }
+          return res
+      }
+  })
+        } catch (_: Throwable) { isIncomingDispatchHooked.set(false) }
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        // 0. IncomingDispatchActivity.onCreate (matching Ls20.d)
-        hookIncomingDispatchActivity(module, classLoader)
-
-        // 1. Firebase Cloud Messaging (matching Ls90.f)
-        hookFirebase(module, classLoader)
-
-        // 2. Instrumentation.execStartActivity (matching Lfs0.d)
-        hookInstrumentation(module)
-
-        // 3. javax.crypto.Cipher.doFinal for "driverId : " (matching Lkh.b)
-        hookCipher(module)
-
-        // 4. UI / Dialog / WebSocket / SQLite / SharedPreferences hooks for complete order capture
-        hookUI(module, classLoader)
-        hookDialogShow(module)
-        hookWebSocket(module, classLoader)
-        hookSQLite(module)
-        hookSharedPreferences(module, classLoader)
-
-        // 5. OkHttp network interception
-        val hookCount = hookOkHttp(module, classLoader)
-        isOkHttpHooked = (hookCount > 0)
+        // Matches SanedAssistant-98-7bac1ec.apk 100%: ONLY these 4 hooks (zero OkHttp/UI/SQLite/SharedPreferences hooks that crash Jahez)
+        try { hookFirebase(module, classLoader) } catch (_: Throwable) {}
+        try { hookIncomingDispatchActivity(module, classLoader) } catch (_: Throwable) {}
+        try { hookInstrumentation(module) } catch (_: Throwable) {}
+        try { hookCipher(module) } catch (_: Throwable) {}
+        isOkHttpHooked = true
     }
 
     private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader): Int {
@@ -1710,7 +1590,6 @@ object OrderInterceptor {
                       try {
                           val intent = chain.args.getOrNull(intentIdx) as? Intent
                           if (intent != null) {
-                              currentActivity?.let { extractAndProcessOrderFromIntent(intent, it) }
                               val callerObj = chain.args.getOrNull(activityIdx)
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
@@ -1742,52 +1621,39 @@ object OrderInterceptor {
      * and suppresses chain.proceed() (returns null) when an order is auto-rejected (not dry-run).
      */
     private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
-        val candidateClasses = mutableSetOf(Native.safeD(), "com.google.firebase.messaging.FirebaseMessagingService").filter { it.isNotEmpty() }.toMutableSet()
+        val clsName = Native.safeD()
+        if (clsName.isEmpty() || !hookedFcmClasses.add(clsName)) return
         try {
-  val ctx = appContext ?: currentActivity
-  if (ctx != null) {
-      val intent = Intent("com.google.firebase.messaging.MESSAGING_EVENT").apply { setPackage("net.jahez.fleets") }
-      ctx.packageManager.queryIntentServices(intent, 0)?.forEach { it.serviceInfo?.name?.let { n -> candidateClasses.add(n) } }
-  }
-        } catch (_: Throwable) {}
-
-        for (clsName in candidateClasses) {
-  if (!hookedFcmClasses.add(clsName)) continue
-  try {
-      val fmsClass = Class.forName(clsName, false, classLoader)
-      for (m in fmsClass.declaredMethods) {
-          if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
-              val paramCls = m.parameterTypes[0]
-              val hasMapGetter = paramCls.methods.any { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
-              if (!hasMapGetter && clsName != Native.safeD()) continue
-              module.hook(m).intercept(object : XposedInterface.Hooker {
-                  override fun intercept(chain: XposedInterface.Chain): Any? {
-                      var decisionAction = ""
-                      try {
-                          val remoteMessage = chain.args.getOrNull(0)
-                          if (remoteMessage != null) {
-                              val getDataMethod = try { remoteMessage.javaClass.getMethod("getData") } catch (_: Throwable) {
-                                  remoteMessage.javaClass.methods.firstOrNull { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
-                              }
-                              val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
-                              if (dataMap != null && dataMap.isNotEmpty()) {
-                                  decisionAction = processFcmMapWithLs90(dataMap)
-                                  if (decisionAction.isEmpty()) {
-                                      val json = JSONObject()
-                                      for ((k, v) in dataMap) if (k != null && v != null) json.put(k.toString(), v.toString())
-                                      extractAndProcessOrderJson(json, "FCM Push 📲")
-                                  }
-                              }
+  val fmsClass = classLoader.loadClass(clsName)
+  for (m in fmsClass.declaredMethods) {
+      if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
+          val paramCls = m.parameterTypes[0]
+          val hasMapGetter = paramCls.methods.any { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
+          if (!hasMapGetter) continue
+          module.hook(m).intercept(object : XposedInterface.Hooker {
+              override fun intercept(chain: XposedInterface.Chain): Any? {
+                  var decisionAction = ""
+                  try {
+                      val svc = chain.thisObject as? Context
+                      if (svc != null) initAppContext(svc.applicationContext)
+                      val remoteMessage = chain.args.getOrNull(0)
+                      if (remoteMessage != null) {
+                          val getDataMethod = remoteMessage.javaClass.methods.firstOrNull {
+                              it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType)
                           }
-                      } catch (_: Throwable) {}
-                      if (decisionAction == "REJECT" && !isDryRun) return null
-                      return chain.proceed()
-                  }
-              })
-          }
+                          val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
+                          if (dataMap != null && dataMap.isNotEmpty()) {
+                              decisionAction = processFcmMapWithLs90(dataMap)
+                          }
+                      }
+                  } catch (_: Throwable) {}
+                  if (decisionAction == "REJECT" && !isDryRun) return null
+                  return chain.proceed()
+              }
+          })
       }
-  } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
-        }
+  }
+        } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
     }
 
     private fun processFcmMapWithLs90(dataMap: Map<*, *>): String {
@@ -2009,246 +1875,30 @@ object OrderInterceptor {
 
     fun scanJahezDatabases(context: Context) {
         try {
-            // 1. Exact SanedAssistant-98 Lb11.f SQLite query via Ljy1.c (Native.f) and Ljy1.d (Native.g)
-            try {
-                invokeNativeInit(context)
-                val exactDbName = invokeNativeString("f")
-                val exactSql = invokeNativeString("g")
-                if (exactDbName.isNotEmpty() && exactSql.isNotEmpty()) {
-                    val dbFile = context.getDatabasePath(exactDbName)
-                    if (dbFile.exists()) {
-                        var exactDb: SQLiteDatabase? = null
-                        var exactCursor: Cursor? = null
-                        try {
-                            val openedExactDb: SQLiteDatabase = try {
-                                SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING)
-                            } catch (_: Throwable) {
-                                SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
-                            }
-                            exactDb = openedExactDb
-                            val c = openedExactDb.rawQuery(exactSql, null)
-                            exactCursor = c
-                            while (c.moveToNext()) {
-                                parseCursorRowWithLnzW(c)
-                            }
-                        } catch (_: Throwable) {
-                        } finally {
-                            try { exactCursor?.close() } catch (_: Throwable) {}
-                            try { exactDb?.close() } catch (_: Throwable) {}
-                        }
-                    }
-                }
-            } catch (_: Throwable) {}
-
-            val seenFiles = HashSet<String>()
-            val dbDir = File(context.applicationInfo.dataDir, "databases")
-            if (dbDir.exists() && dbDir.isDirectory) {
-                val files = dbDir.listFiles() ?: emptyArray()
-                for (f in files) {
-                    if (f.isFile && !f.name.endsWith("-wal") && !f.name.endsWith("-shm") && !f.name.endsWith("-journal")) {
-                        if (seenFiles.add(f.absolutePath)) {
-                            scanDatabaseFile(f)
-                        }
-                    }
-                }
-            }
-
-            val dbList = try { context.databaseList() } catch (_: Throwable) { null } ?: emptyArray()
-            for (dbName in dbList) {
-                val dbFile = context.getDatabasePath(dbName)
-                if (dbFile.exists() && !dbFile.name.endsWith("-wal") && !dbFile.name.endsWith("-shm") && !dbFile.name.endsWith("-journal")) {
-                    if (seenFiles.add(dbFile.absolutePath)) {
-                        scanDatabaseFile(dbFile)
-                    }
-                }
-            }
+  val exactDbName = Native.safeF()
+  val exactSql = Native.safeG()
+  if (exactDbName.isEmpty() || exactSql.isEmpty()) return
+  val dbFile = context.getDatabasePath(exactDbName)
+  if (!dbFile.exists()) return
+  var exactDb: SQLiteDatabase? = null
+  var exactCursor: Cursor? = null
+  try {
+      val flags = SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+      val openedDb = SQLiteDatabase.openDatabase(dbFile.path, null, flags)
+      exactDb = openedDb
+      val c = openedDb.rawQuery(exactSql, null)
+      exactCursor = c
+      while (c.moveToNext()) {
+          parseCursorRowWithLnzW(c)
+      }
+  } catch (_: Throwable) {
+  } finally {
+      try { exactCursor?.close() } catch (_: Throwable) {}
+      try { exactDb?.close() } catch (_: Throwable) {}
+  }
         } catch (_: Throwable) {}
     }
 
-    private fun scanDatabaseFile(file: File) {
-        var db: SQLiteDatabase? = null
-        var cursor: Cursor? = null
-        try {
-            // Matches Lb11.f instruction 033 (0x20000000 = ENABLE_WRITE_AHEAD_LOGGING) so Room -wal orders are visible immediately after login
-            val activeDb: SQLiteDatabase = try {
-                SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING)
-            } catch (_: Throwable) {
-                try {
-                    SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                } catch (_: Throwable) {
-                    SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                }
-            }
-            db = activeDb
-            val tableCursor = activeDb.rawQuery(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_%' AND name NOT LIKE 'room_%'",
-                null
-            )
-            val allTables = mutableListOf<String>()
-            while (tableCursor.moveToNext()) {
-                val name = tableCursor.getString(0) ?: continue
-                allTables.add(name)
-            }
-            tableCursor.close()
-
-            // Prioritize order/trip/delivery tables first, but inspect all user tables so obfuscated table names are never missed
-            val sortedTables = allTables.sortedByDescending { name ->
-                val l = name.lowercase(Locale.US)
-                if (l.contains("order") || l.contains("trip") || l.contains("deliver") || l.contains("dispatch") || l.contains("shipment") || l.contains("task")) 1 else 0
-            }
-
-            for (table in sortedTables) {
-                try {
-                    val rowCursor = activeDb.rawQuery("SELECT * FROM \"$table\" ORDER BY rowid DESC LIMIT 25", null)
-                    cursor = rowCursor
-                    val colCount = rowCursor.columnCount
-                    val colNames = rowCursor.columnNames
-                    while (rowCursor.moveToNext()) {
-                        val cursor = rowCursor
-                        // 1. Check if row matches Lnz.w(Cursor) 28-column positional schema (colCount >= 13)
-                        if (colCount >= 13) {
-                            val posIdDouble = cursorDoubleOrNull(cursor, 0)
-                            val posIdStr = cursorStringOrNull(cursor, 0)
-                            val posRef = cursorStringOrNull(cursor, 1)
-                            val posStatus = cursorStringOrNull(cursor, 2)
-                            val posRestAr = cursorStringOrNull(cursor, 3)
-                            val posRestEn = cursorStringOrNull(cursor, 4)
-                            val posCustName = cursorStringOrNull(cursor, 5)
-                            val posCustPhone = cursorStringOrNull(cursor, 6)
-                            val posPickupLat = cursorDoubleOrNull(cursor, 7) ?: 0.0
-                            val posPickupLng = cursorDoubleOrNull(cursor, 8) ?: 0.0
-                            val posDestLat = cursorDoubleOrNull(cursor, 9) ?: 0.0
-                            val posDestLng = cursorDoubleOrNull(cursor, 10) ?: 0.0
-                            val posDistKm = cursorDoubleOrNull(cursor, 11) ?: 0.0
-                            val posPrice = cursorDoubleOrNull(cursor, 12) ?: 0.0
-                            val posCash = cursorDoubleOrNull(cursor, 13) ?: 0.0
-                            val posCurrency = cursorStringOrNull(cursor, 14) ?: "SAR"
-                            val posPayMethod = cursorStringOrNull(cursor, 15) ?: ""
-
-                            val addrParts = mutableListOf<String>()
-                            for (cIdx in 16..minOf(27, colCount - 1)) {
-                                val part = cursorStringOrNull(cursor, cIdx)
-                                if (!part.isNullOrEmpty() && !part.startsWith("http")) {
-                                    addrParts.add(part)
-                                }
-                            }
-                            val posAddr = addrParts.joinToString(", ")
-
-                            val idStr = when {
-                                posIdDouble != null && posIdDouble > 100.0 -> posIdDouble.toLong().toString()
-                                !posIdStr.isNullOrEmpty() && posIdStr.all { it.isDigit() } && posIdStr.length >= 3 -> posIdStr
-                                !posRef.isNullOrEmpty() && posRef.any { it.isDigit() } -> posRef
-                                else -> ""
-                            }
-                            val restName = when {
-                                !posRestAr.isNullOrEmpty() && !posRestEn.isNullOrEmpty() && posRestAr != posRestEn -> "$posRestEn - $posRestAr"
-                                !posRestAr.isNullOrEmpty() -> posRestAr
-                                !posRestEn.isNullOrEmpty() -> posRestEn
-                                else -> ""
-                            }
-
-                            val isKnownPosStatus = !posStatus.isNullOrEmpty() && (
-                                isHistoricalOrActiveStatus(posStatus) ||
-                                posStatus.equals("NEW", true) ||
-                                posStatus.equals("PENDING", true) ||
-                                posStatus.equals("ASSIGNED", true) ||
-                                posStatus.equals("REJECTED", true)
-                            )
-                            if (idStr.isNotEmpty() && isKnownPosStatus && restName.isNotEmpty()) {
-                                val refStr = if (!posRef.isNullOrEmpty()) posRef else idStr
-                                val rawStatus = posStatus ?: "Delivered"
-                                val cachedDetail = customerDetailsCache[idStr] ?: customerDetailsCache[refStr]
-                                val finalCustName = posCustName ?: cachedDetail?.first ?: ""
-                                val finalCustPhone = posCustPhone ?: cachedDetail?.second ?: ""
-                                val finalCash = if (posCash > 0.0) posCash else (cachedDetail?.third ?: 0.0)
-                                val effectiveCash = if (posPayMethod.contains("PREPAID", ignoreCase = true) || posPayMethod.contains("ONLINE", ignoreCase = true)) 0.0 else finalCash
-
-                                var calcDist = posDistKm
-                                if (calcDist == 0.0 && posPickupLat != 0.0 && posPickupLng != 0.0) {
-                                    val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-                                    val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
-                                    if (drvLat != 0.0 && drvLng != 0.0) {
-                                        calcDist = LocationEngine.calculateDistance(drvLat, drvLng, posPickupLat, posPickupLng)
-                                    }
-                                }
-                                var calcCustDist = 0.0
-                                if (posPickupLat != 0.0 && posPickupLng != 0.0 && posDestLat != 0.0 && posDestLng != 0.0) {
-                                    calcCustDist = LocationEngine.calculateDistance(posPickupLat, posPickupLng, posDestLat, posDestLng)
-                                }
-
-                                val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}"
-                                if (loggedOrderIds.add(syncSignature)) {
-                                    val normStatus = normalizeOrderStatusDisplay(rawStatus)
-                                    sendOrderToLog(
-                                        orderId = "#$idStr",
-                                        price = posPrice,
-                                        dist = calcDist,
-                                        restaurant = restName,
-                                        status = normStatus,
-                                        customerName = finalCustName,
-                                        customerPhone = finalCustPhone,
-                                        address = posAddr.ifEmpty { if (posDestLat != 0.0) "Location on map" else "" },
-                                        cashAmount = effectiveCash,
-                                        currency = posCurrency,
-                                        reference = refStr,
-                                        customerDistanceKm = calcCustDist,
-                                        notifyUser = false
-                                    )
-                                }
-
-                                // Matches Lb11.c -> Ljw.a: fetch customer phone for active orders missing phone
-                                val uSt = rawStatus.uppercase(Locale.US)
-                                val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-                                if (finalCustPhone.isEmpty() && !isCompleteOrOld) {
-                                    fetchOrderCustomerDetailsAsync(idStr)
-                                }
-                                continue
-                            }
-                        }
-
-                        // 2. Column-name & JSON column extraction for any SQLite table schema
-                        val json = JSONObject()
-                        for (i in 0 until colCount) {
-                            when (cursor.getType(i)) {
-                                Cursor.FIELD_TYPE_INTEGER -> json.put(colNames[i], cursor.getLong(i))
-                                Cursor.FIELD_TYPE_FLOAT -> json.put(colNames[i], cursor.getDouble(i))
-                                Cursor.FIELD_TYPE_STRING -> {
-                                    val strVal = cursor.getString(i)
-                                    json.put(colNames[i], strVal)
-                                    if (strVal != null && strVal.startsWith("{") && strVal.endsWith("}")) {
-                                        try {
-                                            extractAndProcessOrderJson(JSONObject(strVal), "DB Row JSON ($table.${colNames[i]}) 💾", isFromLocalDb = true)
-                                        } catch (_: Throwable) {}
-                                    }
-                                }
-                                Cursor.FIELD_TYPE_BLOB -> {
-                                    val bytes = cursor.getBlob(i)
-                                    if (bytes != null) {
-                                        val s = String(bytes, Charsets.UTF_8).trim()
-                                        if (s.startsWith("{") && s.endsWith("}")) {
-                                            try {
-                                                extractAndProcessOrderJson(JSONObject(s), "DB Blob JSON ($table.${colNames[i]}) 💾", isFromLocalDb = true)
-                                            } catch (_: Throwable) {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        extractAndProcessOrderJson(json, "DB Table ($table) 💾", isFromLocalDb = true)
-                    }
-                    cursor.close()
-                } catch (_: Throwable) {}
-            }
-        } catch (_: Throwable) {} finally {
-            try { cursor?.close() } catch (_: Throwable) {}
-            try { db?.close() } catch (_: Throwable) {}
-        }
-    }
-
-    /**
-     * Matches Ljw.a(context, orderId) in SanedAssistant-98-7bac1ec.apk:
-     * Queries Jahez Order Details API for an active orderId to populate customerName & customerPhone.
-     */
     private fun fetchOrderCustomerDetailsAsync(orderId: String) {
         val cleanId = orderId.replace("#", "").trim()
         if (cleanId.isEmpty() || !fetchedDetailIds.add(cleanId)) return
@@ -2506,7 +2156,7 @@ object OrderInterceptor {
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
         if (token.isEmpty()) return
-        val clientToUse = capturedAppHttpClient ?: httpClient
+        val clientToUse = httpClient
 
         if (Native.isLoaded) {
   try {
@@ -2523,48 +2173,15 @@ object OrderInterceptor {
           lastHttpResponseCode = code
           val body = resp.body?.string() ?: ""
           resp.close()
-          if (code in 200..299 && body.isNotEmpty()) {
+          if (code == 401 || code == 403) {
+              cachedEncPrefs = null
+          } else if (code in 200..299 && body.isNotEmpty()) {
               failedPollingCount = 0
               findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
               return
           }
       }
   } catch (_: Throwable) {}
-        }
-
-        if (lastOrdersListUrl.isEmpty()) return
-        val candidateEndpoints = listOf("/api/fleets/orders/available", "/api/v1/fleets/orders/available", "/api/fleets/orders")
-        val probeHosts = mutableListOf<String>()
-        if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
-        if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
-        probeHosts.addAll(candidateApiHosts)
-
-        for (h in probeHosts.distinct()) {
-  for (endpoint in candidateEndpoints) {
-      val url = buildCandidateUrl(h, endpoint)
-      try {
-          pollingHits.incrementAndGet()
-          val reqBuilder = Request.Builder().url(url).get()
-          applyJahezHeaders(reqBuilder, token)
-          val resp = clientToUse.newCall(reqBuilder.build()).execute()
-          val code = resp.code
-          lastHttpResponseCode = code
-          val body = resp.body?.string() ?: ""
-          resp.close()
-          if (code in 200..299 && body.isNotEmpty()) {
-              failedPollingCount = 0
-              if (cachedApiHost.isEmpty()) {
-                  val uri = java.net.URI(url)
-                  cachedApiHost = "${uri.scheme}://${uri.host}"
-                  persistHost(cachedApiHost)
-              }
-              if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
-                  findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-                  return
-              }
-          }
-      } catch (_: Throwable) {}
-  }
         }
     }
 
@@ -2859,7 +2476,6 @@ object OrderInterceptor {
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
-        syncSettings()
         if (!isMasterRunning) {
   return "MANUAL" to "Master switch off"
         }
@@ -2952,10 +2568,7 @@ object OrderInterceptor {
   }
   "ACCEPT" -> {
       lastOrderEvent = "Auto-Accepting Order $orderId..."
-      currentActivity?.let { act ->
-          showToast(act, "⚡ Auto-Accepting Order $orderId...")
-          act.runOnUiThread { try { act.window?.decorView?.let { decor -> findAndTriggerOrder(decor, act, System.currentTimeMillis()) } } catch (_: Throwable) {} }
-      }
+      currentActivity?.let { act -> showToast(act, "⚡ Auto-Accepting Order $orderId...") }
       sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Accepted ✅", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
       executeDirectApiCall(rawId, "ACCEPT")
       playAlertSound()
@@ -3011,7 +2624,7 @@ object OrderInterceptor {
         val probeHosts = mutableListOf<String>()
         if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
         probeHosts.addAll(candidateApiHosts)
-        val clientToUse = capturedAppHttpClient ?: httpClient
+        val clientToUse = httpClient
 
         CoroutineScope(Dispatchers.IO).launch {
   val tid = Process.myTid()

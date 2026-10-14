@@ -7,7 +7,6 @@ import android.os.Bundle
 import dev.jing.sanedhook.util.Native
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
-import java.io.IOException
 import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -35,9 +34,13 @@ object PackageCloaker {
     @Volatile var detectedVersionIndex: Int = -1
     @Volatile var activeProfile: VersionProfile? = null
     @Volatile var lastCheckedVersionCode: Long = 0L
+    @Volatile private var mapsCertCheckResult: Int = 0
 
     private val isRuntimeHooked = AtomicBoolean(false)
+    private val isNativeStubbed = AtomicBoolean(false)
     private val isLoaderHooked = AtomicBoolean(false)
+    private val isBlockedActHooked = AtomicBoolean(false)
+    private val isSecurityHooked = AtomicBoolean(false)
 
     fun getAllVersionProfiles(): List<VersionProfile> {
         val raw = Native.safeP()
@@ -60,7 +63,7 @@ object PackageCloaker {
     }
 
     fun checkVersionSupported(versionCode: Long): Boolean {
-        if (versionCode <= 0L) return false
+        if (versionCode <= 0L) return true
         if (lastCheckedVersionCode == versionCode && detectedVersionIndex >= 0) return true
         lastCheckedVersionCode = versionCode
         detectedVersionIndex = try { Native.safeS(versionCode) } catch (_: Throwable) { -1 }
@@ -70,6 +73,7 @@ object PackageCloaker {
     fun resolveProfile(classLoader: ClassLoader): VersionProfile? {
         activeProfile?.let { return it }
         val profiles = getAllVersionProfiles()
+        if (profiles.isEmpty()) return null
         val preferred = profiles.getOrNull(detectedVersionIndex)
         if (preferred != null && isProfilePresent(classLoader, preferred)) {
   activeProfile = preferred
@@ -82,7 +86,7 @@ object PackageCloaker {
       return p
   }
         }
-        return profiles.firstOrNull()
+        return null
     }
 
     private fun isProfilePresent(classLoader: ClassLoader, profile: VersionProfile): Boolean =
@@ -92,7 +96,7 @@ object PackageCloaker {
         (activeProfile ?: getAllVersionProfiles().firstOrNull())?.mainActivity?.takeIf { it.isNotEmpty() } ?: "net.jahez.fleets.MainActivity"
 
     private fun defaultReturnValueForType(type: Class<*>): Any? = when (type) {
-        Boolean::class.javaPrimitiveType -> true
+        Boolean::class.javaPrimitiveType -> java.lang.Boolean.TRUE
         Int::class.javaPrimitiveType -> 0
         Long::class.javaPrimitiveType -> 0L
         Short::class.javaPrimitiveType -> 0.toShort()
@@ -103,10 +107,14 @@ object PackageCloaker {
         else -> null
     }
 
-    fun hook(module: XposedModule, classLoader: ClassLoader) {
+    /**
+     * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk
+     */
+    fun hookEarly(module: XposedModule, classLoader: ClassLoader) {
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
 
+        // 1. Lvh1.o: Hook Runtime.loadLibrary0 ONLY (do NOT hook Runtime.exec!)
         if (isRuntimeHooked.compareAndSet(false, true)) {
   try {
       val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
@@ -116,21 +124,8 @@ object PackageCloaker {
               module.hook(m).intercept(object : XposedInterface.Hooker {
                   override fun intercept(chain: XposedInterface.Chain): Any? {
                       val lastArg = chain.args.lastOrNull() as? String
-                      if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) return null
-                      return chain.proceed()
-                  }
-              })
-          }
-          if (m.name == "exec") {
-              module.hook(m).intercept(object : XposedInterface.Hooker {
-                  override fun intercept(chain: XposedInterface.Chain): Any? {
-                      val cmd = when (val first = chain.args.getOrNull(0)) {
-                          is String -> first
-                          is Array<*> -> first.joinToString(" ") { it?.toString() ?: "" }
-                          else -> ""
-                      }
-                      if (cmd.contains("su") || cmd.contains("which") || cmd.contains("magisk") || cmd.contains("busybox")) {
-                          throw IOException("No such file or directory")
+                      if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) {
+                          return null
                       }
                       return chain.proceed()
                   }
@@ -140,23 +135,30 @@ object PackageCloaker {
   } catch (_: Throwable) {}
         }
 
-        try {
-  val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
-  for (clsName in nativeClassNames) {
-      try {
-          val cls = Class.forName(clsName, false, classLoader)
-          for (m in cls.declaredMethods) {
-              if (Modifier.isNative(m.modifiers)) {
-                  val retType = m.returnType
-                  module.hook(m).intercept(object : XposedInterface.Hooker {
-                      override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
-                  })
+        // 2. Lvh1.q: Stub native methods on resolved profile's nativeClasses
+        if (!isNativeStubbed.get()) {
+  try {
+      val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
+      var hookedCount = 0
+      for (clsName in nativeClassNames) {
+          try {
+              val cls = Class.forName(clsName, false, classLoader)
+              for (m in cls.declaredMethods) {
+                  if (Modifier.isNative(m.modifiers)) {
+                      val retType = m.returnType
+                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
+                      })
+                      hookedCount++
+                  }
               }
-          }
-      } catch (_: Throwable) {}
-  }
-        } catch (_: Throwable) {}
+          } catch (_: Throwable) {}
+      }
+      if (hookedCount > 0) isNativeStubbed.set(true)
+  } catch (_: Throwable) {}
+        }
 
+        // 3. Lvh1.j: Hook loaderClass.loaderMethod(String)
         if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
   try {
       val cls = Class.forName(resolved.loaderClass, false, classLoader)
@@ -168,62 +170,66 @@ object PackageCloaker {
   } catch (_: Throwable) {}
         }
 
-        try {
-  val blockedActivities = profiles.mapNotNull { it.blockedActivity.takeIf { s -> s.isNotEmpty() } }.toSet()
-  val mainActName = getMainActivityClassName()
-  if (blockedActivities.isNotEmpty() && mainActName.isNotEmpty()) {
-      val mResume = Activity::class.java.getDeclaredMethod("onResume")
-      module.hook(mResume).intercept(object : XposedInterface.Hooker {
-          override fun intercept(chain: XposedInterface.Chain): Any? {
-              val res = chain.proceed()
-              val act = chain.thisObject as? Activity
-              if (act != null && blockedActivities.contains(act.javaClass.name) && !act.isFinishing) {
-                  try {
-                      val mainCls = classLoader.loadClass(mainActName)
-                      act.startActivity(android.content.Intent(act, mainCls))
-                      act.finish()
-                  } catch (_: Throwable) {}
-              }
-              return res
-          }
-      })
-  }
-        } catch (_: Throwable) {}
-
-        try {
-  val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager", false, classLoader)
-  for (m in appPkgMgrClass.declaredMethods) {
-      if (m.name == "getInstallerPackageName") {
-          module.hook(m).intercept(object : XposedInterface.Hooker {
-              override fun intercept(chain: XposedInterface.Chain): Any? =
-                  if (OrderInterceptor.isMasterRunning) "com.android.vending" else chain.proceed()
-          })
-      }
-      if (m.name == "getInstallSourceInfo") {
-          module.hook(m).intercept(object : XposedInterface.Hooker {
+        // 4. Lvh1.e: Hook Activity.onResume for blockedActivities redirect
+        if (isBlockedActHooked.compareAndSet(false, true)) {
+  try {
+      val blockedActivities = profiles.mapNotNull { it.blockedActivity.takeIf { s -> s.isNotEmpty() } }.toSet()
+      val mainActName = getMainActivityClassName()
+      if (blockedActivities.isNotEmpty() && mainActName.isNotEmpty()) {
+          val mResume = Activity::class.java.getDeclaredMethod("onResume")
+          module.hook(mResume).intercept(object : XposedInterface.Hooker {
               override fun intercept(chain: XposedInterface.Chain): Any? {
                   val res = chain.proceed()
-                  if (res != null && OrderInterceptor.isMasterRunning) {
-                      for (fieldName in listOf("mOriginatingPackageName", "mInstallingPackageName", "mInitiatingPackageName")) {
-                          try { res.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }.set(res, "com.android.vending") } catch (_: Throwable) {}
-                      }
+                  val act = chain.thisObject as? Activity
+                  if (act != null && blockedActivities.contains(act.javaClass.name) && !act.isFinishing) {
+                      try {
+                          val mainCls = classLoader.loadClass(mainActName)
+                          act.startActivity(android.content.Intent(act, mainCls))
+                          act.finish()
+                      } catch (_: Throwable) {}
                   }
                   return res
               }
           })
       }
-      if (m.name == "getApplicationInfo" || m.name == "getPackageInfo") {
-          module.hook(m).intercept(object : XposedInterface.Hooker {
-              override fun intercept(chain: XposedInterface.Chain): Any? {
-                  val res = chain.proceed()
-                  patchGoogleMapsApiKeyIfNeeded(res)
-                  return res
+  } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Matches Lu80.p and Lb51.b in SanedAssistant-98-7bac1ec.apk (called in onPackageReady)
+     */
+    fun hook(module: XposedModule, classLoader: ClassLoader) {
+        hookEarly(module, classLoader)
+        if (!isSecurityHooked.compareAndSet(false, true)) return
+
+        // 1. Lu80.C: ApplicationPackageManager.getInstallerPackageName & getInstallSourceInfo
+        try {
+  val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
+  try {
+      val mInstaller = appPkgMgrClass.getDeclaredMethod("getInstallerPackageName", String::class.java)
+      module.hook(mInstaller).intercept(object : XposedInterface.Hooker {
+          override fun intercept(chain: XposedInterface.Chain): Any? =
+              if (OrderInterceptor.isMasterRunning) "com.android.vending" else chain.proceed()
+      })
+  } catch (_: Throwable) {}
+  try {
+      val mSourceInfo = appPkgMgrClass.getDeclaredMethod("getInstallSourceInfo", String::class.java)
+      module.hook(mSourceInfo).intercept(object : XposedInterface.Hooker {
+          override fun intercept(chain: XposedInterface.Chain): Any? {
+              val res = chain.proceed()
+              if (res != null && OrderInterceptor.isMasterRunning) {
+                  for (fieldName in listOf("mOriginatingPackageName", "mInstallingPackageName", "mInitiatingPackageName")) {
+                      try { res.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }.set(res, "com.android.vending") } catch (_: Throwable) {}
+                  }
               }
-          })
-      }
-  }
+              return res
+          }
+      })
+  } catch (_: Throwable) {}
         } catch (_: Throwable) {}
 
+        // 2. Lu80.y: SecurityCallBacksState
         val secClasses = Native.safeN()
         val secStateClsName = secClasses.getOrNull(0) ?: ""
         if (secStateClsName.isNotEmpty()) {
@@ -251,6 +257,7 @@ object PackageCloaker {
   } catch (_: Throwable) {}
         }
 
+        // 3. Lu80.G: RootBeer & RootBeerNative
         for (idx in 1..2) {
   val rbClsName = secClasses.getOrNull(idx) ?: continue
   try {
@@ -269,11 +276,12 @@ object PackageCloaker {
   } catch (_: Throwable) {}
         }
 
+        // 4. Lu80.L: ShadowArmor profiles (only for detectedVersionIndex if >= 0, matching Lu80.L!)
         try {
   val saProfiles = getAllShadowArmorProfiles()
-  val saToApply = if (detectedVersionIndex in saProfiles.indices) listOf(saProfiles[detectedVersionIndex]) else saProfiles
-  val featureFlags = Native.safeU().toSet()
-  for (sa in saToApply) {
+  val sa = saProfiles.getOrNull(detectedVersionIndex)
+  val featureFlags = Native.safeU().toList()
+  if (sa != null) {
       try {
           val rootCls = classLoader.loadClass(sa.rootCheckClass)
           for (m in rootCls.declaredMethods) {
@@ -287,31 +295,51 @@ object PackageCloaker {
       for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to true, sa.certPinClass to true)) {
           try {
               val c = classLoader.loadClass(clsName)
-              val m = c.declaredMethods.firstOrNull {
-                  it.returnType == Boolean::class.javaPrimitiveType && it.parameterTypes.contentEquals(arrayOf(android.content.Context::class.java))
-              }
-              if (m != null) {
-                  module.hook(m).intercept(object : XposedInterface.Hooker {
-                      override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
-                  })
+              for (m in c.declaredMethods) {
+                  if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterTypes.contentEquals(arrayOf(android.content.Context::class.java))) {
+                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
+                      })
+                  }
               }
           } catch (_: Throwable) {}
       }
-      try {
-          val ffCls = classLoader.loadClass(sa.featureFlagsClass)
-          for (m in ffCls.declaredMethods) {
-              val pTypes = m.parameterTypes
-              if (m.returnType == Boolean::class.javaPrimitiveType && pTypes.isNotEmpty() && pTypes[0] == String::class.java) {
-                  module.hook(m).intercept(object : XposedInterface.Hooker {
-                      override fun intercept(chain: XposedInterface.Chain): Any? {
-                          val key = chain.args.getOrNull(0) as? String
-                          if (OrderInterceptor.isMasterRunning && key != null && featureFlags.contains(key)) return false
-                          return chain.proceed()
-                      }
-                  })
+      if (featureFlags.isNotEmpty()) {
+          try {
+              val ffCls = classLoader.loadClass(sa.featureFlagsClass)
+              for (m in ffCls.declaredMethods) {
+                  val pTypes = m.parameterTypes
+                  if (m.returnType == Boolean::class.javaPrimitiveType && pTypes.isNotEmpty() && pTypes[0] == String::class.java) {
+                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val key = chain.args.getOrNull(0) as? String
+                              if (OrderInterceptor.isMasterRunning && key != null && featureFlags.contains(key)) return false
+                              return chain.proceed()
+                          }
+                      })
+                  }
               }
+          } catch (_: Throwable) {}
+      }
+  }
+        } catch (_: Throwable) {}
+
+        // 5. Lb51.b: ONLY hook getApplicationInfo/getPackageInfo if frameworkName == "Vector" (LSPatch non-root)
+        try {
+  val fwName = try { module.frameworkName } catch (_: Throwable) { "" }
+  if (fwName.equals("Vector", ignoreCase = true)) {
+      val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
+      for (m in appPkgMgrClass.declaredMethods) {
+          if (m.name == "getApplicationInfo" || m.name == "getPackageInfo") {
+              module.hook(m).intercept(object : XposedInterface.Hooker {
+                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                      val res = chain.proceed()
+                      patchGoogleMapsApiKeyIfNeeded(res)
+                      return res
+                  }
+              })
           }
-      } catch (_: Throwable) {}
+      }
   }
         } catch (_: Throwable) {}
     }
@@ -324,6 +352,13 @@ object PackageCloaker {
       else -> return
   }
   if (appInfo.packageName != "net.jahez.fleets") return
+  if (mapsCertCheckResult == 0) {
+      val srcDir = appInfo.sourceDir
+      if (srcDir.isNullOrEmpty()) return
+      val isOfficial = try { Native.safeR(srcDir) } catch (_: Throwable) { false }
+      mapsCertCheckResult = if (isOfficial) 1 else 2
+  }
+  if (mapsCertCheckResult != 2) return
   val metaData: Bundle = appInfo.metaData ?: return
   if (!metaData.containsKey("com.google.android.geo.API_KEY")) return
   val replacementKey = Native.safeQ()

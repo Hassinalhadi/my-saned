@@ -195,7 +195,6 @@ object SettingsStore {
         val maxRest = getMaxDistRest(context)
         val maxCust = getMaxDistCust(context)
 
-        // 1. Explicit broadcast to Jahez app
         try {
   val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
       setPackage("net.jahez.fleets")
@@ -224,7 +223,6 @@ object SettingsStore {
   context.sendBroadcast(intent)
         } catch (_: Throwable) {}
 
-        // 2. Global broadcast for dynamic receivers
         try {
   val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
       putExtra("master_running", master)
@@ -250,7 +248,6 @@ object SettingsStore {
   context.sendBroadcast(gIntent)
         } catch (_: Throwable) {}
 
-        // 3. Write world-readable shared config in /data/local/tmp/
         try {
   val json = JSONObject().apply {
       put("master_running", master)
