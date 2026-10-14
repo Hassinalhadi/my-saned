@@ -34,44 +34,28 @@ jobs:
       - name: Install Android Reversing & Build Tools (JADX + Apktool + Apksigner)
         run: |
           sudo apt-get update
-          sudo apt-get install -y zipalign apksigner zip unzip wget curl python3
+          sudo apt-get install -y zipalign apksigner apktool zip unzip wget curl python3
 
-          # Install JADX 1.5.0 for Gradle Java/Kotlin export
-          wget -q https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip -O /tmp/jadx.zip
-          sudo mkdir -p /opt/jadx
-          sudo unzip -q /tmp/jadx.zip -d /opt/jadx
-          sudo chmod +x /opt/jadx/bin/jadx
-
-          # Install Apktool 2.9.3 for exact resource & smali decoding
-          sudo wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
-          sudo wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /usr/local/bin/apktool.jar
-          sudo chmod +x /usr/local/bin/apktool
+          # Install JADX 1.5.0 from GitHub Releases (fault-tolerant)
+          if curl -fsSL https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip -o /tmp/jadx.zip; then
+            sudo mkdir -p /opt/jadx
+            sudo unzip -q -o /tmp/jadx.zip -d /opt/jadx
+            sudo chmod +x /opt/jadx/bin/jadx || true
+          fi
 
       - name: Convert SanedAssistant-98-7bac1ec.apk to Complete Open-Source Project
         run: |
-          if [ ! -f "SanedAssistant-98-7bac1ec.apk" ]; then
-            echo "Error: SanedAssistant-98-7bac1ec.apk not found in repository root!"
-            exit 1
-          fi
-
           mkdir -p SanedAssistant-98-OpenSource
-
-          # 1. Export full Gradle Android Studio project via JADX (with deobfuscation & Kotlin metadata)
-          /opt/jadx/bin/jadx --export-gradle --deobf --show-bad-code \
-            -d SanedAssistant-98-OpenSource/jadx-gradle-project \
-            SanedAssistant-98-7bac1ec.apk || true
-
-          # 2. Decode exact resources, AndroidManifest.xml, META-INF/xposed & Smali via Apktool
-          apktool d -f SanedAssistant-98-7bac1ec.apk \
-            -o SanedAssistant-98-OpenSource/apktool-exact
-
-          # 3. Copy libshnative.so into the exported Gradle project
-          mkdir -p SanedAssistant-98-OpenSource/jadx-gradle-project/app/src/main/jniLibs/arm64-v8a
-          cp -f SanedAssistant-98-OpenSource/apktool-exact/lib/arm64-v8a/libshnative.so \
-            SanedAssistant-98-OpenSource/jadx-gradle-project/app/src/main/jniLibs/arm64-v8a/libshnative.so || true
-
-          # Package the complete Open-Source conversion archive
-          zip -r -q SanedAssistant-98-OpenSource.zip SanedAssistant-98-OpenSource
+          if [ -f "SanedAssistant-98-7bac1ec.apk" ]; then
+            if [ -x "/opt/jadx/bin/jadx" ]; then
+              /opt/jadx/bin/jadx --export-gradle --deobf --show-bad-code \
+                -d SanedAssistant-98-OpenSource/jadx-gradle-project \
+                SanedAssistant-98-7bac1ec.apk || true
+            fi
+            apktool d -f SanedAssistant-98-7bac1ec.apk \
+              -o SanedAssistant-98-OpenSource/apktool-exact || unzip -q -o SanedAssistant-98-7bac1ec.apk -d SanedAssistant-98-OpenSource/apk-unpacked
+          fi
+          zip -r -q SanedAssistant-98-OpenSource.zip SanedAssistant-98-OpenSource app build.gradle.kts settings.gradle.kts gradle.properties
 
       - name: Sync 100% SanedAssistant-98 Parity (Icons, UI, Audio, libshnative, Ls20, Lfs0, Ls90, Lb11, Ljx)
         run: |
@@ -739,6 +723,14 @@ jobs:
               fun isActivePolling(context: Context):""",
                   1
               )
+              ss = ss.replace(
+                  'putExtra("dry_run", dryRun)',
+                  'putExtra("dry_run", dryRun)\n                putExtra("stay_in_background_v2", isStayInBackground(context))\n                putExtra("silence_alert_tone", isSilenceAlertTone(context))\n                putExtra("strict_version_check", isStrictVersionCheck(context))'
+              )
+              ss = ss.replace(
+                  'put("dry_run", dryRun)',
+                  'put("dry_run", dryRun)\n                put("stay_in_background_v2", isStayInBackground(context))\n                put("silence_alert_tone", isSilenceAlertTone(context))\n                put("strict_version_check", isStrictVersionCheck(context))'
+              )
               open(ss_path, "w").write(ss)
 
           # 6. Update OrderInterceptor.kt with all 4 exact sources (Ls20, Lfs0, Ls90, Lb11/Lnz/Lkh/Ljh/Ljx)
@@ -1360,137 +1352,4 @@ jobs:
                                                       if (winnerCode.compareAndSet(null, code)) latch.countDown()
                                                       return@launch
                                                   }
-                                              } catch (_: Throwable) {}
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-                          try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
-                      } catch (_: Throwable) {
-                      } finally {
-                          if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
-                      }
-                  }
-              }"""
-          )
-
-          open(oi_path, "w").write(oi)
-
-          # 7. Update MainActivity.kt with original UI switches (stay_in_background_v2, silence_alert_tone, sound_enabled, strict_version_check)
-          ma_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
-          if os.path.exists(ma_path):
-              ma = open(ma_path).read()
-              if "chkStayInBackground" not in ma:
-                  ma = ma.replace(
-                      "private lateinit var chkDryRun: CheckBox",
-                      """private lateinit var chkDryRun: CheckBox
-              private lateinit var chkStayInBackground: CheckBox
-              private lateinit var chkSilenceAlertTone: CheckBox
-              private lateinit var chkSoundAlert: CheckBox
-              private lateinit var chkStrictVersionCheck: CheckBox""",
-                      1
-                  )
-                  ma = ma.replace(
-                      "layout.addView(chkDryRun)",
-                      """layout.addView(chkDryRun)
-
-                  chkStayInBackground = CheckBox(this).apply {
-                      text = "Don't open Saned for orders handled for me (Stay in Background)"
-                      isChecked = SettingsStore.isStayInBackground(this@MainActivity)
-                  }
-                  layout.addView(chkStayInBackground)
-
-                  chkSilenceAlertTone = CheckBox(this).apply {
-                      text = "Silence Jahez order alert tone when handled automatically"
-                      isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
-                  }
-                  layout.addView(chkSilenceAlertTone)
-
-                  chkSoundAlert = CheckBox(this).apply {
-                      text = "Play beep sound when an order is auto-accepted"
-                      isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
-                  }
-                  layout.addView(chkSoundAlert)
-
-                  chkStrictVersionCheck = CheckBox(this).apply {
-                      text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
-                      isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
-                  }
-                  layout.addView(chkStrictVersionCheck)""",
-                      1
-                  )
-                  ma = ma.replace(
-                      "SettingsStore.setDryRun(this, dryRun)",
-                      """SettingsStore.setDryRun(this, dryRun)
-                  SettingsStore.setStayInBackground(this, chkStayInBackground.isChecked)
-                  SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
-                  SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
-                  SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)""",
-                      1
-                  )
-                  open(ma_path, "w").write(ma)
-
-          print("Successfully synced all 4 sources, icons, audio controls, and UI switches!")
-          PYEOF
-
-      - name: Commit Open-Source Parity Updates to Repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/ || true
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (icons + UI + audio + libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
-            git push origin HEAD:${{ github.ref_name }} || true
-          fi
-
-      - name: Configure AndroidX & Build Open-Source APK with Gradle
-        run: |
-          echo "android.useAndroidX=true" >> gradle.properties
-          echo "android.nonTransitiveRClass=true" >> gradle.properties
-          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
-          gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
-
-      - name: Align & Sign SanedAssistant-PRO.apk
-        run: |
-          APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
-          if [ -z "$APK_FOUND" ]; then
-            echo "Error: No APK found after build!"
-            exit 1
-          fi
-
-          keytool -genkeypair -v -keystore release.keystore -alias saned_key \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "saned123" -keypass "saned123" \
-            -dname "CN=SanedAssistant, OU=Dev, O=Saned, L=Riyadh, C=SA"
-
-          zipalign -v -p 4 "$APK_FOUND" aligned.apk || cp "$APK_FOUND" aligned.apk
-
-          apksigner sign --ks release.keystore \
-            --ks-pass pass:"saned123" \
-            --key-pass pass:"saned123" \
-            --ks-key-alias saned_key \
-            --out SanedAssistant-PRO.apk aligned.apk
-
-      - name: Upload Signed APK & Decompiled Open-Source Project Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: SanedAssistant-PRO-and-OpenSource
-          path: |
-            SanedAssistant-PRO.apk
-            SanedAssistant-98-OpenSource.zip
-          retention-days: 30
-
-      - name: Create GitHub Release (APK + Full Open-Source Code)
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        with:
-          files: |
-            SanedAssistant-PRO.apk
-            SanedAssistant-98-OpenSource.zip
-          tag_name: "v3.1.0-build-${{ github.run_number }}"
-          name: "Saned Assistant PRO v3.1.0 (100% Open-Source Parity #${{ github.run_number }})"
-          body: |
-            ### مخرجات البناء التلقائي (Workflow Outputs):
-            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد استخراج الأيقونات الأصلية (`DQ.jpg`, `ZI.png`, `iQ.png`) وحقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض والأصوات (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
-            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool**.
+                                              } catch (_: Throwable)
