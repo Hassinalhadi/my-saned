@@ -1,4 +1,4 @@
-name: Build Saned Assistant PRO APK
+name: Convert SanedAssistant-98 to 100% Open-Source & Build PRO APK
 
 on:
   push:
@@ -9,13 +9,15 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build & Sign APK
+  convert-and-build:
+    name: Decompile APK to Open-Source, Sync 100% Parity & Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -29,28 +31,1358 @@ jobs:
           gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Configure AndroidX & Tools
+      - name: Install Android Reversing & Build Tools (JADX + Apktool + Apksigner)
         run: |
           sudo apt-get update
-          sudo apt-get install -y zipalign apksigner zip
+          sudo apt-get install -y zipalign apksigner zip unzip wget curl python3
+
+          # Install JADX 1.5.0 for Gradle Java/Kotlin export
+          wget -q https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip -O /tmp/jadx.zip
+          sudo mkdir -p /opt/jadx
+          sudo unzip -q /tmp/jadx.zip -d /opt/jadx
+          sudo chmod +x /opt/jadx/bin/jadx
+
+          # Install Apktool 2.9.3 for exact resource & smali decoding
+          sudo wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
+          sudo wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /usr/local/bin/apktool.jar
+          sudo chmod +x /usr/local/bin/apktool
+
+      - name: Convert SanedAssistant-98-7bac1ec.apk to Complete Open-Source Project
+        run: |
+          if [ ! -f "SanedAssistant-98-7bac1ec.apk" ]; then
+            echo "Error: SanedAssistant-98-7bac1ec.apk not found in repository root!"
+            exit 1
+          fi
+
+          mkdir -p SanedAssistant-98-OpenSource
+
+          # 1. Export full Gradle Android Studio project via JADX (with deobfuscation & Kotlin metadata)
+          /opt/jadx/bin/jadx --export-gradle --deobf --show-bad-code \
+            -d SanedAssistant-98-OpenSource/jadx-gradle-project \
+            SanedAssistant-98-7bac1ec.apk || true
+
+          # 2. Decode exact resources, AndroidManifest.xml, META-INF/xposed & Smali via Apktool
+          apktool d -f SanedAssistant-98-7bac1ec.apk \
+            -o SanedAssistant-98-OpenSource/apktool-exact
+
+          # 3. Copy libshnative.so into the exported Gradle project
+          mkdir -p SanedAssistant-98-OpenSource/jadx-gradle-project/app/src/main/jniLibs/arm64-v8a
+          cp -f SanedAssistant-98-OpenSource/apktool-exact/lib/arm64-v8a/libshnative.so \
+            SanedAssistant-98-OpenSource/jadx-gradle-project/app/src/main/jniLibs/arm64-v8a/libshnative.so || true
+
+          # Package the complete Open-Source conversion archive
+          zip -r -q SanedAssistant-98-OpenSource.zip SanedAssistant-98-OpenSource
+
+      - name: Sync 100% SanedAssistant-98 Parity into Main Kotlin Project (Ls20, Lfs0, Ls90, Lb11, Ljx, Ldv1, Lvh1)
+        run: |
+          python3 - << 'PYEOF'
+          import os, zipfile
+
+          def replace_block(src, start_marker, end_marker, replacement):
+              i1 = src.find(start_marker)
+              i2 = src.find(end_marker, i1 if i1 != -1 else 0)
+              if i1 != -1 and i2 != -1 and i2 > i1:
+                  return src[:i1] + replacement + "\n\n    " + src[i2:]
+              return src
+
+          # 1. Extract lib/arm64-v8a/libshnative.so into app/src/main/jniLibs/arm64-v8a/
+          apk_path = "SanedAssistant-98-7bac1ec.apk"
+          if os.path.exists(apk_path):
+              os.makedirs("app/src/main/jniLibs/arm64-v8a", exist_ok=True)
+              with zipfile.ZipFile(apk_path, "r") as zf:
+                  if "lib/arm64-v8a/libshnative.so" in zf.namelist():
+                      with open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb") as f:
+                          f.write(zf.read("lib/arm64-v8a/libshnative.so"))
+                      print("Extracted libshnative.so into app/src/main/jniLibs/arm64-v8a/")
+
+          # 2. Write Native.kt with JNI bindings + exact decoded constants from libshnative.so
+          os.makedirs("app/src/main/java/dev/jing/sanedhook/util", exist_ok=True)
+          open("app/src/main/java/dev/jing/sanedhook/util/Native.kt", "w").write('''package dev.jing.sanedhook.util
+
+          object Native {
+              @JvmField val a: Native = this
+              @Volatile var isLoaded: Boolean = false
+                  private set
+
+              init {
+                  isLoaded = try { System.loadLibrary("shnative"); true } catch (_: Throwable) { false }
+              }
+
+              external fun a(ctx: Any, pkg: String): Boolean
+              external fun b(kind: Int, orderId: Int, token: String, lang: String, driverCipher: String): Array<String>
+              external fun c(ctx: Any, pkg: String, s1: String, s2: String, v: Long): Int
+              external fun d(): String
+              external fun e(): String
+              external fun f(): String
+              external fun g(): String
+              external fun h(): String
+              external fun i(): String
+              external fun j(): String
+              external fun k(): Array<String>
+              external fun l(): Array<String>
+              external fun m(): Array<String>
+              external fun n(): Array<String>
+              external fun o(s: String): String
+              external fun p(): Array<String>
+              external fun q(): String
+              external fun r(path: String): Boolean
+              external fun s(versionCode: Long): Int
+              external fun t(): Array<String>
+              external fun u(): Array<String>
+
+              private const val FALLBACK_FCM_CLASS = "net.saned.core.SanedFCMNotificationHandler"
+              private const val FALLBACK_ORDER_ACTIVITY = "net.jahez.fleets.dispatch.accept.IncomingDispatchActivity"
+              private const val FALLBACK_DB_NAME = "dispatches_db"
+              private const val FALLBACK_SQL_QUERY =
+                  "SELECT di.dispatchId, di.referenceId, di.status, v.vendorName, c.subscriberName, NULL, c.clientPhone, " +
+                  "l.pickupLatitude, l.pickupLongitude, l.destinationLatitude, l.destinationLongitude, l.distance, " +
+                  "p.deliveryPrice, p.collectionAmount, p.currencyCode, p.paymentMethod, a.buildingName, a.buildingNumber, " +
+                  "a.houseNumber, a.streetName, a.roadNumber, a.blockNumber, a.apartmentNumber, a.floor, a.lane, " +
+                  "a.officeName, a.region, a.additionalInformation FROM dispatch_info di " +
+                  "LEFT JOIN vendor v ON v.dispatchId = di.dispatchId LEFT JOIN client c ON c.dispatchId = di.dispatchId " +
+                  "LEFT JOIN location l ON l.dispatchId = di.dispatchId LEFT JOIN payment p ON p.dispatchId = di.dispatchId " +
+                  "LEFT JOIN address a ON a.dispatchId = di.dispatchId"
+              private const val FALLBACK_ENCRYPTED_PREFS = "ENCRYPTED_SANED_PREFERENCES"
+              private const val FALLBACK_TOKEN_KEY = "token"
+              private const val FALLBACK_LANG_KEY = "language"
+
+              private val FALLBACK_INTENT_KEYS = arrayOf(
+                  "EXTRA_DISPATCH_REQUEST_ID", "EXTRA_DISPATCH_PICKUP_LATITUDE", "EXTRA_DISPATCH_PICKUP_LONGITUDE",
+                  "EXTRA_DISPATCH_DEST_LATITUDE", "EXTRA_DISPATCH_DEST_LONGITUDE", "EXTRA_DELIVERY_PRICE",
+                  "EXTRA_DISPATCH_TYPE", "EXTRA_DISTANCE", "EXTRA_COUNTER", "EXTRA_SUBSCRIBER_NAME",
+                  "EXTRA_BONUS_AMOUNT", "EXTRA_CURRENCY"
+              )
+              private val FALLBACK_FCM_KEYS = arrayOf(
+                  "requestId", "dispatchPickupLat", "dispatchPickupLng", "dispatchDestLat", "dispatchDestLng",
+                  "deliveryPrice", "dispatchType", "distance", "counter", "subscriberName", "vendorName",
+                  "restaurantName", "storeName", "bonus", "bonusAmount", "extraBonus", "currency", "currencyCode"
+              )
+              private val FALLBACK_POLL_KEYS = arrayOf(
+                  "dispatches", "referenceId", "pickup", "coordinates", "destination", "clientPhone", "contactNumber"
+              )
+              private val FALLBACK_SECURITY_CLASSES = arrayOf(
+                  "net.jahez.guardzilla.logging.domain.model.SecurityCallBacksState",
+                  "com.scottyab.rootbeer.RootBeer", "com.scottyab.rootbeer.RootBeerNative"
+              )
+              private val FALLBACK_VERSION_PROFILES = arrayOf(
+                  "jahez_fleets", "ggk.am", "ggk.P", "ggk.ar", "net.jahez.fleets.MainActivity", "ggk.z", "b", "loadLibrary0",
+                  "jahez_fleets", "oxxqbaxw.an", "oxxqbaxw.e", "oxxqbaxw.ao", "net.jahez.fleets.MainActivity", "oxxqbaxw.b", "a", "loadLibrary0",
+                  "jahez_fleets", "lrbppeks.U", "lrbppeks.b", "lrbppeks.ak", "net.jahez.fleets.MainActivity", "lrbppeks.am", "a", "loadLibrary0"
+              )
+              private val FALLBACK_GUARD_CLASSES = arrayOf(
+                  "S86", "yM", "ta3", "xD", "cj6", "tEa", "Ke0", "MV5", "XS", "wRa", "A76", "gM", "B93", "fD", "Jh6"
+              )
+              private val FALLBACK_FEATURE_FLAGS = arrayOf(
+                  "rooted_device_check", "auto_clicker_check", "installation_source_check"
+              )
+
+              fun safeA(ctx: Any, pkg: String = "dev.jing.sanedhook"): Boolean = try { if (isLoaded) a(ctx, pkg) else false } catch (_: Throwable) { false }
+              fun safeB(kind: Int, orderId: Int, token: String, lang: String, driverCipher: String): Array<String> = try { if (isLoaded) b(kind, orderId, token, lang, driverCipher) else emptyArray() } catch (_: Throwable) { emptyArray() }
+              fun safeC(ctx: Any, pkg: String, s1: String, s2: String, v: Long): Int = try { if (isLoaded) c(ctx, pkg, s1, s2, v) else -1 } catch (_: Throwable) { -1 }
+              fun safeD(): String = try { if (isLoaded) d().ifEmpty { FALLBACK_FCM_CLASS } else FALLBACK_FCM_CLASS } catch (_: Throwable) { FALLBACK_FCM_CLASS }
+              fun safeE(): String = try { if (isLoaded) e().ifEmpty { FALLBACK_ORDER_ACTIVITY } else FALLBACK_ORDER_ACTIVITY } catch (_: Throwable) { FALLBACK_ORDER_ACTIVITY }
+              fun safeF(): String = try { if (isLoaded) f().ifEmpty { FALLBACK_DB_NAME } else FALLBACK_DB_NAME } catch (_: Throwable) { FALLBACK_DB_NAME }
+              fun safeG(): String = try { if (isLoaded) g().ifEmpty { FALLBACK_SQL_QUERY } else FALLBACK_SQL_QUERY } catch (_: Throwable) { FALLBACK_SQL_QUERY }
+              fun safeH(): String = try { if (isLoaded) h().ifEmpty { FALLBACK_ENCRYPTED_PREFS } else FALLBACK_ENCRYPTED_PREFS } catch (_: Throwable) { FALLBACK_ENCRYPTED_PREFS }
+              fun safeI(): String = try { if (isLoaded) i().ifEmpty { FALLBACK_TOKEN_KEY } else FALLBACK_TOKEN_KEY } catch (_: Throwable) { FALLBACK_TOKEN_KEY }
+              fun safeJ(): String = try { if (isLoaded) j().ifEmpty { FALLBACK_LANG_KEY } else FALLBACK_LANG_KEY } catch (_: Throwable) { FALLBACK_LANG_KEY }
+              fun safeK(): Array<String> = try { if (isLoaded) k().takeIf { it.isNotEmpty() } ?: FALLBACK_INTENT_KEYS else FALLBACK_INTENT_KEYS } catch (_: Throwable) { FALLBACK_INTENT_KEYS }
+              fun safeL(): Array<String> = try { if (isLoaded) l().takeIf { it.isNotEmpty() } ?: FALLBACK_FCM_KEYS else FALLBACK_FCM_KEYS } catch (_: Throwable) { FALLBACK_FCM_KEYS }
+              fun safeM(): Array<String> = try { if (isLoaded) m().takeIf { it.isNotEmpty() } ?: FALLBACK_POLL_KEYS else FALLBACK_POLL_KEYS } catch (_: Throwable) { FALLBACK_POLL_KEYS }
+              fun safeN(): Array<String> = try { if (isLoaded) n().takeIf { it.isNotEmpty() } ?: FALLBACK_SECURITY_CLASSES else FALLBACK_SECURITY_CLASSES } catch (_: Throwable) { FALLBACK_SECURITY_CLASSES }
+              fun safeO(s: String): String = try { if (isLoaded) o(s) else "" } catch (_: Throwable) { "" }
+              fun safeP(): Array<String> = try { if (isLoaded) p().takeIf { it.isNotEmpty() } ?: FALLBACK_VERSION_PROFILES else FALLBACK_VERSION_PROFILES } catch (_: Throwable) { FALLBACK_VERSION_PROFILES }
+              fun safeQ(): String = try { if (isLoaded) q() else "" } catch (_: Throwable) { "" }
+              fun safeR(path: String): Boolean = try { if (isLoaded) r(path) else true } catch (_: Throwable) { true }
+              fun safeS(versionCode: Long): Int = try {
+                  if (isLoaded) s(versionCode) else when (versionCode) { 40093L -> 0; 40099L -> 1; 40089L -> 2; else -> -1 }
+              } catch (_: Throwable) {
+                  when (versionCode) { 40093L -> 0; 40099L -> 1; 40089L -> 2; else -> -1 }
+              }
+              fun safeT(): Array<String> = try { if (isLoaded) t().takeIf { it.isNotEmpty() } ?: FALLBACK_GUARD_CLASSES else FALLBACK_GUARD_CLASSES } catch (_: Throwable) { FALLBACK_GUARD_CLASSES }
+              fun safeU(): Array<String> = try { if (isLoaded) u().takeIf { it.isNotEmpty() } ?: FALLBACK_FEATURE_FLAGS else FALLBACK_FEATURE_FLAGS } catch (_: Throwable) { FALLBACK_FEATURE_FLAGS }
+          }
+          '''.replace("\n          ", "\n"))
+
+          # 3. Update HookEntry.kt
+          open("app/src/main/java/dev/saned/assistant/HookEntry.kt", "w").write('''package dev.saned.assistant
+
+          import android.app.Activity
+          import android.app.Application
+          import android.content.Context
+          import android.content.pm.ApplicationInfo
+          import android.os.Build
+          import android.os.Bundle
+          import dev.jing.sanedhook.util.Native
+          import io.github.libxposed.api.XposedInterface
+          import io.github.libxposed.api.XposedModule
+          import io.github.libxposed.api.XposedModuleInterface
+          import java.util.concurrent.atomic.AtomicBoolean
+
+          class HookEntry : XposedModule() {
+
+              private val isSystemHooked = AtomicBoolean(false)
+              private val isAppHooked = AtomicBoolean(false)
+              @Volatile private var detectedVersionCode: Long = 0L
+
+              override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
+                  if (param.packageName != "net.jahez.fleets" || !param.isFirstPackage) return
+                  val vCode = resolveJahezVersionCode(param.applicationInfo)
+                  if (vCode > 0L) detectedVersionCode = vCode
+                  val isSupported = OrderInterceptor.checkJahezVersionSupport(detectedVersionCode)
+                  if (!isSupported && OrderInterceptor.isStrictVersionCheck) return
+                  hookSystemLifecycle()
+                  param.defaultClassLoader?.let { initAppHooks(it) }
+              }
+
+              override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
+                  if (param.packageName != "net.jahez.fleets") return
+                  if (detectedVersionCode <= 0L) detectedVersionCode = resolveJahezVersionCode(param.applicationInfo)
+                  val isSupported = OrderInterceptor.checkJahezVersionSupport(detectedVersionCode)
+                  if (!isSupported && OrderInterceptor.isStrictVersionCheck) {
+                      OrderInterceptor.notifyUnsupportedVersion(detectedVersionCode)
+                      return
+                  }
+                  hookSystemLifecycle()
+                  param.classLoader?.let { initAppHooks(it) }
+              }
+
+              private fun resolveJahezVersionCode(appInfo: ApplicationInfo?): Long {
+                  if (appInfo != null) {
+                      for (fieldName in listOf("longVersionCode", "versionCode")) {
+                          try {
+                              val f = appInfo.javaClass.getField(fieldName).apply { isAccessible = true }
+                              val v = (f.get(appInfo) as? Number)?.toLong() ?: 0L
+                              if (v > 0L) return v
+                          } catch (_: Throwable) {}
+                      }
+                  }
+                  for (ctx in listOfNotNull(OrderInterceptor.resolveApplicationContext(), resolveSystemContext())) {
+                      try {
+                          val pInfo = ctx.packageManager.getPackageInfo("net.jahez.fleets", 0)
+                          val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
+                          if (v > 0L) return v
+                      } catch (_: Throwable) {}
+                  }
+                  return 0L
+              }
+
+              private fun resolveSystemContext(): Context? = try {
+                  val atClass = Class.forName("android.app.ActivityThread")
+                  val currentAt = atClass.getMethod("currentActivityThread").invoke(null)
+                  atClass.getMethod("getSystemContext").invoke(currentAt) as? Context
+              } catch (_: Throwable) { null }
+
+              private fun hookSystemLifecycle() {
+                  if (!isSystemHooked.compareAndSet(false, true)) return
+                  try {
+                      val mAppCreate = Application::class.java.getDeclaredMethod("onCreate")
+                      hook(mAppCreate).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val app = chain.thisObject as? Application
+                              if (app != null && app.packageName == "net.jahez.fleets") {
+                                  try { initAppHooks(app.classLoader); OrderInterceptor.initAppContext(app) } catch (_: Throwable) {}
+                              }
+                              return chain.proceed()
+                          }
+                      })
+                  } catch (_: Throwable) {}
+
+                  try {
+                      val mOnCreate = Activity::class.java.getDeclaredMethod("onCreate", Bundle::class.java)
+                      hook(mOnCreate).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val act = chain.thisObject as? Activity
+                              val isJahez = act != null && act.packageName == "net.jahez.fleets"
+                              var detectedOrderId = 0
+                              if (isJahez && act != null) {
+                                  OrderInterceptor.initAppContext(act.applicationContext)
+                                  OrderInterceptor.currentActivity = act
+                                  initAppHooks(act.classLoader)
+                                  detectedOrderId = OrderInterceptor.onActivityPreCreated(act)
+                              }
+                              val res = chain.proceed()
+                              if (isJahez && act != null) {
+                                  OrderInterceptor.onActivityCreated(act)
+                                  if (detectedOrderId != 0) OrderInterceptor.onOrderActivityPostCreate(act, detectedOrderId)
+                              }
+                              return res
+                          }
+                      })
+                  } catch (_: Throwable) {}
+
+                  try {
+                      val mResume = Activity::class.java.getDeclaredMethod("onResume")
+                      hook(mResume).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val res = chain.proceed()
+                              val act = chain.thisObject as? Activity
+                              if (act != null && act.packageName == "net.jahez.fleets") {
+                                  OrderInterceptor.initAppContext(act.applicationContext)
+                                  OrderInterceptor.currentActivity = act
+                                  OrderInterceptor.onActivityResumed(act)
+                              }
+                              return res
+                          }
+                      })
+                  } catch (_: Throwable) {}
+
+                  try {
+                      val mFocus = Activity::class.java.getDeclaredMethod("onWindowFocusChanged", Boolean::class.javaPrimitiveType)
+                      hook(mFocus).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val res = chain.proceed()
+                              val hasFocus = chain.args.getOrNull(0) as? Boolean ?: false
+                              val act = chain.thisObject as? Activity
+                              if (hasFocus && act != null && act.packageName == "net.jahez.fleets") {
+                                  OrderInterceptor.currentActivity = act
+                                  OrderInterceptor.onActivityResumed(act)
+                              }
+                              return res
+                          }
+                      })
+                  } catch (_: Throwable) {}
+              }
+
+              fun initAppHooks(classLoader: ClassLoader) {
+                  try {
+                      val remotePrefs = getRemotePreferences("sanedhook_settings")
+                      DeviceSpoofer.initRemotePrefs(remotePrefs)
+                      LocationEngine.initRemotePrefs(remotePrefs)
+                      OrderInterceptor.initRemotePrefs(remotePrefs)
+                  } catch (_: Throwable) {}
+                  try {
+                      Native.safeA(this, "net.jahez.fleets")
+                      Native.safeC(this, "net.jahez.fleets", OrderInterceptor.licenseToken, OrderInterceptor.licenseBoundId, 0L)
+                  } catch (_: Throwable) {}
+                  OrderInterceptor.startBootstrapLoop(this, classLoader)
+                  if (!isAppHooked.compareAndSet(false, true)) return
+                  try {
+                      PackageCloaker.hook(this, classLoader)
+                      LocationEngine.hook(this, classLoader)
+                      DeviceSpoofer.hook(this, classLoader)
+                      OrderInterceptor.hook(this, classLoader)
+                  } catch (_: Throwable) {}
+              }
+          }
+          '''.replace("\n          ", "\n"))
+
+          # 4. Update PackageCloaker.kt
+          open("app/src/main/java/dev/saned/assistant/PackageCloaker.kt", "w").write('''package dev.saned.assistant
+
+          import android.app.Activity
+          import android.content.pm.ApplicationInfo
+          import android.content.pm.PackageInfo
+          import android.os.Bundle
+          import dev.jing.sanedhook.util.Native
+          import io.github.libxposed.api.XposedInterface
+          import io.github.libxposed.api.XposedModule
+          import java.io.IOException
+          import java.lang.reflect.Modifier
+          import java.util.concurrent.atomic.AtomicBoolean
+
+          object PackageCloaker {
+
+              data class VersionProfile(
+                  val index: Int,
+                  val nativeLibName: String,
+                  val nativeClasses: List<String>,
+                  val blockedActivity: String,
+                  val mainActivity: String,
+                  val loaderClass: String,
+                  val loaderMethod: String,
+                  val runtimeExecMethod: String
+              )
+
+              data class ShadowArmorProfile(
+                  val rootCheckClass: String,
+                  val autoClickerClass: String,
+                  val installSourceClass: String,
+                  val certPinClass: String,
+                  val featureFlagsClass: String
+              )
+
+              @Volatile var detectedVersionIndex: Int = -1
+              @Volatile var activeProfile: VersionProfile? = null
+              @Volatile var lastCheckedVersionCode: Long = 0L
+
+              private val isRuntimeHooked = AtomicBoolean(false)
+              private val isLoaderHooked = AtomicBoolean(false)
+
+              fun getAllVersionProfiles(): List<VersionProfile> {
+                  val raw = Native.safeP()
+                  val result = mutableListOf<VersionProfile>()
+                  for ((idx, c) in raw.toList().chunked(8).withIndex()) {
+                      if (c.size == 8) {
+                          result.add(VersionProfile(idx, c[0], listOf(c[2], c[3]).filter { it.isNotEmpty() }, c[1], c[4], c[5], c[6], c[7]))
+                      }
+                  }
+                  return result
+              }
+
+              fun getAllShadowArmorProfiles(): List<ShadowArmorProfile> {
+                  val raw = Native.safeT()
+                  val result = mutableListOf<ShadowArmorProfile>()
+                  for (c in raw.toList().chunked(5)) {
+                      if (c.size == 5) result.add(ShadowArmorProfile(c[0], c[1], c[2], c[3], c[4]))
+                  }
+                  return result
+              }
+
+              fun checkVersionSupported(versionCode: Long): Boolean {
+                  if (versionCode <= 0L) return false
+                  if (lastCheckedVersionCode == versionCode && detectedVersionIndex >= 0) return true
+                  lastCheckedVersionCode = versionCode
+                  detectedVersionIndex = try { Native.safeS(versionCode) } catch (_: Throwable) { -1 }
+                  return detectedVersionIndex >= 0
+              }
+
+              fun resolveProfile(classLoader: ClassLoader): VersionProfile? {
+                  activeProfile?.let { return it }
+                  val profiles = getAllVersionProfiles()
+                  val preferred = profiles.getOrNull(detectedVersionIndex)
+                  if (preferred != null && isProfilePresent(classLoader, preferred)) {
+                      activeProfile = preferred
+                      return preferred
+                  }
+                  for (p in profiles) {
+                      if (isProfilePresent(classLoader, p)) {
+                          activeProfile = p
+                          if (detectedVersionIndex < 0) detectedVersionIndex = p.index
+                          return p
+                      }
+                  }
+                  return profiles.firstOrNull()
+              }
+
+              private fun isProfilePresent(classLoader: ClassLoader, profile: VersionProfile): Boolean =
+                  profile.loaderClass.isNotEmpty() && try { Class.forName(profile.loaderClass, false, classLoader); true } catch (_: Throwable) { false }
+
+              fun getMainActivityClassName(): String =
+                  (activeProfile ?: getAllVersionProfiles().firstOrNull())?.mainActivity?.takeIf { it.isNotEmpty() } ?: "net.jahez.fleets.MainActivity"
+
+              private fun defaultReturnValueForType(type: Class<*>): Any? = when (type) {
+                  Boolean::class.javaPrimitiveType -> true
+                  Int::class.javaPrimitiveType -> 0
+                  Long::class.javaPrimitiveType -> 0L
+                  Short::class.javaPrimitiveType -> 0.toShort()
+                  Byte::class.javaPrimitiveType -> 0.toByte()
+                  Char::class.javaPrimitiveType -> ' '
+                  Float::class.javaPrimitiveType -> 0f
+                  Double::class.javaPrimitiveType -> 0.0
+                  else -> null
+              }
+
+              fun hook(module: XposedModule, classLoader: ClassLoader) {
+                  val profiles = getAllVersionProfiles()
+                  val resolved = resolveProfile(classLoader)
+
+                  if (isRuntimeHooked.compareAndSet(false, true)) {
+                      try {
+                          val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
+                          val blockedLibName = profiles.firstOrNull { it.nativeLibName.isNotEmpty() }?.nativeLibName ?: "jahez_fleets"
+                          for (m in Runtime::class.java.declaredMethods) {
+                              if (m.name == targetMethodName && m.parameterTypes.lastOrNull() == String::class.java) {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? {
+                                          val lastArg = chain.args.lastOrNull() as? String
+                                          if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) return null
+                                          return chain.proceed()
+                                      }
+                                  })
+                              }
+                              if (m.name == "exec") {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? {
+                                          val cmd = when (val first = chain.args.getOrNull(0)) {
+                                              is String -> first
+                                              is Array<*> -> first.joinToString(" ") { it?.toString() ?: "" }
+                                              else -> ""
+                                          }
+                                          if (cmd.contains("su") || cmd.contains("which") || cmd.contains("magisk") || cmd.contains("busybox")) {
+                                              throw IOException("No such file or directory")
+                                          }
+                                          return chain.proceed()
+                                      }
+                                  })
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                  }
+
+                  try {
+                      val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
+                      for (clsName in nativeClassNames) {
+                          try {
+                              val cls = Class.forName(clsName, false, classLoader)
+                              for (m in cls.declaredMethods) {
+                                  if (Modifier.isNative(m.modifiers)) {
+                                      val retType = m.returnType
+                                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                                          override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
+                                      })
+                                  }
+                              }
+                          } catch (_: Throwable) {}
+                      }
+                  } catch (_: Throwable) {}
+
+                  if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
+                      try {
+                          val cls = Class.forName(resolved.loaderClass, false, classLoader)
+                          val m = cls.getDeclaredMethod(resolved.loaderMethod, String::class.java)
+                          module.hook(m).intercept(object : XposedInterface.Hooker {
+                              override fun intercept(chain: XposedInterface.Chain): Any? = null
+                          })
+                          isLoaderHooked.set(true)
+                      } catch (_: Throwable) {}
+                  }
+
+                  try {
+                      val blockedActivities = profiles.mapNotNull { it.blockedActivity.takeIf { s -> s.isNotEmpty() } }.toSet()
+                      val mainActName = getMainActivityClassName()
+                      if (blockedActivities.isNotEmpty() && mainActName.isNotEmpty()) {
+                          val mResume = Activity::class.java.getDeclaredMethod("onResume")
+                          module.hook(mResume).intercept(object : XposedInterface.Hooker {
+                              override fun intercept(chain: XposedInterface.Chain): Any? {
+                                  val res = chain.proceed()
+                                  val act = chain.thisObject as? Activity
+                                  if (act != null && blockedActivities.contains(act.javaClass.name) && !act.isFinishing) {
+                                      try {
+                                          val mainCls = classLoader.loadClass(mainActName)
+                                          act.startActivity(android.content.Intent(act, mainCls))
+                                          act.finish()
+                                      } catch (_: Throwable) {}
+                                  }
+                                  return res
+                              }
+                          })
+                      }
+                  } catch (_: Throwable) {}
+
+                  try {
+                      val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager", false, classLoader)
+                      for (m in appPkgMgrClass.declaredMethods) {
+                          if (m.name == "getInstallerPackageName") {
+                              module.hook(m).intercept(object : XposedInterface.Hooker {
+                                  override fun intercept(chain: XposedInterface.Chain): Any? =
+                                      if (OrderInterceptor.isMasterRunning) "com.android.vending" else chain.proceed()
+                              })
+                          }
+                          if (m.name == "getInstallSourceInfo") {
+                              module.hook(m).intercept(object : XposedInterface.Hooker {
+                                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                                      val res = chain.proceed()
+                                      if (res != null && OrderInterceptor.isMasterRunning) {
+                                          for (fieldName in listOf("mOriginatingPackageName", "mInstallingPackageName", "mInitiatingPackageName")) {
+                                              try { res.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }.set(res, "com.android.vending") } catch (_: Throwable) {}
+                                          }
+                                      }
+                                      return res
+                                  }
+                              })
+                          }
+                          if (m.name == "getApplicationInfo" || m.name == "getPackageInfo") {
+                              module.hook(m).intercept(object : XposedInterface.Hooker {
+                                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                                      val res = chain.proceed()
+                                      patchGoogleMapsApiKeyIfNeeded(res)
+                                      return res
+                                  }
+                              })
+                          }
+                      }
+                  } catch (_: Throwable) {}
+
+                  val secClasses = Native.safeN()
+                  val secStateClsName = secClasses.getOrNull(0) ?: ""
+                  if (secStateClsName.isNotEmpty()) {
+                      try {
+                          val secCls = classLoader.loadClass(secStateClsName)
+                          for (m in secCls.declaredMethods) {
+                              if (Modifier.isStatic(m.modifiers) && m.parameterTypes.firstOrNull() == secCls) {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? {
+                                          if (OrderInterceptor.isMasterRunning) {
+                                              val stateObj = chain.args.getOrNull(0)
+                                              if (stateObj != null) {
+                                                  for (f in stateObj.javaClass.declaredFields) {
+                                                      if (f.type == Boolean::class.javaPrimitiveType || f.type == java.lang.Boolean::class.java) {
+                                                          try { f.isAccessible = true; f.setBoolean(stateObj, false) } catch (_: Throwable) {}
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                          return chain.proceed()
+                                      }
+                                  })
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                  }
+
+                  for (idx in 1..2) {
+                      val rbClsName = secClasses.getOrNull(idx) ?: continue
+                      try {
+                          val cls = classLoader.loadClass(rbClsName)
+                          for (m in cls.declaredMethods) {
+                              if (m.returnType == Boolean::class.javaPrimitiveType && (idx == 2 || m.parameterCount == 0)) {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                                  })
+                              } else if (idx == 2 && m.returnType == Int::class.javaPrimitiveType) {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) 0 else chain.proceed()
+                                  })
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                  }
+
+                  try {
+                      val saProfiles = getAllShadowArmorProfiles()
+                      val saToApply = if (detectedVersionIndex in saProfiles.indices) listOf(saProfiles[detectedVersionIndex]) else saProfiles
+                      val featureFlags = Native.safeU().toSet()
+                      for (sa in saToApply) {
+                          try {
+                              val rootCls = classLoader.loadClass(sa.rootCheckClass)
+                              for (m in rootCls.declaredMethods) {
+                                  if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterCount == 0) {
+                                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                                          override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                                      })
+                                  }
+                              }
+                          } catch (_: Throwable) {}
+                          for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to true, sa.certPinClass to true)) {
+                              try {
+                                  val c = classLoader.loadClass(clsName)
+                                  val m = c.declaredMethods.firstOrNull {
+                                      it.returnType == Boolean::class.javaPrimitiveType && it.parameterTypes.contentEquals(arrayOf(android.content.Context::class.java))
+                                  }
+                                  if (m != null) {
+                                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                                          override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
+                                      })
+                                  }
+                              } catch (_: Throwable) {}
+                          }
+                          try {
+                              val ffCls = classLoader.loadClass(sa.featureFlagsClass)
+                              for (m in ffCls.declaredMethods) {
+                                  val pTypes = m.parameterTypes
+                                  if (m.returnType == Boolean::class.javaPrimitiveType && pTypes.isNotEmpty() && pTypes[0] == String::class.java) {
+                                      module.hook(m).intercept(object : XposedInterface.Hooker {
+                                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                                              val key = chain.args.getOrNull(0) as? String
+                                              if (OrderInterceptor.isMasterRunning && key != null && featureFlags.contains(key)) return false
+                                              return chain.proceed()
+                                          }
+                                      })
+                                  }
+                              }
+                          } catch (_: Throwable) {}
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              private fun patchGoogleMapsApiKeyIfNeeded(infoObj: Any?) {
+                  try {
+                      val appInfo: ApplicationInfo = when (infoObj) {
+                          is ApplicationInfo -> infoObj
+                          is PackageInfo -> infoObj.applicationInfo ?: return
+                          else -> return
+                      }
+                      if (appInfo.packageName != "net.jahez.fleets") return
+                      val metaData: Bundle = appInfo.metaData ?: return
+                      if (!metaData.containsKey("com.google.android.geo.API_KEY")) return
+                      val replacementKey = Native.safeQ()
+                      if (replacementKey.isNotEmpty()) metaData.putString("com.google.android.geo.API_KEY", replacementKey)
+                  } catch (_: Throwable) {}
+              }
+          }
+          '''.replace("\n          ", "\n"))
+
+          # 5. Update SettingsStore.kt
+          ss_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
+          ss = open(ss_path).read()
+          if "isStayInBackground" not in ss:
+              ss = ss.replace(
+                  "fun isActivePolling(context: Context):",
+                  """fun isStayInBackground(context: Context): Boolean = getPrefs(context).getBoolean("stay_in_background_v2", false)
+              fun setStayInBackground(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("stay_in_background_v2", value).apply(); broadcastSettings(context) }
+              fun isSilenceAlertTone(context: Context): Boolean = getPrefs(context).getBoolean("silence_alert_tone", true)
+              fun setSilenceAlertTone(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("silence_alert_tone", value).apply(); broadcastSettings(context) }
+              fun isStrictVersionCheck(context: Context): Boolean = getPrefs(context).getBoolean("strict_version_check", false)
+              fun setStrictVersionCheck(context: Context, value: Boolean) { getPrefs(context).edit().putBoolean("strict_version_check", value).apply(); broadcastSettings(context) }
+
+              fun isActivePolling(context: Context):""",
+                  1
+              )
+              open(ss_path, "w").write(ss)
+
+          # 6. Update OrderInterceptor.kt with all 4 exact sources (Ls20, Lfs0, Ls90, Lb11/Lnz/Lkh/Ljh/Ljx)
+          oi_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
+          oi = open(oi_path).read()
+
+          if "import dev.jing.sanedhook.util.Native" not in oi:
+              oi = oi.replace(
+                  "import android.media.ToneGenerator",
+                  "import android.media.MediaPlayer\nimport android.media.ToneGenerator\nimport android.os.Process\nimport dev.jing.sanedhook.util.Native\nimport java.util.concurrent.CountDownLatch\nimport java.util.concurrent.atomic.AtomicReference",
+                  1
+              )
+
+          if "handledOrdersMap" not in oi:
+              oi = oi.replace(
+                  "@Volatile var isDryRun: Boolean = false",
+                  """@Volatile var isDryRun: Boolean = false
+              @Volatile var isStayInBackground: Boolean = false
+              @Volatile var isSilenceAlertTone: Boolean = true
+              @Volatile var isStrictVersionCheck: Boolean = false
+              @Volatile var licenseToken: String = ""
+              @Volatile var licenseBoundId: String = ""
+              @Volatile var detectedJahezVersionCode: Long = 0L
+              @Volatile var isJahezVersionOfficiallySupported: Boolean = true
+              private val unsupportedVersionNotified = AtomicBoolean(false)
+
+              fun checkJahezVersionSupport(versionCode: Long): Boolean {
+                  if (versionCode <= 0L) return true
+                  detectedJahezVersionCode = versionCode
+                  val supported = PackageCloaker.checkVersionSupported(versionCode)
+                  isJahezVersionOfficiallySupported = supported
+                  return supported
+              }
+
+              fun notifyUnsupportedVersion(versionCode: Long) {
+                  if (!unsupportedVersionNotified.compareAndSet(false, true)) return
+                  val msg = "⛔ إصدار سند $versionCode غير مدعوم بعد — يرجى تحديث أداة المساعد"
+                  lastOrderEvent = msg
+                  mainHandler.post {
+                      try {
+                          val ctx = resolveApplicationContext() ?: currentActivity
+                          if (ctx != null) Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                      } catch (_: Throwable) {}
+                  }
+              }
+
+              data class HandledOrderEntry(val decision: String, val timestampRealtime: Long, val wasInBackground: Boolean)
+              val handledOrdersMap = ConcurrentHashMap<Int, HandledOrderEntry>()""",
+                  1
+              )
+
+          if "fun onActivityPreCreated(" not in oi:
+              oi = oi.replace(
+                  "fun onActivityCreated(activity: Activity) {",
+                  """fun onActivityPreCreated(activity: Activity): Int {
+                  currentActivity = activity
+                  syncSettings(activity.contentResolver)
+                  return try {
+                      val intent = activity.intent
+                      if (intent != null) {
+                          val exactId = extractExactOrderIdFromIntent(intent)
+                          extractAndProcessOrderFromIntent(intent, activity)
+                          exactId
+                      } else 0
+                  } catch (_: Throwable) { 0 }
+              }
+
+              fun onOrderActivityPostCreate(activity: Activity, orderIdInt: Int) {
+                  handlePostOrderActivityCreate(activity, orderIdInt)
+              }
+
+              private fun extractExactOrderIdFromIntent(intent: Intent): Int = try {
+                  val keys = Native.safeK()
+                  val reqIdKey = keys.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: "EXTRA_DISPATCH_REQUEST_ID"
+                  val idVal = intent.getIntExtra(reqIdKey, 0)
+                  if (idVal != 0) idVal else intent.getIntExtra("order_id", 0)
+              } catch (_: Throwable) { 0 }
+
+              fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
+                  if (orderIdInt == 0) return
+                  val entry = handledOrdersMap[orderIdInt] ?: return
+                  if ((entry.decision != "ACCEPT" && entry.decision != "REJECT") || isDryRun) return
+                  if (isSilenceAlertTone) {
+                      try {
+                          for (field in activity.javaClass.declaredFields) {
+                              if (MediaPlayer::class.java.isAssignableFrom(field.type)) {
+                                  field.isAccessible = true
+                                  (field.get(activity) as? MediaPlayer)?.setVolume(0f, 0f)
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                  }
+                  mainHandler.post {
+                      try {
+                          if (activity.isTaskRoot && !entry.wasInBackground) {
+                              val mainCls = PackageCloaker.getMainActivityClassName()
+                              if (mainCls.isNotEmpty()) activity.startActivity(Intent().setClassName(activity.packageName, mainCls))
+                          }
+                          if (!activity.isFinishing && !activity.isDestroyed) activity.finish()
+                      } catch (_: Throwable) {}
+                  }
+              }
+
+              fun onActivityCreated(activity: Activity) {""",
+                  1
+              )
+
+          if "val k = Native.safeK()" not in oi:
+              oi = oi.replace(
+                  "val extras = intent.extras ?: return",
+                  """val extras = intent.extras ?: return
+                      try {
+                          val k = Native.safeK()
+                          if (k.size >= 12) {
+                              val reqId = intent.getIntExtra(k[0], 0)
+                              if (reqId != 0) {
+                                  val pLat = intent.getDoubleExtra(k[1], 0.0)
+                                  val pLng = intent.getDoubleExtra(k[2], 0.0)
+                                  val dLat = intent.getDoubleExtra(k[3], 0.0)
+                                  val dLng = intent.getDoubleExtra(k[4], 0.0)
+                                  val delivPrice = intent.getDoubleExtra(k[5], 0.0)
+                                  val distExtra = intent.getDoubleExtra(k[7], 0.0)
+                                  val subName = intent.getStringExtra(k[9]) ?: ""
+                                  val bonusAmt = intent.getDoubleExtra(k[10], 0.0)
+                                  val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                                  val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                                  val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distExtra
+                                  val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
+                                  val totalOfferPrice = delivPrice + bonusAmt
+                                  val cleanPrice = String.format(Locale.US, "%.2f", totalOfferPrice).toDoubleOrNull() ?: totalOfferPrice
+                                  lastOrderEvent = "Order #$reqId detected via IncomingDispatchActivity (Ls20)"
+                                  handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = subName, custDist = calcCustDist, sourceChannel = "SCREEN")
+                                  handlePostOrderActivityCreate(activity, reqId)
+                                  return
+                              }
+                          }
+                      } catch (_: Throwable) {}""",
+                  1
+              )
+
+          if "readExactJahezEncryptedPrefs" not in oi:
+              oi = oi.replace(
+                  "fun scanAllSharedPreferencesForTokens(context: Context) {",
+                  """@Volatile var cachedLanguage: String = "en"
+
+              fun readExactJahezEncryptedPrefs(context: Context) {
+                  try {
+                      val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+                      val encPrefs = EncryptedSharedPreferences.create(
+                          context, Native.safeH(), masterKey,
+                          EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                          EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                      )
+                      val tok = encPrefs.getString(Native.safeI(), "") ?: ""
+                      if (tok.isNotEmpty()) checkAndSetToken(tok, Native.safeI())
+                      val lang = encPrefs.getString(Native.safeJ(), "en") ?: "en"
+                      if (lang.isNotEmpty()) cachedLanguage = lang
+                  } catch (_: Throwable) {}
+              }
+
+              fun scanAllSharedPreferencesForTokens(context: Context) {
+                  readExactJahezEncryptedPrefs(context)""",
+                  1
+              )
+
+          if "hookIncomingDispatchActivity" not in oi:
+              oi = oi.replace(
+                  "fun hook(module: XposedModule, classLoader: ClassLoader) {",
+                  """private val isIncomingDispatchHooked = AtomicBoolean(false)
+
+              private fun hookIncomingDispatchActivity(module: XposedModule, classLoader: ClassLoader) {
+                  if (!isIncomingDispatchHooked.compareAndSet(false, true)) return
+                  try {
+                      val actClsName = Native.safeE()
+                      if (actClsName.isEmpty()) return
+                      val actCls = classLoader.loadClass(actClsName)
+                      val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
+                      module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val act = chain.thisObject as? Activity
+                              if (act != null) {
+                                  initAppContext(act.applicationContext)
+                                  currentActivity = act
+                                  onActivityPreCreated(act)
+                              }
+                              val res = chain.proceed()
+                              if (act != null) {
+                                  val reqId = act.intent?.let { extractExactOrderIdFromIntent(it) } ?: 0
+                                  if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
+                              }
+                              return res
+                          }
+                      })
+                  } catch (_: Throwable) { isIncomingDispatchHooked.set(false) }
+              }
+
+              fun hook(module: XposedModule, classLoader: ClassLoader) {
+                  hookIncomingDispatchActivity(module, classLoader)""",
+                  1
+              )
+
+          # Source 2: Lfs0.d / Lfs0.c / Lfs0.e Instrumentation.execStartActivity
+          oi = replace_block(
+              oi,
+              "private fun hookInstrumentation(module: XposedModule) {",
+              "private val hookedFcmClasses =",
+              """private fun hookInstrumentation(module: XposedModule) {
+                  if (!isInstrumentationHooked.compareAndSet(false, true)) return
+                  try {
+                      val instClass = Class.forName("android.app.Instrumentation")
+                      for (m in instClass.declaredMethods) {
+                          if (m.name == "execStartActivity") {
+                              val paramTypes = m.parameterTypes
+                              val intentIdx = paramTypes.indexOfFirst { it == Intent::class.java }
+                              val activityIdx = paramTypes.indexOfFirst { it.name == "android.app.Activity" }
+                              if (intentIdx >= 0 && activityIdx >= 0) {
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? {
+                                          try {
+                                              val intent = chain.args.getOrNull(intentIdx) as? Intent
+                                              if (intent != null) {
+                                                  currentActivity?.let { extractAndProcessOrderFromIntent(intent, it) }
+                                                  val callerObj = chain.args.getOrNull(activityIdx)
+                                                  val orderIdInt = extractExactOrderIdFromIntent(intent)
+                                                  if (callerObj == null && orderIdInt != 0 && !isDryRun) {
+                                                      val entry = handledOrdersMap[orderIdInt]
+                                                      if (entry != null && (entry.decision == "ACCEPT" || entry.decision == "REJECT")) {
+                                                          if ((SystemClock.elapsedRealtime() - entry.timestampRealtime) <= 60_000L) {
+                                                              if (isStayInBackground && entry.wasInBackground) return null
+                                                              val flags = intent.flags
+                                                              if ((flags and 0x8000) != 0) intent.flags = flags and (-32769)
+                                                          }
+                                                      }
+                                                  }
+                                              }
+                                          } catch (_: Throwable) {}
+                                          return chain.proceed()
+                                      }
+                                  })
+                              }
+                          }
+                      }
+                  } catch (_: Throwable) {}
+              }"""
+          )
+
+          # Source 3: Ls90.f / Ls90.g / Ls90.b SanedFCMNotificationHandler
+          oi = replace_block(
+              oi,
+              "private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {",
+              "private fun hookSQLite(module: XposedModule) {",
+              """private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
+                  val candidateClasses = mutableSetOf(Native.safeD(), "com.google.firebase.messaging.FirebaseMessagingService").filter { it.isNotEmpty() }.toMutableSet()
+                  try {
+                      val ctx = appContext ?: currentActivity
+                      if (ctx != null) {
+                          val intent = Intent("com.google.firebase.messaging.MESSAGING_EVENT").apply { setPackage("net.jahez.fleets") }
+                          ctx.packageManager.queryIntentServices(intent, 0)?.forEach { it.serviceInfo?.name?.let { n -> candidateClasses.add(n) } }
+                      }
+                  } catch (_: Throwable) {}
+
+                  for (clsName in candidateClasses) {
+                      if (!hookedFcmClasses.add(clsName)) continue
+                      try {
+                          val fmsClass = Class.forName(clsName, false, classLoader)
+                          for (m in fmsClass.declaredMethods) {
+                              if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
+                                  val paramCls = m.parameterTypes[0]
+                                  val hasMapGetter = paramCls.methods.any { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
+                                  if (!hasMapGetter && clsName != Native.safeD()) continue
+                                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                                      override fun intercept(chain: XposedInterface.Chain): Any? {
+                                          var decisionAction = ""
+                                          try {
+                                              val remoteMessage = chain.args.getOrNull(0)
+                                              if (remoteMessage != null) {
+                                                  val getDataMethod = try { remoteMessage.javaClass.getMethod("getData") } catch (_: Throwable) {
+                                                      remoteMessage.javaClass.methods.firstOrNull { it.parameterCount == 0 && Map::class.java.isAssignableFrom(it.returnType) }
+                                                  }
+                                                  val dataMap = getDataMethod?.invoke(remoteMessage) as? Map<*, *>
+                                                  if (dataMap != null && dataMap.isNotEmpty()) {
+                                                      decisionAction = processFcmMapWithLs90(dataMap)
+                                                      if (decisionAction.isEmpty()) {
+                                                          val json = JSONObject()
+                                                          for ((k, v) in dataMap) if (k != null && v != null) json.put(k.toString(), v.toString())
+                                                          extractAndProcessOrderJson(json, "FCM Push 📲")
+                                                      }
+                                                  }
+                                              }
+                                          } catch (_: Throwable) {}
+                                          if (decisionAction == "REJECT" && !isDryRun) return null
+                                          return chain.proceed()
+                                      }
+                                  })
+                              }
+                          }
+                      } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
+                  }
+              }
+
+              private fun processFcmMapWithLs90(dataMap: Map<*, *>): String {
+                  val keys = Native.safeL()
+                  if (keys.size < 18) return ""
+                  val reqId = (dataMap[keys[0]] as? String)?.trim()?.toIntOrNull() ?: return ""
+                  if (reqId == 0) return ""
+                  fun mapDouble(k: String): Double = (dataMap[k] as? String)?.trim()?.toDoubleOrNull() ?: 0.0
+                  fun mapFirstStr(vararg ks: String): String {
+                      for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
+                      return ""
+                  }
+                  val pLat = mapDouble(keys[1]); val pLng = mapDouble(keys[2])
+                  val dLat = mapDouble(keys[3]); val dLng = mapDouble(keys[4])
+                  val delivPrice = mapDouble(keys[5]); val distVal = mapDouble(keys[7])
+                  val restName = mapFirstStr(keys[9], keys[10], keys[11], keys[12])
+                  val bonusAmt = mapFirstStr(keys[13], keys[14], keys[15]).toDoubleOrNull() ?: 0.0
+                  val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                  val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                  val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distVal
+                  val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
+                  val cleanPrice = String.format(Locale.US, "%.2f", delivPrice + bonusAmt).toDoubleOrNull() ?: (delivPrice + bonusAmt)
+                  lastOrderEvent = "Order #$reqId detected via FCM Push (Ls90)"
+                  return handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = restName, custDist = calcCustDist, sourceChannel = "PUSH")
+              }"""
+          )
+
+          # Source 4A: invokeNativeString -> Native.safeD..safeQ
+          oi = replace_block(
+              oi,
+              "private fun invokeNativeInit(context: Context) {",
+              "fun scanJahezDatabases(context: Context) {",
+              """private fun invokeNativeInit(context: Context) {
+                  try { Native.safeA(context, "dev.jing.sanedhook") } catch (_: Throwable) {}
+              }
+
+              private fun invokeNativeString(methodName: String): String = when (methodName) {
+                  "d" -> Native.safeD()
+                  "e" -> Native.safeE()
+                  "f" -> Native.safeF()
+                  "g" -> Native.safeG()
+                  "h" -> Native.safeH()
+                  "i" -> Native.safeI()
+                  "j" -> Native.safeJ()
+                  "q" -> Native.safeQ()
+                  else -> ""
+              }"""
+          )
+
+          # Source 4B: Lkh.b Cipher.doFinal("driverId : ") fix
+          oi = replace_block(
+              oi,
+              "private fun hookCipher(module: XposedModule) {",
+              "private fun hookJsonConstructors(module: XposedModule) {",
+              """private val DRIVER_ID_PREFIX = "driverId : ".toByteArray(Charsets.UTF_8)
+
+              private fun startsWithDriverIdPrefix(bytes: ByteArray): Boolean {
+                  if (bytes.size < DRIVER_ID_PREFIX.size) return false
+                  for (i in DRIVER_ID_PREFIX.indices) if (bytes[i] != DRIVER_ID_PREFIX[i]) return false
+                  return true
+              }
+
+              private fun hookCipher(module: XposedModule) {
+                  try {
+                      val mDoFinal = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
+                      module.hook(mDoFinal).intercept(object : XposedInterface.Hooker {
+                          override fun intercept(chain: XposedInterface.Chain): Any? {
+                              val result = chain.proceed()
+                              val inputBytes = chain.args.getOrNull(0) as? ByteArray
+                              val outputBytes = result as? ByteArray
+                              if (inputBytes != null && outputBytes != null) {
+                                  try {
+                                      if (startsWithDriverIdPrefix(inputBytes)) {
+                                          capturedDriverCipherB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
+                                      }
+                                  } catch (_: Throwable) {}
+                              }
+                              return result
+                          }
+                      })
+                  } catch (_: Throwable) {}
+              }"""
+          )
+
+          # Source 4B2: Lb11.h pollServerForAvailableOrders via Native.safeB(2, 0, ...) & Ljx.f handleOrderViaApi with Lev1
+          oi = replace_block(
+              oi,
+              "private fun pollServerForAvailableOrders() {",
+              "private fun processHttpResponse(response: Any) {",
+              """private fun pollServerForAvailableOrders() {
+                  val ctx = resolveApplicationContext() ?: currentActivity
+                  if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
+                  val token = cachedAuthToken
+                  if (token.isEmpty()) return
+                  val clientToUse = capturedAppHttpClient ?: httpClient
+
+                  if (Native.isLoaded) {
+                      try {
+                          if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+                          val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+                          val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+                          if (spec.size >= 2 && spec[1].startsWith("http")) {
+                              pollingHits.incrementAndGet()
+                              val rb = Request.Builder().url(spec[1]).get()
+                              var idx = 2
+                              while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+                              val resp = clientToUse.newCall(rb.build()).execute()
+                              val code = resp.code
+                              lastHttpResponseCode = code
+                              val body = resp.body?.string() ?: ""
+                              resp.close()
+                              if (code in 200..299 && body.isNotEmpty()) {
+                                  failedPollingCount = 0
+                                  findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+                                  return
+                              }
+                          }
+                      } catch (_: Throwable) {}
+                  }
+
+                  if (lastOrdersListUrl.isEmpty()) return
+                  val candidateEndpoints = listOf("/api/fleets/orders/available", "/api/v1/fleets/orders/available", "/api/fleets/orders")
+                  val probeHosts = mutableListOf<String>()
+                  if (lastOrdersListUrl.isNotEmpty()) probeHosts.add(lastOrdersListUrl)
+                  if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
+                  probeHosts.addAll(candidateApiHosts)
+
+                  for (h in probeHosts.distinct()) {
+                      for (endpoint in candidateEndpoints) {
+                          val url = buildCandidateUrl(h, endpoint)
+                          try {
+                              pollingHits.incrementAndGet()
+                              val reqBuilder = Request.Builder().url(url).get()
+                              applyJahezHeaders(reqBuilder, token)
+                              val resp = clientToUse.newCall(reqBuilder.build()).execute()
+                              val code = resp.code
+                              lastHttpResponseCode = code
+                              val body = resp.body?.string() ?: ""
+                              resp.close()
+                              if (code in 200..299 && body.isNotEmpty()) {
+                                  failedPollingCount = 0
+                                  if (cachedApiHost.isEmpty()) {
+                                      val uri = java.net.URI(url)
+                                      cachedApiHost = "${uri.scheme}://${uri.host}"
+                                      persistHost(cachedApiHost)
+                                  }
+                                  if (body.contains("order", ignoreCase = true) || body.contains("trip", ignoreCase = true)) {
+                                      findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+                                      return
+                                  }
+                              }
+                          } catch (_: Throwable) {}
+                      }
+                  }
+              }"""
+          )
+
+          oi = replace_block(
+              oi,
+              "private fun handleOrderViaApi(",
+              "fun scanJahezSharedPreferencesForToken(",
+              """private fun isAppInBackground(): Boolean {
+                  val act = currentActivity
+                  return act == null || act.isFinishing || act.isDestroyed || !act.hasWindowFocus()
+              }
+
+              private fun handleOrderViaApi(
+                  orderId: String,
+                  price: Double,
+                  dist: Double,
+                  restaurant: String,
+                  custDist: Double = 0.0,
+                  pickupAddr: String = "",
+                  custAddr: String = "",
+                  custName: String = "",
+                  custPhone: String = "",
+                  cashAmt: Double = 0.0,
+                  sourceChannel: String = "PUSH"
+              ): String {
+                  val rawId = orderId.replace("#", "").trim()
+                  if (rawId.isEmpty()) return ""
+                  val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+
+                  if (orderIdInt != 0) {
+                      val existing = handledOrdersMap[orderIdInt]
+                      if (existing != null && (SystemClock.elapsedRealtime() - existing.timestampRealtime) < 60_000L) {
+                          return existing.decision
+                      }
+                  }
+
+                  val (action, reason) = evaluateOrderDecision(price, dist, custDist)
+
+                  if (orderIdInt != 0) {
+                      val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
+                      val prev = handledOrdersMap.putIfAbsent(orderIdInt, HandledOrderEntry(action, SystemClock.elapsedRealtime(), wasInBg))
+                      if (prev != null && (SystemClock.elapsedRealtime() - prev.timestampRealtime) < 60_000L) {
+                          return prev.decision
+                      }
+                  }
+
+                  when (action) {
+                      "REJECT" -> {
+                          lastOrderEvent = "Order $orderId auto-rejected ($reason)"
+                          currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $orderId: $reason") }
+                          sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+                          executeDirectApiCall(rawId, "REJECT")
+                      }
+                      "DRY_RUN" -> {
+                          lastOrderEvent = "Order $orderId dry-run ($reason)"
+                          currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: Would accept $orderId") }
+                          sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+                      }
+                      "ACCEPT" -> {
+                          lastOrderEvent = "Auto-Accepting Order $orderId..."
+                          currentActivity?.let { act ->
+                              showToast(act, "⚡ Auto-Accepting Order $orderId...")
+                              act.runOnUiThread { try { act.window?.decorView?.let { decor -> findAndTriggerOrder(decor, act, System.currentTimeMillis()) } } catch (_: Throwable) {} }
+                          }
+                          sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Accepted ✅", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+                          executeDirectApiCall(rawId, "ACCEPT")
+                          playAlertSound()
+                      }
+                      else -> {
+                          lastOrderEvent = "Order $orderId left for manual review ($reason)"
+                          currentActivity?.let { act -> showToast(act, "↩️ Left $orderId for you: $reason") }
+                          sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason)
+                      }
+                  }
+                  return action
+              }"""
+          )
+
+          # Source 4C: Ljx.h / Ljx$c / Ly0 parallel priority -8 execution with Native.safeB & CountDownLatch(1)
+          oi = replace_block(
+              oi,
+              "private fun executeDirectApiCall(orderIdNum: String, action: String) {",
+              "fun sendOrderToLog(",
+              """private fun executeDirectApiCall(orderIdNum: String, action: String) {
+                  val ctx = resolveApplicationContext() ?: currentActivity
+                  if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
+                  val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+                  val isAccept = (action == "ACCEPT")
+                  val burstCount = if (isAccept) parallelRequests.coerceIn(1, 8) else 1
+                  val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+
+                  val probeHosts = mutableListOf<String>()
+                  if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
+                  probeHosts.addAll(candidateApiHosts)
+                  val clientToUse = capturedAppHttpClient ?: httpClient
+
+                  CoroutineScope(Dispatchers.IO).launch {
+                      val tid = Process.myTid()
+                      val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
+                      if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
+                      try {
+                          var nativeMethod = ""
+                          var nativeUrl = ""
+                          val nativeHeaders = LinkedHashMap<String, String>()
+                          if (Native.isLoaded && orderIdInt > 0) {
+                              try {
+                                  if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+                                  val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+                                  val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+                                  if (spec.size >= 2 && spec[1].startsWith("http")) {
+                                      nativeMethod = spec[0]; nativeUrl = spec[1]
+                                      var idx = 2
+                                      while (idx + 1 < spec.size) { nativeHeaders[spec[idx]] = spec[idx + 1]; idx += 2 }
+                                  }
+                              } catch (_: Throwable) {}
+                          }
+
+                          val emptyPutBody = "".toRequestBody(null)
+                          val jsonBody = JSONObject().apply {
+                              put("order_id", orderIdNum)
+                              if (orderIdInt > 0) put("requestId", orderIdInt)
+                          }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+                          val latch = CountDownLatch(1)
+                          val winnerCode = AtomicReference<Int>(null)
+
+                          for (burst in 0 until burstCount) {
+                              launch {
+                                  if (nativeUrl.isNotEmpty() && winnerCode.get() == null) {
+                                      try {
+                                          val rb = Request.Builder().url(nativeUrl)
+                                          if (nativeMethod.equals("PUT", ignoreCase = true)) rb.put(emptyPutBody) else rb.get()
+                                          for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+                                          val resp = clientToUse.newCall(rb.build()).execute()
+                                          val code = resp.code
+                                          resp.close()
+                                          if (code in 200..299) {
+                                              if (winnerCode.compareAndSet(null, code)) latch.countDown()
+                                              return@launch
+                                          }
+                                      } catch (_: Throwable) {}
+                                  }
+                                  for (host in probeHosts.distinct()) {
+                                      if (winnerCode.get() != null) return@launch
+                                      val endpoints = if (isAccept) listOf(
+                                          buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/accept"),
+                                          buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/accept"),
+                                          buildCandidateUrl(host, "/api/orders/$orderIdNum/accept")
+                                      ) else listOf(
+                                          buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/reject"),
+                                          buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/reject"),
+                                          buildCandidateUrl(host, "/api/orders/$orderIdNum/reject")
+                                      )
+                                      for (url in endpoints) {
+                                          if (winnerCode.get() != null) return@launch
+                                          for (method in listOf("PUT", "POST")) {
+                                              try {
+                                                  val reqBuilder = Request.Builder().url(url)
+                                                  if (method == "PUT") reqBuilder.put(emptyPutBody) else reqBuilder.post(jsonBody)
+                                                  applyJahezHeaders(reqBuilder, token)
+                                                  if (capturedDriverCipherB64.isNotEmpty()) reqBuilder.header("driverId", capturedDriverCipherB64)
+                                                  val resp = clientToUse.newCall(reqBuilder.build()).execute()
+                                                  val code = resp.code
+                                                  resp.close()
+                                                  if (code in 200..299) {
+                                                      cachedApiHost = host; persistHost(host)
+                                                      if (winnerCode.compareAndSet(null, code)) latch.countDown()
+                                                      return@launch
+                                                  }
+                                              } catch (_: Throwable) {}
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                          try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
+                      } catch (_: Throwable) {
+                      } finally {
+                          if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
+                      }
+                  }
+              }"""
+          )
+
+          open(oi_path, "w").write(oi)
+          print("Successfully synced all 4 sources and version checks into OrderInterceptor.kt")
+          PYEOF
+
+      - name: Commit Open-Source Parity Updates to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync 100% SanedAssistant-98 open-source parity (libshnative + Ls20/Lfs0/Ls90/Lb11/Ljx) [skip ci]"
+            git push origin HEAD:${{ github.ref_name }} || true
+          fi
+
+      - name: Configure AndroidX & Build Open-Source APK with Gradle
+        run: |
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.nonTransitiveRClass=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
 
-      - name: Build APK with Gradle
-        run: gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
-
-      - name: Inject Xposed Metadata & Sign APK
+      - name: Align & Sign SanedAssistant-PRO.apk
         run: |
           APK_FOUND=$(find app/build/outputs/apk/ -name "*.apk" | head -n 1)
           if [ -z "$APK_FOUND" ]; then
             echo "Error: No APK found after build!"
             exit 1
           fi
-          echo "Found built APK: $APK_FOUND"
-
-          # Verify Xposed metadata is bundled by Gradle
-          unzip -l "$APK_FOUND" | grep "META-INF/xposed/" || echo "Xposed metadata checked"
 
           keytool -genkeypair -v -keystore release.keystore -alias saned_key \
             -keyalg RSA -keysize 2048 -validity 10000 \
@@ -65,25 +1397,25 @@ jobs:
             --ks-key-alias saned_key \
             --out SanedAssistant-PRO.apk aligned.apk
 
-      - name: Upload APK Artifact
+      - name: Upload Signed APK & Decompiled Open-Source Project Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SanedAssistant-PRO-APK
-          path: SanedAssistant-PRO.apk
-          retention-days: 14
+          name: SanedAssistant-PRO-and-OpenSource
+          path: |
+            SanedAssistant-PRO.apk
+            SanedAssistant-98-OpenSource.zip
+          retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (APK + Full Open-Source Code)
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          files: SanedAssistant-PRO.apk
-          tag_name: "v3.0.0-build-${{ github.run_number }}"
-          name: "Saned Assistant PRO v3.0.0 (Build #${{ github.run_number }})"
+          files: |
+            SanedAssistant-PRO.apk
+            SanedAssistant-98-OpenSource.zip
+          tag_name: "v3.1.0-build-${{ github.run_number }}"
+          name: "Saned Assistant PRO v3.1.0 (100% Open-Source Parity #${{ github.run_number }})"
           body: |
-            نسخة Saned Assistant PRO المطابقة للمساعد الأصلي مع كافة الإصلاحات:
-            - مبنية بنسبة 100% على معمارية Modern LibXposed الرسمية المتوافقة مع LSPosed.
-            - زر تشغيل رئيسي شامل (Master ON/OFF).
-            - تصفير جميع القيم والخيارات افتراضياً (Zero Defaults).
-            - نظام خريطة تفاعلية Leaflet متصلة بنظام الإحداثيات مع أزرار مواقع سريعة لشمال الرياض.
-            - تزييف معرف الجهاز Android ID حصرياً مع إلغاء حقل IMEI غير الضروري.
-            - إصلاح جذري لمشكلة عدم تفعيل الهوك ومزامنة الإعدادات عبر XposedProvider.
+            ### مخرجات البناء التلقائي (Workflow Outputs):
+            1. **`SanedAssistant-PRO.apk`**: النسخة المبنية من الكود المصدري بعد حقن `libshnative.so` ومطابقة كافة كلاسات التقاط الطلبات والقبول والرفض (`Ls20`, `Lfs0`, `Ls90`, `Lb11`, `Lnz`, `Ljx`, `Ldv1`, `Lvh1`, `Lkh`, `Ljh`, `Lev1`) بنسبة 100%.
+            2. **`SanedAssistant-98-OpenSource.zip`**: المشروع المفتوح المصدر الكامل المستخرج مباشرة من `SanedAssistant-98-7bac1ec.apk` عبر **JADX (`--export-gradle`)** و **Apktool** (يحتوي على مشروع Gradle الكامل + الكود المصدري Java/Kotlin + ملفات الـ Resources والـ Smali + مكتبة `libshnative.so`).
