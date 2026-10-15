@@ -1178,6 +1178,14 @@ object OrderInterceptor {
         readExactJahezEncryptedPrefs(context)
     }
 
+    fun clearPersistedToken() {
+        try {
+  File("/data/local/tmp/saned_auth_token.txt").delete()
+        } catch (_: Throwable) {}
+        cachedAuthToken = ""
+        cachedHeaders.remove("Authorization")
+    }
+
     fun checkAndSetToken(value: String?, key: String? = null) {
         if (value.isNullOrEmpty()) return
         val str = value.trim()
