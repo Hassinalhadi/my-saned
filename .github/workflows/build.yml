@@ -70,46 +70,22 @@ jobs:
                   return src[:i1] + replacement + "\n\n    " + src[i2:]
               return src
 
-          # 1. Extract libshnative.so and original icons (DQ.jpg, ZI.png, iQ.png) from SanedAssistant-98-7bac1ec.apk
+          # 1. Extract original icons (DQ.jpg, ZI.png, iQ.png) from SanedAssistant-98-7bac1ec.apk and remove any stale jniLibs
+          if os.path.exists("app/src/main/jniLibs"):
+              import shutil
+              shutil.rmtree("app/src/main/jniLibs", ignore_errors=True)
           apk_path = "SanedAssistant-98-7bac1ec.apk"
           if os.path.exists(apk_path):
-              os.makedirs("app/src/main/jniLibs/arm64-v8a", exist_ok=True)
               os.makedirs("app/src/main/res/drawable", exist_ok=True)
               with zipfile.ZipFile(apk_path, "r") as zf:
                   names = set(zf.namelist())
-                  if "lib/arm64-v8a/libshnative.so" in names:
-                      so = bytearray(zf.read("lib/arm64-v8a/libshnative.so"))
-                      cert1 = bytes.fromhex("f6e77d71ec1a93d6836185f0cd19e7647d9faa6ca3e488e20736a3321fbfb78f")
-                      expected_text_sha = bytes(so[0x9ab30:0x9ab50])
-                      pack_insns = lambda insns: b"".join(struct.pack("<I", i) for i in insns)
-                      stub_1c6e0 = pack_insns([
-                          0x90000408, 0x913b0108, 0x52800029, 0x39000109,
-                          0x39008509, 0x3900891f, 0x39008d09, 0xd2800c8a,
-                          0xf900190a, 0x91000508, 0x100000e9, 0xa9402d2a,
-                          0xa9002d0a, 0xa9412d2a, 0xa9012d0a, 0x52800020,
-                          0xd65f03c0
-                      ]) + cert1
-                      so[0x1c6e0:0x1c6e0+len(stub_1c6e0)] = stub_1c6e0
-                      stub_52100 = pack_insns([
-                          0x10000109, 0xa9402d2a, 0xa9002c0a, 0xa9412d2a,
-                          0xa9012c0a, 0x52800020, 0xd65f03c0, 0xd503201f
-                      ]) + expected_text_sha
-                      so[0x52100:0x52100+len(stub_52100)] = stub_52100
-                      so[0x64df4:0x64df4+8] = pack_insns([0x52800020, 0xd65f03c0])
-                      so[0x3cd58:0x3cd58+4] = pack_insns([0xd65f03c0])
-                      so[0x26994:0x26994+4] = pack_insns([0xd65f03c0])
-                      so[0x26750:0x26750+16] = pack_insns([0xd00003a8, 0xd2800c80, 0xf9077900, 0xd65f03c0])
-                      so[0x751b0:0x751b0+4] = pack_insns([0xd65f03c0])
-                      so[0x2c29c:0x2c29c+16] = pack_insns([0xa9bf7bfd, 0x94000000 | (((0x1c6e0 - 0x2c2a0) >> 2) & 0x3ffffff), 0xa8c17bfd, 0xd65f03c0])
-                      so[0x72760:0x72760+16] = pack_insns([0xa9bf7bfd, 0x94000000 | (((0x1c6e0 - 0x72764) >> 2) & 0x3ffffff), 0xa8c17bfd, 0xd65f03c0])
-                      open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb").write(so)
                   if "res/DQ.jpg" in names:
                       open("app/src/main/res/drawable/ic_launcher_original.jpg", "wb").write(zf.read("res/DQ.jpg"))
                   if "res/ZI.png" in names:
                       open("app/src/main/res/drawable/ic_notif_original.png", "wb").write(zf.read("res/ZI.png"))
                   if "res/iQ.png" in names:
                       open("app/src/main/res/drawable/ic_badge_original.png", "wb").write(zf.read("res/iQ.png"))
-              print("Extracted libshnative.so and original icons (DQ.jpg, ZI.png, iQ.png)")
+              print("Extracted original icons (DQ.jpg, ZI.png, iQ.png)")
 
           # 1B. Update AndroidManifest.xml & NotificationHelper.kt to use original icons and register ACTION_DIAG_LOG
           manifest_path = "app/src/main/AndroidManifest.xml"
@@ -947,7 +923,7 @@ jobs:
               }
 
               override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-                  if (param.packageName != "net.jahez.fleets") return
+                  if (param.packageName != "net.jahez.fleets" || !param.isFirstPackage) return
                   DiagnosticLogger.installCrashHandler(this, "onPackageReady")
                   DiagnosticLogger.syncHookToggles(this)
 
@@ -2357,11 +2333,8 @@ jobs:
                   LocationEngine.syncLocationSettings()
                   DeviceSpoofer.syncSettings()
                   LocationEngine.seedLocationManager(app)
-                  acquireWakeLock(app)
+                  if (isMasterRunning) acquireWakeLock(app)
                   (app as? Application)?.let { registerActivityCallbacksOnApp(it) }
-                  if (DiagnosticLogger.hookBootstrapLoop) {
-                      startActiveServerPolling()
-                  }
               }""".replace("\n          ", "\n")
           )
 
@@ -2391,6 +2364,12 @@ jobs:
                           }
                       } else {
                           DiagnosticLogger.logWarn("BootstrapLoop", "Timed out waiting for currentApplication()")
+                      }
+
+                      // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
+                      try { Thread.sleep(3000) } catch (_: Throwable) {}
+                      if (DiagnosticLogger.hookBootstrapLoop) {
+                          startActiveServerPolling()
                       }
 
                       // Continuous background SQLite + EncryptedSharedPreferences token sync loop matching Lb11$b in SanedAssistant-98
@@ -3043,6 +3022,75 @@ jobs:
                   'isDryRun = p.getBoolean("dry_run", isDryRun)\n            isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)\n            isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)\n            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)',
                   oi
               )
+
+          # Match Lji0$a startedActivityCount foreground/background tracking in SanedAssistant-98
+          reg_start = "private val startedActivityCount = AtomicInteger(0)" if "private val startedActivityCount = AtomicInteger(0)" in oi else "private fun registerActivityCallbacksOnApp(app: Application) {"
+          oi = replace_block(
+              oi,
+              reg_start,
+              "private fun scanExistingActivitiesInActivityThread()",
+              r"""private val startedActivityCount = AtomicInteger(0)
+
+              private fun registerActivityCallbacksOnApp(app: Application) {
+                  if (!isLifecycleCallbacksRegistered.compareAndSet(false, true)) return
+                  mainHandler.post {
+                      try {
+                          app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+                              override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {
+                                  if (activity.packageName == "net.jahez.fleets") {
+                                      currentActivity = activity
+                                  }
+                              }
+                              override fun onActivityStarted(activity: Activity) {
+                                  if (activity.packageName == "net.jahez.fleets") {
+                                      currentActivity = activity
+                                      if (activity.javaClass.name != Native.safeE()) {
+                                          startedActivityCount.incrementAndGet()
+                                      }
+                                  }
+                              }
+                              override fun onActivityResumed(activity: Activity) {
+                                  if (activity.packageName == "net.jahez.fleets") {
+                                      currentActivity = activity
+                                  }
+                              }
+                              override fun onActivityPaused(activity: Activity) {}
+                              override fun onActivityStopped(activity: Activity) {
+                                  if (activity.packageName == "net.jahez.fleets") {
+                                      if (activity.javaClass.name != Native.safeE()) {
+                                          startedActivityCount.updateAndGet { (it - 1).coerceAtLeast(0) }
+                                      }
+                                  }
+                              }
+                              override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
+                              override fun onActivityDestroyed(activity: Activity) {}
+                          })
+                          DiagnosticLogger.logStep("OrderInterceptor", "Registered Lji0 ActivityLifecycleCallbacks")
+                      } catch (t: Throwable) {
+                          DiagnosticLogger.logError("OrderInterceptor", "Failed registering ActivityLifecycleCallbacks", t)
+                      }
+                  }
+              }""".replace("\n          ", "\n")
+          )
+
+          oi = replace_block(
+              oi,
+              "private fun isAppInBackground(): Boolean {",
+              "private fun handleOrderViaApi(",
+              r"""private fun isAppInBackground(): Boolean {
+                  return startedActivityCount.get() <= 0
+              }""".replace("\n          ", "\n")
+          )
+
+          # Update NotificationHelper.kt to use Icon.createWithResource("dev.jing.sanedhook", R.drawable.ic_notif_original) matching Luc1.c / Luc1.d
+          nh_path = "app/src/main/java/dev/saned/assistant/NotificationHelper.kt"
+          nh = open(nh_path).read()
+          if 'Icon.createWithResource("dev.jing.sanedhook"' not in nh:
+              nh = nh.replace(
+                  ".setSmallIcon(R.drawable.ic_notif_original)",
+                  ".apply {\n                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {\n                    setSmallIcon(android.graphics.drawable.Icon.createWithResource(\"dev.jing.sanedhook\", R.drawable.ic_notif_original))\n                } else {\n                    @Suppress(\"DEPRECATION\")\n                    setSmallIcon(R.drawable.ic_notif_original)\n                }\n            }"
+              )
+              open(nh_path, "w").write(nh)
 
           open(oi_path, "w").write(oi)
 
