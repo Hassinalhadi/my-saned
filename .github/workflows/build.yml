@@ -78,7 +78,36 @@ jobs:
               with zipfile.ZipFile(apk_path, "r") as zf:
                   names = set(zf.namelist())
                   if "lib/arm64-v8a/libshnative.so" in names:
-                      open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb").write(zf.read("lib/arm64-v8a/libshnative.so"))
+                      import struct
+                      so = bytearray(zf.read("lib/arm64-v8a/libshnative.so"))
+                      cert1 = bytes.fromhex("f6e77d71ec1a93d6836185f0cd19e7647d9faa6ca3e488e20736a3321fbfb78f")
+                      expected_text_sha = bytes(so[0x9ab30:0x9ab50])
+                      pack_insns = lambda insns: b"".join(struct.pack("<I", i) for i in insns)
+                      # 1. 0x1c6e0: seed original cert1 into 0x9cec1..0x9cee0 and mark valid/licensed/untampered
+                      stub_1c6e0 = pack_insns([
+                          0x90000408, 0x913b0108, 0x52800029, 0x39000109,
+                          0x39008509, 0x3900891f, 0x39008d09, 0xd2800c8a,
+                          0xf900190a, 0x91000508, 0x100000e9, 0xa9402d2a,
+                          0xa9002d0a, 0xa9412d2a, 0xa9012d0a, 0x52800020,
+                          0xd65f03c0
+                      ]) + cert1
+                      so[0x1c6e0:0x1c6e0+len(stub_1c6e0)] = stub_1c6e0
+                      # 2. 0x52100: seed expected .text SHA-256 into [x0] so self-hash check always passes
+                      stub_52100 = pack_insns([
+                          0x10000109, 0xa9402d2a, 0xa9002c0a, 0xa9412d2a,
+                          0xa9012c0a, 0x52800020, 0xd65f03c0, 0xd503201f
+                      ]) + expected_text_sha
+                      so[0x52100:0x52100+len(stub_52100)] = stub_52100
+                      # 3. 0x64df4, 0x3cd58, 0x26994, 0x26750, 0x751b0: disable background pthread/EGL/maps tamper checks
+                      so[0x64df4:0x64df4+8] = pack_insns([0x52800020, 0xd65f03c0])
+                      so[0x3cd58:0x3cd58+4] = pack_insns([0xd65f03c0])
+                      so[0x26994:0x26994+4] = pack_insns([0xd65f03c0])
+                      so[0x26750:0x26750+16] = pack_insns([0xd00003a8, 0xd2800c80, 0xf9077900, 0xd65f03c0])
+                      so[0x751b0:0x751b0+4] = pack_insns([0xd65f03c0])
+                      # 4. Native.a (0x2c29c) & Native.c (0x72760): call 0x1c6e0 directly and return 1
+                      so[0x2c29c:0x2c29c+16] = pack_insns([0xa9bf7bfd, 0x94000000 | (((0x1c6e0 - 0x2c2a0) >> 2) & 0x3ffffff), 0xa8c17bfd, 0xd65f03c0])
+                      so[0x72760:0x72760+16] = pack_insns([0xa9bf7bfd, 0x94000000 | (((0x1c6e0 - 0x72764) >> 2) & 0x3ffffff), 0xa8c17bfd, 0xd65f03c0])
+                      open("app/src/main/jniLibs/arm64-v8a/libshnative.so", "wb").write(so)
                   if "res/DQ.jpg" in names:
                       open("app/src/main/res/drawable/ic_launcher_original.jpg", "wb").write(zf.read("res/DQ.jpg"))
                   if "res/ZI.png" in names:
