@@ -113,8 +113,7 @@ object SettingsStore {
       val seen = LinkedHashSet<String>()
       for (line in spLogs.lines()) if (line.isNotBlank()) seen.add(line)
       for (line in fileLogs.lines()) if (line.isNotBlank()) seen.add(line)
-      seen.joinToString("
-")
+      seen.joinToString("\n")
   }
   spLogs.isNotEmpty() -> spLogs
   else -> fileLogs

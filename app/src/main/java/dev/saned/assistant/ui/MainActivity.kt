@@ -431,8 +431,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         tvDiagLogConsole = TextView(this).apply {
-  text = "لا توجد سجلات بعد.
-افتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
+  text = "لا توجد سجلات بعد.\nافتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
   textSize = 11.5f
   typeface = Typeface.MONOSPACE
   setTextColor(Color.parseColor("#E2E8F0"))
@@ -530,8 +529,7 @@ class MainActivity : AppCompatActivity() {
         if (rawLogs.isBlank()) {
   tvDiagLogSummary.text = "🟢 لا توجد أخطاء مسجلة — افتح تطبيق net.jahez.fleets لبدء التسجيل المباشر"
   tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
-  tvDiagLogConsole.text = "لا توجد سجلات بعد.
-افتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
+  tvDiagLogConsole.text = "لا توجد سجلات بعد.\nافتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
   tvDiagLogConsole.setTextColor(Color.parseColor("#94A3B8"))
   return
         }
@@ -558,8 +556,7 @@ class MainActivity : AppCompatActivity() {
       }
       if (includeContinuation) filtered.add(line)
   }
-  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("
-")
+  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
         } else {
   rawLogs
         }

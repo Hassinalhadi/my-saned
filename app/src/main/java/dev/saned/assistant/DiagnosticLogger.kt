@@ -157,10 +157,8 @@ object DiagnosticLogger {
 
     fun logError(section: String, message: String, t: Throwable? = null) {
         val trace = if (t != null) {
-  val lines = Log.getStackTraceString(t).lineSequence().take(8).joinToString("
-   ")
-  "
-   $lines"
+  val lines = Log.getStackTraceString(t).lineSequence().take(8).joinToString("\n   ")
+  "\n   $lines"
         } else ""
         enqueueLine("[${nowTime()}] [ERR] [$section] ❌ $message$trace")
     }
@@ -172,18 +170,14 @@ object DiagnosticLogger {
         val actName = OrderInterceptor.currentActivity?.javaClass?.name ?: "none"
         val fullStack = Log.getStackTraceString(t)
         val crashBlock = buildString {
-  append("[${nowTime()}] [CRASH] 🚨 FATAL UNCAUGHT EXCEPTION in net.jahez.fleets!
-")
-  append("   PID: ${Process.myPid()} | Thread: $threadName
-")
-  append("   Jahez VersionCode: $vCode | ProfileIdx: $profIdx | NativeStubbed: $stubbed | Activity: $actName
-")
-  append("   Exception: ${t.javaClass.name}: ${t.message}
-")
+  append("[${nowTime()}] [CRASH] 🚨 FATAL UNCAUGHT EXCEPTION in net.jahez.fleets!\n")
+  append("   PID: ${Process.myPid()} | Thread: $threadName\n")
+  append("   Jahez VersionCode: $vCode | ProfileIdx: $profIdx | NativeStubbed: $stubbed | Activity: $actName\n")
+  append("   Exception: ${t.javaClass.name}: ${t.message}\n")
   append(fullStack.trimEnd())
         }
         try { Log.e(TAG, crashBlock) } catch (_: Throwable) {}
-        try { xposedModule?.log(crashBlock) } catch (_: Throwable) {}
+        try { xposedModule?.log(Log.ERROR, TAG, crashBlock, t) } catch (_: Throwable) {}
 
         // Flush queued logs + crash block synchronously on a helper thread with bounded timeout before process dies
         val flushThread = Thread {
@@ -191,8 +185,7 @@ object DiagnosticLogger {
       val batch = StringBuilder()
       while (true) {
           val item = logQueue.poll() ?: break
-          batch.append(item).append("
-")
+          batch.append(item).append("\n")
       }
       batch.append(crashBlock)
       deliverToAssistantSync(batch.toString())
@@ -205,7 +198,7 @@ object DiagnosticLogger {
 
     private fun enqueueLine(line: String) {
         try { Log.i(TAG, line) } catch (_: Throwable) {}
-        try { xposedModule?.log(line) } catch (_: Throwable) {}
+        try { xposedModule?.log(Log.INFO, TAG, line) } catch (_: Throwable) {}
         logQueue.offer(line)
         startAsyncFlusher()
     }
@@ -219,8 +212,7 @@ object DiagnosticLogger {
           var count = 0
           while (count < 25) {
               val item = logQueue.poll() ?: break
-              if (sb.isNotEmpty()) sb.append("
-")
+              if (sb.isNotEmpty()) sb.append("\n")
               sb.append(item)
               count++
           }
@@ -242,8 +234,7 @@ object DiagnosticLogger {
         // 1. Write to fallback file if accessible
         try {
   val f = File("/data/local/tmp/saned_diag.log")
-  f.appendText(textBlock + "
-")
+  f.appendText(textBlock + "\n")
   f.setReadable(true, false)
   f.setWritable(true, false)
         } catch (_: Throwable) {}

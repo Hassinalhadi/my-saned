@@ -34,12 +34,10 @@ class XposedProvider : ContentProvider() {
   try {
       val prefs = ctx.getSharedPreferences(DIAG_PREF_NAME, Context.MODE_PRIVATE)
       val existing = prefs.getString("diag_log_text", "") ?: ""
-      val combined = if (existing.isEmpty()) logText.trimEnd() else "$existing
-${logText.trimEnd()}"
+      val combined = if (existing.isEmpty()) logText.trimEnd() else "$existing\n${logText.trimEnd()}"
       val lines = combined.lines()
       val trimmed = if (lines.size > MAX_DIAG_LINES) {
-          lines.takeLast(MAX_DIAG_LINES).joinToString("
-")
+          lines.takeLast(MAX_DIAG_LINES).joinToString("\n")
       } else {
           combined
       }
