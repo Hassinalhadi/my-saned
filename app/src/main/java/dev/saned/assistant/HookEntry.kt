@@ -45,7 +45,7 @@ class HookEntry : XposedModule() {
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-        if (param.packageName != "net.jahez.fleets") return
+        if (param.packageName != "net.jahez.fleets" || !param.isFirstPackage) return
         DiagnosticLogger.installCrashHandler(this, "onPackageReady")
         DiagnosticLogger.syncHookToggles(this)
 

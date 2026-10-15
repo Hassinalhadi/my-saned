@@ -835,6 +835,12 @@ object OrderInterceptor {
       DiagnosticLogger.logWarn("BootstrapLoop", "Timed out waiting for currentApplication()")
   }
 
+  // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
+  try { Thread.sleep(3000) } catch (_: Throwable) {}
+  if (DiagnosticLogger.hookBootstrapLoop) {
+      startActiveServerPolling()
+  }
+
   // Continuous background SQLite + EncryptedSharedPreferences token sync loop matching Lb11$b in SanedAssistant-98
   while (true) {
       try {
@@ -860,35 +866,46 @@ object OrderInterceptor {
         }
     }
 
+    private val startedActivityCount = AtomicInteger(0)
+
     private fun registerActivityCallbacksOnApp(app: Application) {
         if (!isLifecycleCallbacksRegistered.compareAndSet(false, true)) return
         mainHandler.post {
-            try {
-                app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-                    override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {
-                        if (activity.packageName == "net.jahez.fleets") {
-                            currentActivity = activity
-                            this@OrderInterceptor.onActivityCreated(activity)
-                        }
-                    }
-                    override fun onActivityStarted(activity: Activity) {
-                        if (activity.packageName == "net.jahez.fleets") {
-                            currentActivity = activity
-                            this@OrderInterceptor.onActivityResumed(activity)
-                        }
-                    }
-                    override fun onActivityResumed(activity: Activity) {
-                        if (activity.packageName == "net.jahez.fleets") {
-                            currentActivity = activity
-                            this@OrderInterceptor.onActivityResumed(activity)
-                        }
-                    }
-                    override fun onActivityPaused(activity: Activity) {}
-                    override fun onActivityStopped(activity: Activity) {}
-                    override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
-                    override fun onActivityDestroyed(activity: Activity) {}
-                })
-            } catch (_: Throwable) {}
+  try {
+      app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+          override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {
+              if (activity.packageName == "net.jahez.fleets") {
+                  currentActivity = activity
+              }
+          }
+          override fun onActivityStarted(activity: Activity) {
+              if (activity.packageName == "net.jahez.fleets") {
+                  currentActivity = activity
+                  if (activity.javaClass.name != Native.safeE()) {
+                      startedActivityCount.incrementAndGet()
+                  }
+              }
+          }
+          override fun onActivityResumed(activity: Activity) {
+              if (activity.packageName == "net.jahez.fleets") {
+                  currentActivity = activity
+              }
+          }
+          override fun onActivityPaused(activity: Activity) {}
+          override fun onActivityStopped(activity: Activity) {
+              if (activity.packageName == "net.jahez.fleets") {
+                  if (activity.javaClass.name != Native.safeE()) {
+                      startedActivityCount.updateAndGet { (it - 1).coerceAtLeast(0) }
+                  }
+              }
+          }
+          override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
+          override fun onActivityDestroyed(activity: Activity) {}
+      })
+      DiagnosticLogger.logStep("OrderInterceptor", "Registered Lji0 ActivityLifecycleCallbacks")
+  } catch (t: Throwable) {
+      DiagnosticLogger.logError("OrderInterceptor", "Failed registering ActivityLifecycleCallbacks", t)
+  }
         }
     }
 
@@ -943,11 +960,8 @@ object OrderInterceptor {
         LocationEngine.syncLocationSettings()
         DeviceSpoofer.syncSettings()
         LocationEngine.seedLocationManager(app)
-        acquireWakeLock(app)
+        if (isMasterRunning) acquireWakeLock(app)
         (app as? Application)?.let { registerActivityCallbacksOnApp(it) }
-        if (DiagnosticLogger.hookBootstrapLoop) {
-  startActiveServerPolling()
-        }
     }
 
     fun requestSettingsFromAssistant() {
@@ -2561,8 +2575,7 @@ object OrderInterceptor {
     }
 
     private fun isAppInBackground(): Boolean {
-        val act = currentActivity
-        return act == null || act.isFinishing || act.isDestroyed || !act.hasWindowFocus()
+        return startedActivityCount.get() <= 0
     }
 
     private fun handleOrderViaApi(

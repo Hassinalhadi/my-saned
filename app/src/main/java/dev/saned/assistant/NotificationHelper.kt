@@ -112,7 +112,14 @@ object NotificationHelper {
             builder.setContentTitle(title)
                 .setContentText(summaryParts.joinToString(" · "))
                 .setStyle(Notification.BigTextStyle().bigText(bigText))
-                .setSmallIcon(R.drawable.ic_notif_original)
+                .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    setSmallIcon(android.graphics.drawable.Icon.createWithResource("dev.jing.sanedhook", R.drawable.ic_notif_original))
+                } else {
+                    @Suppress("DEPRECATION")
+                    setSmallIcon(R.drawable.ic_notif_original)
+                }
+            }
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_EVENT)
