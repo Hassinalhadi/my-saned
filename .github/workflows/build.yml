@@ -130,9 +130,8 @@ jobs:
               open(notif_path, "w").write(nf)
 
           # 2. Write Native.kt with pure-Kotlin decoded implementation of all 21 methods (a..u) from libshnative.so
-          # By default, it runs 100% in pure Kotlin without loading libshnative.so into net.jahez.fleets (eliminating any native JNI/linker crash).
           os.makedirs("app/src/main/java/dev/jing/sanedhook/util", exist_ok=True)
-          open("app/src/main/java/dev/jing/sanedhook/util/Native.kt", "w").write("""package dev.jing.sanedhook.util
+          open("app/src/main/java/dev/jing/sanedhook/util/Native.kt", "w").write(r"""package dev.jing.sanedhook.util
 
           object Native {
               @JvmField val a: Native = this
@@ -260,7 +259,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 2B. Write DiagnosticLogger.kt — captures uncaught crashes, stacktraces, lifecycle checkpoints, and hook events
-          open("app/src/main/java/dev/saned/assistant/DiagnosticLogger.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/DiagnosticLogger.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.Context
           import android.content.Intent
@@ -439,7 +438,7 @@ jobs:
                       append(fullStack.trimEnd())
                   }
                   try { Log.e(TAG, crashBlock) } catch (_: Throwable) {}
-                  try { xposedModule?.log(crashBlock) } catch (_: Throwable) {}
+                  try { xposedModule?.log(Log.ERROR, TAG, crashBlock, t) } catch (_: Throwable) {}
 
                   // Flush queued logs + crash block synchronously on a helper thread with bounded timeout before process dies
                   val flushThread = Thread {
@@ -460,7 +459,7 @@ jobs:
 
               private fun enqueueLine(line: String) {
                   try { Log.i(TAG, line) } catch (_: Throwable) {}
-                  try { xposedModule?.log(line) } catch (_: Throwable) {}
+                  try { xposedModule?.log(Log.INFO, TAG, line) } catch (_: Throwable) {}
                   logQueue.offer(line)
                   startAsyncFlusher()
               }
@@ -529,7 +528,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 2C. Update XposedProvider.kt to store & retrieve diagnostic logs ("appendDiagLog", "clearDiagLogs", "getDiagLogs")
-          open("app/src/main/java/io/github/libxposed/service/XposedProvider.kt", "w").write("""package io.github.libxposed.service
+          open("app/src/main/java/io/github/libxposed/service/XposedProvider.kt", "w").write(r"""package io.github.libxposed.service
 
           import android.content.ContentProvider
           import android.content.ContentValues
@@ -804,7 +803,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 2D. Update SanedReceiver.kt to handle ACTION_DIAG_LOG
-          open("app/src/main/java/dev/saned/assistant/SanedReceiver.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/SanedReceiver.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.BroadcastReceiver
           import android.content.Context
@@ -901,7 +900,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 3. Write HookEntry.kt with full DiagnosticLogger instrumentation & per-hook isolation checks
-          open("app/src/main/java/dev/saned/assistant/HookEntry.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/HookEntry.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.Context
           import android.content.pm.ApplicationInfo
@@ -1073,7 +1072,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 4. Write PackageCloaker.kt with safe native stub verification before blocking Runtime.loadLibrary0 + full DiagnosticLogger traces
-          open("app/src/main/java/dev/saned/assistant/PackageCloaker.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/PackageCloaker.kt", "w").write(r"""package dev.saned.assistant
 
           import android.app.Activity
           import android.content.pm.ApplicationInfo
@@ -1498,7 +1497,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 5. Write DeviceSpoofer.kt matching Lly1 in SanedAssistant-98-7bac1ec.apk 100%
-          open("app/src/main/java/dev/saned/assistant/DeviceSpoofer.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/DeviceSpoofer.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.ContentResolver
           import android.content.SharedPreferences
@@ -1580,7 +1579,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 6. Write LocationEngine.kt matching Ltz0 in SanedAssistant-98-7bac1ec.apk 100%
-          open("app/src/main/java/dev/saned/assistant/LocationEngine.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/LocationEngine.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.Context
           import android.content.SharedPreferences
@@ -1834,7 +1833,7 @@ jobs:
           """.replace("\n          ", "\n"))
 
           # 7. Write SettingsStore.kt in full with ALL original methods + Hook Isolation Toggles + Diagnostic Log helpers
-          open("app/src/main/java/dev/saned/assistant/SettingsStore.kt", "w").write("""package dev.saned.assistant
+          open("app/src/main/java/dev/saned/assistant/SettingsStore.kt", "w").write(r"""package dev.saned.assistant
 
           import android.content.Context
           import android.content.Intent
@@ -2223,7 +2222,7 @@ jobs:
               oi,
               "@Volatile var isDryRun: Boolean = false",
               "@Volatile var minOrderPrice: Double = 0.0",
-              """@Volatile var isDryRun: Boolean = false
+              r"""@Volatile var isDryRun: Boolean = false
               @Volatile var isStayInBackground: Boolean = false
               @Volatile var isSilenceAlertTone: Boolean = true
               @Volatile var isStrictVersionCheck: Boolean = false
@@ -2262,7 +2261,7 @@ jobs:
               oi,
               "@Volatile private var lastHandledTimestamp = 0L",
               "private fun extractOrderIdFromActivity(activity: Activity): String {",
-              """@Volatile private var lastHandledTimestamp = 0L
+              r"""@Volatile private var lastHandledTimestamp = 0L
 
               fun onActivityPreCreated(activity: Activity): Int {
                   currentActivity = activity
@@ -2329,7 +2328,7 @@ jobs:
               oi,
               "fun initAppContext(context: Context) {",
               "fun requestSettingsFromAssistant() {",
-              """fun initAppContext(context: Context) {
+              r"""fun initAppContext(context: Context) {
                   if (appContext != null) return
                   val app = context.applicationContext ?: context
                   appContext = app
@@ -2366,12 +2365,12 @@ jobs:
               }""".replace("\n          ", "\n")
           )
 
-          # Replace startBootstrapLoop so it ONLY runs readExactJahezEncryptedPrefs and scanJahezDatabases (never scanJahezSharedPreferencesForToken or scanExistingActivitiesInActivityThread!)
+          # Replace startBootstrapLoop so it ONLY runs readExactJahezEncryptedPrefs and scanJahezDatabases
           oi = replace_block(
               oi,
               "fun startBootstrapLoop(module: XposedModule, classLoader: ClassLoader) {",
               "private fun registerActivityCallbacksOnApp(app: Application) {",
-              """fun startBootstrapLoop(module: XposedModule, classLoader: ClassLoader) {
+              r"""fun startBootstrapLoop(module: XposedModule, classLoader: ClassLoader) {
                   if (!isBootstrapRunning.compareAndSet(false, true)) return
                   Thread {
                       DiagnosticLogger.logStep("BootstrapLoop", "Waiting for ActivityThread.currentApplication()...")
@@ -2424,7 +2423,7 @@ jobs:
           if "val k = Native.safeK()" not in oi:
               oi = oi.replace(
                   "val extras = intent.extras ?: return",
-                  """val extras = intent.extras ?: return
+                  r"""val extras = intent.extras ?: return
                       try {
                           val k = Native.safeK()
                           if (k.size >= 12) {
@@ -2460,7 +2459,7 @@ jobs:
               oi,
               enc_start_marker,
               "fun checkAndSetToken(",
-              """@Volatile var cachedLanguage: String = "en"
+              r"""@Volatile var cachedLanguage: String = "en"
               @Volatile private var cachedEncPrefs: SharedPreferences? = null
 
               fun readExactJahezEncryptedPrefs(context: Context) {
@@ -2508,7 +2507,7 @@ jobs:
               oi,
               hook_start_marker,
               "private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader): Int {",
-              """private val isIncomingDispatchHooked = AtomicBoolean(false)
+              r"""private val isIncomingDispatchHooked = AtomicBoolean(false)
 
               private fun hookIncomingDispatchActivity(module: XposedModule, classLoader: ClassLoader) {
                   if (!isIncomingDispatchHooked.compareAndSet(false, true)) return
@@ -2556,7 +2555,7 @@ jobs:
               oi,
               "private fun hookInstrumentation(module: XposedModule) {",
               "private val hookedFcmClasses =",
-              """private fun hookInstrumentation(module: XposedModule) {
+              r"""private fun hookInstrumentation(module: XposedModule) {
                   if (!isInstrumentationHooked.compareAndSet(false, true)) return
                   try {
                       val instClass = Class.forName("android.app.Instrumentation")
@@ -2605,7 +2604,7 @@ jobs:
               oi,
               "private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {",
               "private fun hookSQLite(module: XposedModule) {",
-              """private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
+              r"""private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
                   val clsName = Native.safeD()
                   if (clsName.isEmpty() || !hookedFcmClasses.add(clsName)) return
                   try {
@@ -2680,7 +2679,7 @@ jobs:
               oi,
               "private fun invokeNativeInit(context: Context) {",
               "private fun fetchOrderCustomerDetailsAsync(",
-              """private fun invokeNativeInit(context: Context) {
+              r"""private fun invokeNativeInit(context: Context) {
                   try { Native.safeA(context, "dev.jing.sanedhook") } catch (_: Throwable) {}
               }
 
@@ -2728,7 +2727,7 @@ jobs:
               oi,
               '@Volatile var capturedDriverCipherB64: String = ""',
               "private fun hookJsonConstructors(module: XposedModule) {",
-              """@Volatile var capturedDriverCipherB64: String = ""
+              r"""@Volatile var capturedDriverCipherB64: String = ""
 
               private val DRIVER_ID_PREFIX = "driverId : ".toByteArray(Charsets.UTF_8)
 
@@ -2769,7 +2768,7 @@ jobs:
               oi,
               "private fun pollServerForAvailableOrders() {",
               "private fun processHttpResponse(response: Any) {",
-              """private fun pollServerForAvailableOrders() {
+              r"""private fun pollServerForAvailableOrders() {
                   if (!DiagnosticLogger.hookBootstrapLoop) return
                   val ctx = resolveApplicationContext() ?: currentActivity
                   if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
@@ -2810,7 +2809,7 @@ jobs:
               oi,
               "fun evaluateOrderDecision(",
               "fun scanJahezSharedPreferencesForToken(",
-              """fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
+              r"""fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
                   if (!isMasterRunning) {
                       return "MANUAL" to "Master switch off"
                   }
@@ -2925,7 +2924,7 @@ jobs:
               oi,
               "private fun executeDirectApiCall(orderIdNum: String, action: String) {",
               "fun sendOrderToLog(",
-              """private fun executeDirectApiCall(orderIdNum: String, action: String) {
+              r"""private fun executeDirectApiCall(orderIdNum: String, action: String) {
                   val ctx = resolveApplicationContext() ?: currentActivity
                   if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
                   val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
@@ -3056,7 +3055,7 @@ jobs:
               if "tabLogsView" not in ma:
                   ma = ma.replace(
                       "private lateinit var tabSettingsView: ScrollView",
-                      """private lateinit var tabSettingsView: ScrollView
+                      r"""private lateinit var tabSettingsView: ScrollView
               private lateinit var tabLogsView: ScrollView
               private lateinit var navLogsBtn: LinearLayout
               private lateinit var navLogsIconBg: TextView
@@ -3077,7 +3076,7 @@ jobs:
               if "btnTopLogs" not in ma:
                   ma = ma.replace(
                       "val btnTopSim = TextView(this).apply {",
-                      """val btnTopLogs = TextView(this).apply {
+                      r"""val btnTopLogs = TextView(this).apply {
                       text = "📋"
                       textSize = 18f
                       setPadding(20, 10, 20, 10)
@@ -3093,7 +3092,7 @@ jobs:
               if "tabLogsView = buildLogsTabView()" not in ma:
                   ma = ma.replace(
                       "tabSettingsView = buildSettingsTabView()\n\n        contentFrame.addView(tabOrdersView)\n        contentFrame.addView(tabSettingsView)",
-                      """tabSettingsView = buildSettingsTabView()
+                      r"""tabSettingsView = buildSettingsTabView()
                   tabLogsView = buildLogsTabView()
 
                   contentFrame.addView(tabOrdersView)
@@ -3105,7 +3104,7 @@ jobs:
               if "navLogsBtn = LinearLayout(this)" not in ma:
                   ma = ma.replace(
                       "bottomNav.addView(navOrdersBtn)\n        bottomNav.addView(navSettingsBtn)",
-                      """navLogsBtn = LinearLayout(this).apply {
+                      r"""navLogsBtn = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -3137,7 +3136,7 @@ jobs:
                   ma,
                   "private fun switchTab(tabIndex: Int) {",
                   "private fun buildOrdersTabView(): ScrollView {",
-                  """private fun switchTab(tabIndex: Int) {
+                  r"""private fun switchTab(tabIndex: Int) {
                   currentTab = tabIndex
                   tabOrdersView.visibility = if (tabIndex == 0) View.VISIBLE else View.GONE
                   tabSettingsView.visibility = if (tabIndex == 1) View.VISIBLE else View.GONE
@@ -3402,7 +3401,7 @@ jobs:
               if "SettingsStore.setHookEarlyCloaker" not in ma:
                   ma = ma.replace(
                       "SettingsStore.setParallelRequests(this, parallelReqs)",
-                      """SettingsStore.setParallelRequests(this, parallelReqs)
+                      r"""SettingsStore.setParallelRequests(this, parallelReqs)
 
                   if (::chkHookEarlyCloaker.isInitialized) {
                       SettingsStore.setHookEarlyCloaker(this, chkHookEarlyCloaker.isChecked)
@@ -3419,7 +3418,7 @@ jobs:
               if "UI_REFRESH_LOGS" not in ma:
                   ma = ma.replace(
                       '"dev.saned.assistant.UI_REFRESH_ORDERS" -> {\n                    refreshOrdersLogUI()\n                }',
-                      """"dev.saned.assistant.UI_REFRESH_ORDERS" -> {
+                      r""""dev.saned.assistant.UI_REFRESH_ORDERS" -> {
                               refreshOrdersLogUI()
                           }
                           "dev.saned.assistant.UI_REFRESH_LOGS", "dev.saned.assistant.ACTION_DIAG_LOG" -> {
@@ -3454,22 +3453,22 @@ jobs:
           print("Successfully synced DiagnosticLogger, Logs UI Tab, Hook Isolation switches, and zero-crash LSPosed hooks!")
           PYEOF
 
-      - name: Commit Open-Source Parity Sync to Repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/ || true
-          if ! git diff --cached --quiet; then
-            git commit -m "feat: add live Crash & Hook Diagnostic Log window and fix Activity/SharedPreferences crash [skip ci]"
-            git push origin HEAD:main || true
-          fi
-
       - name: Build APK with Gradle
         run: |
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.nonTransitiveRClass=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
           gradle assembleRelease --stacktrace || gradle assembleDebug --stacktrace
+
+      - name: Commit Open-Source Parity Sync to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: escape Kotlin string newlines and XposedModule.log signature in DiagnosticLogger [skip ci]"
+            git push origin HEAD:main || true
+          fi
 
       - name: Sign & Prepare Final APK
         run: |
