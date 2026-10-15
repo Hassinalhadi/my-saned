@@ -1533,6 +1533,14 @@ jobs:
 
               fun scanAllSharedPreferencesForTokens(context: Context) {
                   readExactJahezEncryptedPrefs(context)
+              }
+
+              fun clearPersistedToken() {
+                  try {
+                      File("/data/local/tmp/saned_auth_token.txt").delete()
+                  } catch (_: Throwable) {}
+                  cachedAuthToken = ""
+                  cachedHeaders.remove("Authorization")
               }""".replace("\n          ", "\n")
           )
 
