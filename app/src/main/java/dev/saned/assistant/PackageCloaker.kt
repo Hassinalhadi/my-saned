@@ -38,6 +38,7 @@ object PackageCloaker {
 
     private val isRuntimeHooked = AtomicBoolean(false)
     private val isNativeStubbed = AtomicBoolean(false)
+    private val stubbedNativeClasses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val isLoaderHooked = AtomicBoolean(false)
     private val isBlockedActHooked = AtomicBoolean(false)
     private val isSecurityHooked = AtomicBoolean(false)
@@ -49,7 +50,7 @@ object PackageCloaker {
         val result = mutableListOf<VersionProfile>()
         for ((idx, c) in raw.toList().chunked(8).withIndex()) {
   if (c.size == 8) {
-      result.add(VersionProfile(idx, c[0], listOf(c[2], c[3]).filter { it.isNotEmpty() }, c[1], c[4], c[5], c[6], c[7]))
+      result.add(VersionProfile(idx, c[0], listOf(c[1], c[2]).filter { it.isNotEmpty() }, c[3], c[4], c[5], c[6], c[7]))
   }
         }
         return result
@@ -118,37 +119,48 @@ object PackageCloaker {
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
 
-        // 1. Lvh1.q: Stub native methods on resolved profile's nativeClasses FIRST
-        if (!isNativeStubbed.get()) {
-  try {
-      val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
-      var hookedCount = 0
-      for (clsName in nativeClassNames) {
-          try {
-              val cls = Class.forName(clsName, false, classLoader)
-              for (m in cls.declaredMethods) {
-                  if (Modifier.isNative(m.modifiers)) {
-                      val retType = m.returnType
-                      module.hook(m).intercept(object : XposedInterface.Hooker {
-                          override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
-                      })
-                      hookedCount++
-                  }
+        // 1. Lvh1.q: Stub native methods on resolved profile's nativeClasses FIRST (c[1] and c[2], e.g. oxxqbaxw.an and oxxqbaxw.e)
+        try {
+  val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
+  var newlyHookedCount = 0
+  for (clsName in nativeClassNames) {
+      if (stubbedNativeClasses.contains(clsName)) continue
+      try {
+          val cls = Class.forName(clsName, false, classLoader)
+          var clsHooked = 0
+          for (m in cls.declaredMethods) {
+              if (Modifier.isNative(m.modifiers)) {
+                  val retType = m.returnType
+                  module.hook(m).intercept(object : XposedInterface.Hooker {
+                      override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
+                  })
+                  clsHooked++
+                  newlyHookedCount++
               }
-          } catch (_: Throwable) {}
-      }
-      if (hookedCount > 0) {
-          isNativeStubbed.set(true)
-          DiagnosticLogger.logStep("PackageCloaker", "Stubbed $hookedCount JNI methods on ${resolved?.nativeClasses ?: nativeClassNames}")
-      } else {
-          DiagnosticLogger.logWarn(
-              "PackageCloaker",
-              "No matching native classes found for vCode=$lastCheckedVersionCode (resolvedProfile=${resolved?.loaderClass ?: "null"})."
-          )
-      }
-  } catch (t: Throwable) {
-      DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
+          }
+          if (clsHooked > 0) {
+              stubbedNativeClasses.add(clsName)
+          }
+      } catch (_: Throwable) {}
   }
+  val allRequiredStubbed = if (resolved != null && resolved.nativeClasses.isNotEmpty()) {
+      stubbedNativeClasses.containsAll(resolved.nativeClasses)
+  } else {
+      stubbedNativeClasses.isNotEmpty()
+  }
+  if (allRequiredStubbed) {
+      isNativeStubbed.set(true)
+  }
+  if (newlyHookedCount > 0) {
+      DiagnosticLogger.logStep("PackageCloaker", "Stubbed $newlyHookedCount JNI methods on $stubbedNativeClasses (allReady=$allRequiredStubbed)")
+  } else if (!isNativeStubbed.get()) {
+      DiagnosticLogger.logWarn(
+          "PackageCloaker",
+          "No matching native classes found for vCode=$lastCheckedVersionCode (expected=${resolved?.nativeClasses ?: nativeClassNames})."
+      )
+  }
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
         }
 
         // 2. Lvh1.j: Hook loaderClass.loaderMethod(String)
