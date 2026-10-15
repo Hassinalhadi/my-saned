@@ -588,139 +588,60 @@ object OrderInterceptor {
     }
 
     private fun performLiveApiProbe() {
-        val app = appContext ?: currentActivity ?: return
+        val app = resolveApplicationContext() ?: currentActivity ?: return
+        if (cachedAuthToken.isEmpty()) readExactJahezEncryptedPrefs(app)
         var token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
-        if (token.isEmpty() && appContext != null) {
-            val scanned = scanJahezSharedPreferencesForToken(appContext!!)
-            if (scanned.isNotEmpty()) token = scanned
+        if (token.isEmpty()) {
+  val scanned = scanJahezSharedPreferencesForToken(app)
+  if (scanned.isNotEmpty()) token = scanned
         }
 
         CoroutineScope(Dispatchers.IO).launch {
-            if (token.isEmpty()) {
-                val hint = "Waiting for Live Session Token ⏳\n\n👉 Please open Jahez Fleets app, go to Orders tab and pull down to refresh. Saned Assistant will automatically capture your active session token from live network traffic!"
-                val noTokenIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
-                    component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
-                    putExtra("status_code", 0)
-                    putExtra("latency_ms", 0L)
-                    putExtra("url", "https://api.jahez.net/api/fleets/orders/available")
-                    putExtra("body_snippet", hint)
-                    putExtra("has_token", false)
-                }
-                app.sendBroadcast(noTokenIntent)
-                try {
-                    val gIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
-                        putExtra("status_code", 0)
-                        putExtra("latency_ms", 0L)
-                        putExtra("url", "https://api.jahez.net/api/fleets/orders/available")
-                        putExtra("body_snippet", hint)
-                        putExtra("has_token", false)
-                    }
-                    app.sendBroadcast(gIntent)
-                } catch (_: Throwable) {}
-                return@launch
-            }
-            val startTime = System.currentTimeMillis()
-            var code = -1
-            var snippet = ""
-            var resolvedHost = ""
-            var targetUrl = ""
-
-            val candidateEndpoints = listOf(
-                "/api/fleets/orders/available",
-                "/api/v1/fleets/orders/available",
-                "/api/fleets/driver/profile",
-                "/api/fleets/profile",
-                "/api/fleets/orders"
-            )
-
-            // Build list of hosts to probe (strictly validated for jahez.net)
-            val probeHosts = mutableListOf<String>()
-            if (lastOrdersListUrl.isNotEmpty() && isValidJahezHost(lastOrdersListUrl)) probeHosts.add(lastOrdersListUrl)
-            if (cachedApiHost.isNotEmpty() && isValidJahezHost(cachedApiHost)) probeHosts.add(cachedApiHost)
-            probeHosts.add("https://api.jahez.net")
-
-            val clientToUse = capturedAppHttpClient ?: httpClient
-            var successFound = false
-
-            for (h in probeHosts.distinct()) {
-                if (successFound) break
-                for (endpoint in candidateEndpoints) {
-                    val candidateUrl = buildCandidateUrl(h, endpoint)
-                    targetUrl = candidateUrl
-                    try {
-                        val reqBuilder = Request.Builder().url(candidateUrl).get()
-                        applyJahezHeaders(reqBuilder, token)
-
-                        val resp = clientToUse.newCall(reqBuilder.build()).execute()
-                        val currentCode = resp.code
-                        val rawBody = resp.body?.string() ?: ""
-                        resp.close()
-
-                        val isCloudflareBlock = (currentCode == 403 || currentCode == 503) &&
-                            (rawBody.contains("Just a moment", ignoreCase = true) || rawBody.contains("cloudflare", ignoreCase = true))
-
-                        if (currentCode in 200..299 || (currentCode in 400..499 && !isCloudflareBlock && (rawBody.trim().startsWith("{") || rawBody.trim().startsWith("[")))) {
-                            code = currentCode
-                            targetUrl = candidateUrl
-                            val uri = java.net.URI(candidateUrl)
-                            resolvedHost = "${uri.scheme}://${uri.host}"
-                            cachedApiHost = resolvedHost
-                            persistHost(resolvedHost)
-                            lastOrdersListUrl = candidateUrl
-                            if (currentCode == 401 && (rawBody.contains("invalid_token") || rawBody.contains("unauthorized", ignoreCase = true))) {
-                                clearPersistedToken()
-                                snippet = "Invalid/Expired Token: " + rawBody + " -- Stale token cleared! Open Jahez Fleets app & pull to refresh to capture active token."
-                            } else {
-                                snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
-                            }
-                            successFound = true
-                            break
-                        } else if (!isCloudflareBlock && currentCode > 0) {
-                            if (code <= 0 || code == 403 || currentCode == 404) {
-                                code = currentCode
-                                targetUrl = candidateUrl
-                                if (currentCode == 404 && rawBody.contains("Tomcat", ignoreCase = true)) {
-                                    snippet = "Connected to Jahez Server (Apache Tomcat) 🟢\n\n• Server Response: HTTP 404 (Test path not routed)\n• Network Hook: Active & Ready\n\n👉 Next Step: Open Jahez Fleets app and pull down to refresh on Orders tab. Saned Assistant will automatically capture the exact production order endpoint!"
-                                } else {
-                                    snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody
-                                }
-                            }
-                        } else if (isCloudflareBlock) {
-                            if (snippet.isEmpty() || snippet.startsWith("Error:")) {
-                                code = currentCode
-                                targetUrl = candidateUrl
-                                snippet = "Cloudflare WAF (HTTP 403) detected on " + candidateUrl + ". Note: In-App order interceptor & Screen watcher operate natively inside Jahez and bypass Cloudflare."
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        if (snippet.isEmpty()) {
-                            snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
-                        }
-                    }
-                }
-            }
-
-            val latency = System.currentTimeMillis() - startTime
-            val resultIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
-                component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
-                putExtra("status_code", code)
-                putExtra("latency_ms", latency)
-                putExtra("url", if (targetUrl.isNotEmpty()) targetUrl else resolvedHost)
-                putExtra("body_snippet", snippet)
-                putExtra("has_token", token.isNotEmpty())
-            }
-            app.sendBroadcast(resultIntent)
-
-            try {
-                val gIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
-                    putExtra("status_code", code)
-                    putExtra("latency_ms", latency)
-                    putExtra("url", if (targetUrl.isNotEmpty()) targetUrl else resolvedHost)
-                    putExtra("body_snippet", snippet)
-                    putExtra("has_token", token.isNotEmpty())
-                }
-                app.sendBroadcast(gIntent)
-            } catch (_: Throwable) {}
+  if (token.isEmpty()) {
+      val hint = "Waiting for Live Session Token ⏳\n\n👉 Please open Saned (Jahez Fleets) app and log in. Saned Assistant automatically reads your session token from ENCRYPTED_SANED_PREFERENCES!"
+      val noTokenIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+          component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+          putExtra("status_code", 0)
+          putExtra("latency_ms", 0L)
+          putExtra("url", "https://gateway.saned.io/api/v1/dispatch/active")
+          putExtra("body_snippet", hint)
+          putExtra("has_token", false)
+      }
+      app.sendBroadcast(noTokenIntent)
+      return@launch
+  }
+  val startTime = System.currentTimeMillis()
+  var code = -1
+  var snippet = ""
+  var targetUrl = "https://gateway.saned.io/api/v1/dispatch/active"
+  try {
+      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+      val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+      if (spec.size >= 2 && spec[1].startsWith("http")) {
+          targetUrl = spec[1]
+          val rb = Request.Builder().url(targetUrl).get()
+          var idx = 2
+          while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+          val resp = httpClient.newCall(rb.build()).execute()
+          code = resp.code
+          val rawBody = resp.body?.string() ?: ""
+          resp.close()
+          cachedApiHost = "https://gateway.saned.io"
+          snippet = if (rawBody.length > 250) rawBody.substring(0, 250) + "..." else rawBody.ifEmpty { "HTTP $code OK (gateway.saned.io)" }
+      }
+  } catch (e: Throwable) {
+      snippet = "Error: " + (e.message ?: e.javaClass.simpleName)
+  }
+  val latency = System.currentTimeMillis() - startTime
+  val resultIntent = Intent("dev.saned.assistant.ACTION_TEST_API_RESULT").apply {
+      component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+      putExtra("status_code", code)
+      putExtra("latency_ms", latency)
+      putExtra("url", targetUrl)
+      putExtra("body_snippet", snippet)
+      putExtra("has_token", token.isNotEmpty())
+  }
+  app.sendBroadcast(resultIntent)
         }
     }
 
@@ -1955,46 +1876,47 @@ object OrderInterceptor {
 
     private fun fetchOrderCustomerDetailsAsync(orderId: String) {
         val cleanId = orderId.replace("#", "").trim()
+        val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
         if (cleanId.isEmpty() || !fetchedDetailIds.add(cleanId)) return
+        val ctx = resolveApplicationContext() ?: currentActivity
+        if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         if (token.isEmpty()) return
 
         CoroutineScope(Dispatchers.IO).launch {
-            val client = capturedAppHttpClient ?: httpClient
-            val host = if (cachedApiHost.isNotEmpty()) cachedApiHost else "https://api.jahez.net"
-            val detailPaths = listOf(
-                "/api/fleets/orders/$cleanId",
-                "/api/orders/$cleanId",
-                "/api/v1/driver/orders/$cleanId",
-                "/v2/fleet/orders/$cleanId"
-            )
-            for (path in detailPaths) {
-                try {
-                    val reqBuilder = Request.Builder().url(buildCandidateUrl(host, path)).get()
-                    applyJahezHeaders(reqBuilder, token)
-                    val resp = client.newCall(reqBuilder.build()).execute()
-                    val code = resp.code
-                    val body = resp.body?.string() ?: ""
-                    resp.close()
-                    if (code in 200..299 && body.trim().startsWith("{")) {
-                        val json = JSONObject(body)
-                        val dataObj = json.optJSONObject("data") ?: json.optJSONObject("order") ?: json
-                        val custObj = dataObj.optJSONObject("customer") ?: dataObj.optJSONObject("client")
-                        val cName = extractFirstString(dataObj, "customer_name", "client_name", "customerName", "clientName")
-                            .ifEmpty { if (custObj != null) extractFirstString(custObj, "name", "full_name", "customer_name") else "" }
-                        val serverKeys = Native.safeM()
-                        val kClientPhone = serverKeys.getOrNull(5) ?: "clientPhone"
-                        val kContactNum = serverKeys.getOrNull(6) ?: "contactNumber"
-                        val cPhone = extractFirstString(dataObj, kClientPhone, kContactNum, "customer_phone", "client_phone", "customerPhone", "phone", "mobile")
-                            .ifEmpty { if (custObj != null) extractFirstString(custObj, kClientPhone, kContactNum, "phone", "mobile", "phone_number") else "" }
-                        val cCash = extractFirstDouble(dataObj, "cash_amount", "cashAmount", "cod_amount", "collect_cash")
-                        if (cPhone.isNotEmpty() || cName.isNotEmpty()) {
-                            customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
-                            break
-                        }
-                    }
-                } catch (_: Throwable) {}
-            }
+  val client = capturedAppHttpClient ?: httpClient
+  val serverKeys = Native.safeM()
+  val kClientPhone = serverKeys.getOrNull(5) ?: "clientPhone"
+  val kContactNum = serverKeys.getOrNull(6) ?: "contactNumber"
+
+  // 1. Exact Ljw.a endpoint via Native.safeB(3, orderIdInt, ...): GET https://gateway.saned.io/api/v1/dispatch-location/contact-number/{id}
+  if (orderIdInt > 0) {
+      try {
+          val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+          val spec = Native.safeB(3, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+          if (spec.size >= 2 && spec[1].startsWith("http")) {
+              val rb = Request.Builder().url(spec[1]).get()
+              var idx = 2
+              while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+              val resp = client.newCall(rb.build()).execute()
+              val code = resp.code
+              val body = resp.body?.string() ?: ""
+              resp.close()
+              if (code in 200..299 && body.trim().startsWith("{")) {
+                  val json = JSONObject(body)
+                  val dataObj = json.optJSONObject("data") ?: json
+                  val cPhone = extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
+                  val cName = extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
+                  val cCash = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount")
+                  if (cPhone.isNotEmpty() || cName.isNotEmpty()) {
+                      customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
+                      DiagnosticLogger.logStep("ContactFetch", "Fetched customer phone for #$cleanId via Ljw.a")
+                      return@launch
+                  }
+              }
+          }
+      } catch (_: Throwable) {}
+  }
         }
     }
 
@@ -2681,26 +2603,29 @@ object OrderInterceptor {
         val burstCount = if (isAccept) parallelRequests.coerceIn(1, 8) else 1
         val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
-        val probeHosts = mutableListOf<String>()
-        if (cachedApiHost.isNotEmpty()) probeHosts.add(cachedApiHost)
-        probeHosts.addAll(candidateApiHosts)
-        val clientToUse = httpClient
+        if (token.isEmpty()) {
+  DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
+  if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن تنفيذ الطلب #$orderIdNum")
+  return
+        }
 
+        val clientToUse = httpClient
         CoroutineScope(Dispatchers.IO).launch {
   val tid = Process.myTid()
   val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
   if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
   try {
-      var nativeMethod = ""
-      var nativeUrl = ""
+      var nativeMethod = "PUT"
+      var nativeUrl = if (isAccept) "https://gateway.saned.io/api/v1/dispatch/$orderIdInt" else "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt"
       val nativeHeaders = LinkedHashMap<String, String>()
-      if (Native.isLoaded && orderIdInt > 0) {
+      if (orderIdInt > 0) {
           try {
               if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
               val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
               val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
               if (spec.size >= 2 && spec[1].startsWith("http")) {
-                  nativeMethod = spec[0]; nativeUrl = spec[1]
+                  nativeMethod = spec[0]
+                  nativeUrl = spec[1]
                   var idx = 2
                   while (idx + 1 < spec.size) { nativeHeaders[spec[idx]] = spec[idx + 1]; idx += 2 }
               }
@@ -2708,64 +2633,62 @@ object OrderInterceptor {
       }
 
       val emptyPutBody = "".toRequestBody(null)
-      val jsonBody = JSONObject().apply {
-          put("order_id", orderIdNum)
-          if (orderIdInt > 0) put("requestId", orderIdInt)
-      }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-
       val latch = CountDownLatch(1)
       val winnerCode = AtomicReference<Int>(null)
+      val lastErrorPair = AtomicReference<Pair<Int, String>>(null)
+      val remaining = AtomicInteger(burstCount)
 
       for (burst in 0 until burstCount) {
           launch {
-              if (nativeUrl.isNotEmpty() && winnerCode.get() == null) {
-                  try {
-                      val rb = Request.Builder().url(nativeUrl)
-                      if (nativeMethod.equals("PUT", ignoreCase = true)) rb.put(emptyPutBody) else rb.get()
-                      for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                      val resp = clientToUse.newCall(rb.build()).execute()
-                      val code = resp.code
-                      resp.close()
-                      if (code in 200..299) {
-                          if (winnerCode.compareAndSet(null, code)) latch.countDown()
-                          return@launch
-                      }
-                  } catch (_: Throwable) {}
-              }
-              for (host in probeHosts.distinct()) {
+              try {
                   if (winnerCode.get() != null) return@launch
-                  val endpoints = if (isAccept) listOf(
-                      buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/accept"),
-                      buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/accept"),
-                      buildCandidateUrl(host, "/api/orders/$orderIdNum/accept")
-                  ) else listOf(
-                      buildCandidateUrl(host, "/api/fleets/orders/$orderIdNum/reject"),
-                      buildCandidateUrl(host, "/api/driver/orders/$orderIdNum/reject"),
-                      buildCandidateUrl(host, "/api/orders/$orderIdNum/reject")
-                  )
-                  for (url in endpoints) {
-                      if (winnerCode.get() != null) return@launch
-                      for (method in listOf("PUT", "POST")) {
-                          try {
-                              val reqBuilder = Request.Builder().url(url)
-                              if (method == "PUT") reqBuilder.put(emptyPutBody) else reqBuilder.post(jsonBody)
-                              applyJahezHeaders(reqBuilder, token)
-                              if (capturedDriverCipherB64.isNotEmpty()) reqBuilder.header("driverId", capturedDriverCipherB64)
-                              val resp = clientToUse.newCall(reqBuilder.build()).execute()
-                              val code = resp.code
-                              resp.close()
-                              if (code in 200..299) {
-                                  cachedApiHost = host; persistHost(host)
-                                  if (winnerCode.compareAndSet(null, code)) latch.countDown()
-                                  return@launch
-                              }
-                          } catch (_: Throwable) {}
+                  httpRequestsCount.incrementAndGet()
+                  lastInterceptedUrl = nativeUrl
+                  val rb = Request.Builder().url(nativeUrl)
+                  if (nativeMethod.equals("PUT", ignoreCase = true)) rb.put(emptyPutBody) else rb.get()
+                  for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+                  val resp = clientToUse.newCall(rb.build()).execute()
+                  val code = resp.code
+                  val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
+                  resp.close()
+                  lastHttpResponseCode = code
+                  if (code in 200..299) {
+                      cachedApiHost = "https://gateway.saned.io"
+                      if (winnerCode.compareAndSet(null, code)) {
+                          DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded (HTTP $code)")
+                          latch.countDown()
                       }
+                  } else {
+                      lastErrorPair.set(code to bodyStr)
+                  }
+              } catch (t: Throwable) {
+                  lastErrorPair.set(-1 to (t.message ?: t.javaClass.simpleName))
+              } finally {
+                  if (remaining.decrementAndGet() == 0) {
+                      latch.countDown()
                   }
               }
           }
       }
       try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
+
+      val win = winnerCode.get()
+      if (win == null && isAccept) {
+          val err = lastErrorPair.get()
+          val errCode = err?.first ?: 0
+          val rawErr = err?.second ?: ""
+          var errMsg = ""
+          if (rawErr.trim().startsWith("{")) {
+              try {
+                  val j = JSONObject(rawErr)
+                  errMsg = extractFirstString(j, "message", "error", "title")
+              } catch (_: Throwable) {}
+          }
+          if (errMsg.isEmpty()) errMsg = if (errCode > 0) "HTTP $errCode" else "Network timeout"
+          DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $errCode)")
+          lastOrderEvent = "❌ فشل قبول #$orderIdNum ($errMsg)"
+          if (ctx != null) showToast(ctx, "❌ فشل قبول الطلب #$orderIdNum: $errMsg")
+      }
   } catch (_: Throwable) {
   } finally {
       if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
