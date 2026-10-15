@@ -194,7 +194,10 @@ object OrderInterceptor {
       extractAndProcessOrderFromIntent(intent, activity)
       exactId
   } else 0
-        } catch (_: Throwable) { 0 }
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("onActivityPreCreated", "Error inspecting activity intent", t)
+  0
+        }
     }
 
     fun onOrderActivityPostCreate(activity: Activity, orderIdInt: Int) {
@@ -239,16 +242,6 @@ object OrderInterceptor {
 
     fun onActivityResumed(activity: Activity) {
         currentActivity = activity
-        syncSettings(activity.contentResolver)
-        startScreenWatcher()
-        startActiveServerPolling()
-        for (delayMs in listOf(0L, 80L, 220L, 450L, 800L)) {
-            mainHandler.postDelayed({
-                try {
-                    scanAllRoots()
-                } catch (_: Throwable) {}
-            }, delayMs)
-        }
     }
 
     private fun extractOrderIdFromActivity(activity: Activity): String {
@@ -822,43 +815,48 @@ object OrderInterceptor {
     fun startBootstrapLoop(module: XposedModule, classLoader: ClassLoader) {
         if (!isBootstrapRunning.compareAndSet(false, true)) return
         Thread {
-            var resolvedApp: Context? = null
-            for (attempt in 0 until 200) {
-                resolvedApp = resolveApplicationContext()
-                if (resolvedApp != null) break
-                try { Thread.sleep(150) } catch (_: Throwable) {}
-            }
-            if (resolvedApp != null) {
-                try { initAppContext(resolvedApp) } catch (_: Throwable) {}
-                val appObj = resolvedApp.applicationContext as? Application ?: (resolvedApp as? Application)
-                if (appObj != null) {
-                    registerActivityCallbacksOnApp(appObj)
-                }
-                scanExistingActivitiesInActivityThread()
-            }
+  DiagnosticLogger.logStep("BootstrapLoop", "Waiting for ActivityThread.currentApplication()...")
+  var resolvedApp: Context? = null
+  for (attempt in 0 until 200) {
+      resolvedApp = resolveApplicationContext()
+      if (resolvedApp != null) break
+      try { Thread.sleep(150) } catch (_: Throwable) {}
+  }
+  if (resolvedApp != null) {
+      DiagnosticLogger.logStep("BootstrapLoop", "Application context resolved: ${resolvedApp.javaClass.name}")
+      try { initAppContext(resolvedApp) } catch (t: Throwable) {
+          DiagnosticLogger.logError("BootstrapLoop", "Error in initAppContext", t)
+      }
+      val appObj = resolvedApp.applicationContext as? Application ?: (resolvedApp as? Application)
+      if (appObj != null) {
+          registerActivityCallbacksOnApp(appObj)
+      }
+  } else {
+      DiagnosticLogger.logWarn("BootstrapLoop", "Timed out waiting for currentApplication()")
+  }
 
-            // Continuous background SQLite + Order sync loop matching Lb11$b in SanedAssistant-98
-            while (true) {
-                try {
-                    val ctx = resolveApplicationContext()
-                    if (ctx != null) {
-                        if (appContext == null) {
-                            try { initAppContext(ctx) } catch (_: Throwable) {}
-                        }
-                        scanJahezDatabases(ctx)
-                        if (cachedAuthToken.isEmpty()) {
-                            scanJahezSharedPreferencesForToken(ctx)
-                            scanAllSharedPreferencesForTokens(ctx)
-                        }
-                    }
-                    scanExistingActivitiesInActivityThread()
-                } catch (_: Throwable) {}
-                try { Thread.sleep(2000) } catch (_: Throwable) { break }
-            }
+  // Continuous background SQLite + EncryptedSharedPreferences token sync loop matching Lb11$b in SanedAssistant-98
+  while (true) {
+      try {
+          val ctx = resolveApplicationContext()
+          if (ctx != null) {
+              if (appContext == null) {
+                  try { initAppContext(ctx) } catch (_: Throwable) {}
+              }
+              if (cachedAuthToken.isEmpty()) {
+                  readExactJahezEncryptedPrefs(ctx)
+              }
+              scanJahezDatabases(ctx)
+          }
+      } catch (t: Throwable) {
+          DiagnosticLogger.logError("BootstrapLoop", "Error in background loop iteration", t)
+      }
+      try { Thread.sleep(2500) } catch (_: Throwable) { break }
+  }
         }.apply {
-            isDaemon = true
-            name = "Saned-Bootstrap-Lb11"
-            start()
+  isDaemon = true
+  name = "Saned-Bootstrap-Lb11"
+  start()
         }
     }
 
@@ -920,6 +918,9 @@ object OrderInterceptor {
         if (appContext != null) return
         val app = context.applicationContext ?: context
         appContext = app
+        DiagnosticLogger.cachedContext = app
+        DiagnosticLogger.installCrashHandler(DiagnosticLogger.xposedModule, "initAppContext")
+        DiagnosticLogger.logStep("OrderInterceptor", "initAppContext initialized (${app.javaClass.name})")
 
         try {
   val filter = IntentFilter().apply {
@@ -934,7 +935,9 @@ object OrderInterceptor {
   } else {
       app.registerReceiver(settingsReceiver, filter)
   }
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("initAppContext", "Failed registering settingsReceiver", t)
+        }
 
         loadFallbackConfigFile()
         LocationEngine.syncLocationSettings()
@@ -942,7 +945,9 @@ object OrderInterceptor {
         LocationEngine.seedLocationManager(app)
         acquireWakeLock(app)
         (app as? Application)?.let { registerActivityCallbacksOnApp(it) }
-        startActiveServerPolling()
+        if (DiagnosticLogger.hookBootstrapLoop) {
+  startActiveServerPolling()
+        }
     }
 
     fun requestSettingsFromAssistant() {
@@ -1168,10 +1173,17 @@ object OrderInterceptor {
       }
   }
   val tok = prefs.getString(Native.safeI(), "") ?: ""
-  if (tok.isNotEmpty()) checkAndSetToken(tok, Native.safeI())
+  if (tok.isNotEmpty()) {
+      if (cachedAuthToken.isEmpty()) {
+          DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
+      }
+      checkAndSetToken(tok, Native.safeI())
+  }
   val lang = prefs.getString(Native.safeJ(), "en") ?: "en"
   if (lang.isNotEmpty()) cachedLanguage = lang
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("EncryptedPrefs", "Could not read ENCRYPTED_SANED_PREFERENCES yet", t)
+        }
     }
 
     fun scanAllSharedPreferencesForTokens(context: Context) {
@@ -1256,20 +1268,26 @@ object OrderInterceptor {
                   currentActivity = act
                   val reqId = onActivityPreCreated(act)
                   if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
-              } catch (_: Throwable) {}
+              } catch (t: Throwable) {
+                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in onCreate hook", t)
+              }
           }
           return res
       }
   })
-        } catch (_: Throwable) { isIncomingDispatchHooked.set(false) }
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked $actClsName.onCreate")
+        } catch (t: Throwable) {
+  isIncomingDispatchHooked.set(false)
+  DiagnosticLogger.logError("OrderInterceptor", "Failed hooking IncomingDispatchActivity", t)
+        }
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
         // Matches SanedAssistant-98-7bac1ec.apk 100%: ONLY these 4 hooks (zero OkHttp/UI/SQLite/SharedPreferences hooks that crash Jahez)
-        try { hookFirebase(module, classLoader) } catch (_: Throwable) {}
-        try { hookIncomingDispatchActivity(module, classLoader) } catch (_: Throwable) {}
-        try { hookInstrumentation(module) } catch (_: Throwable) {}
-        try { hookCipher(module) } catch (_: Throwable) {}
+        try { hookFirebase(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookFirebase", "Error", t) }
+        try { hookIncomingDispatchActivity(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookIncomingDispatchActivity", "Error", t) }
+        try { hookInstrumentation(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookInstrumentation", "Error", t) }
+        try { hookCipher(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookCipher", "Error", t) }
         isOkHttpHooked = true
     }
 
@@ -1587,6 +1605,7 @@ object OrderInterceptor {
         if (!isInstrumentationHooked.compareAndSet(false, true)) return
         try {
   val instClass = Class.forName("android.app.Instrumentation")
+  var count = 0
   for (m in instClass.declaredMethods) {
       if (m.name == "execStartActivity") {
           val paramTypes = m.parameterTypes
@@ -1615,10 +1634,14 @@ object OrderInterceptor {
                       return chain.proceed()
                   }
               })
+              count++
           }
       }
   }
-        } catch (_: Throwable) {}
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked Instrumentation.execStartActivity ($count overloads)")
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("hookInstrumentation", "Failed hooking Instrumentation", t)
+        }
     }
 
     private val hookedFcmClasses = ConcurrentHashMap.newKeySet<String>()
@@ -1633,6 +1656,7 @@ object OrderInterceptor {
         if (clsName.isEmpty() || !hookedFcmClasses.add(clsName)) return
         try {
   val fmsClass = classLoader.loadClass(clsName)
+  var fcmCount = 0
   for (m in fmsClass.declaredMethods) {
       if (m.parameterCount == 1 && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
           val paramCls = m.parameterTypes[0]
@@ -1654,14 +1678,21 @@ object OrderInterceptor {
                               decisionAction = processFcmMapWithLs90(dataMap)
                           }
                       }
-                  } catch (_: Throwable) {}
+                  } catch (t: Throwable) {
+                      DiagnosticLogger.logError("FCM", "Error in FCM hook", t)
+                  }
                   if (decisionAction == "REJECT" && !isDryRun) return null
                   return chain.proceed()
               }
           })
+          fcmCount++
       }
   }
-        } catch (_: Throwable) { hookedFcmClasses.remove(clsName) }
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked $clsName ($fcmCount methods)")
+        } catch (t: Throwable) {
+  hookedFcmClasses.remove(clsName)
+  DiagnosticLogger.logError("hookFirebase", "Failed hooking $clsName", t)
+        }
     }
 
     private fun processFcmMapWithLs90(dataMap: Map<*, *>): String {
@@ -1685,6 +1716,7 @@ object OrderInterceptor {
         val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
         val cleanPrice = String.format(Locale.US, "%.2f", delivPrice + bonusAmt).toDoubleOrNull() ?: (delivPrice + bonusAmt)
         lastOrderEvent = "Order #$reqId detected via FCM Push (Ls90)"
+        DiagnosticLogger.logStep("FCM", "Order #$reqId received (price=$cleanPrice, restDist=$calcRestDist)")
         return handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = restName, custDist = calcCustDist, sourceChannel = "PUSH")
     }
 
@@ -1974,13 +2006,17 @@ object OrderInterceptor {
               try {
                   if (startsWithDriverIdPrefix(inputBytes)) {
                       capturedDriverCipherB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
+                      DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
                   }
               } catch (_: Throwable) {}
           }
           return result
       }
   })
-        } catch (_: Throwable) {}
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked Cipher.doFinal(byte[])")
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("hookCipher", "Failed hooking Cipher.doFinal", t)
+        }
     }
 
     private fun hookJsonConstructors(module: XposedModule) {
@@ -2160,6 +2196,7 @@ object OrderInterceptor {
     private var failedPollingCount = 0
 
     private fun pollServerForAvailableOrders() {
+        if (!DiagnosticLogger.hookBootstrapLoop) return
         val ctx = resolveApplicationContext() ?: currentActivity
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
@@ -2561,6 +2598,8 @@ object OrderInterceptor {
       return prev.decision
   }
         }
+
+        DiagnosticLogger.logStep("OrderDecision", "Order $orderId [$sourceChannel] -> $action ($reason)")
 
         when (action) {
   "REJECT" -> {

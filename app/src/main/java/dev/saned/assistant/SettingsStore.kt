@@ -3,6 +3,7 @@ package dev.saned.assistant
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import io.github.libxposed.service.XposedProvider
 import org.json.JSONObject
 import java.io.File
 
@@ -61,6 +62,71 @@ object SettingsStore {
     fun setStrictVersionCheck(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("strict_version_check", value).apply()
         broadcastSettings(context)
+    }
+
+    // Hook Group Isolation Toggles (Default TRUE)
+    fun isHookEarlyCloaker(context: Context): Boolean = getPrefs(context).getBoolean("hook_early_cloaker", true)
+    fun setHookEarlyCloaker(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_early_cloaker", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isHookSecCloaker(context: Context): Boolean = getPrefs(context).getBoolean("hook_sec_cloaker", true)
+    fun setHookSecCloaker(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_sec_cloaker", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isHookLocation(context: Context): Boolean = getPrefs(context).getBoolean("hook_location", true)
+    fun setHookLocation(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_location", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isHookDeviceSpoofer(context: Context): Boolean = getPrefs(context).getBoolean("hook_device_spoofer", true)
+    fun setHookDeviceSpoofer(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_device_spoofer", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isHookOrders(context: Context): Boolean = getPrefs(context).getBoolean("hook_orders", true)
+    fun setHookOrders(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_orders", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun isHookBootstrapLoop(context: Context): Boolean = getPrefs(context).getBoolean("hook_bootstrap_loop", true)
+    fun setHookBootstrapLoop(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("hook_bootstrap_loop", value).apply()
+        broadcastSettings(context)
+    }
+
+    // Diagnostic Logs
+    fun getDiagLogs(context: Context): String {
+        val spLogs = XposedProvider.getDiagLogs(context)
+        val fileLogs = try {
+  val f = File("/data/local/tmp/saned_diag.log")
+  if (f.exists()) f.readText() else ""
+        } catch (_: Throwable) { "" }
+        return when {
+  spLogs.isNotEmpty() && fileLogs.isNotEmpty() -> {
+      val seen = LinkedHashSet<String>()
+      for (line in spLogs.lines()) if (line.isNotBlank()) seen.add(line)
+      for (line in fileLogs.lines()) if (line.isNotBlank()) seen.add(line)
+      seen.joinToString("
+")
+  }
+  spLogs.isNotEmpty() -> spLogs
+  else -> fileLogs
+        }
+    }
+
+    fun clearDiagLogs(context: Context) {
+        XposedProvider.clearDiagLogs(context)
+        try {
+  val f = File("/data/local/tmp/saned_diag.log")
+  if (f.exists()) f.writeText("")
+        } catch (_: Throwable) {}
     }
 
     // Active Server Polling & Parallel Acceptance (Original Assistant Features)
@@ -180,7 +246,7 @@ object SettingsStore {
     }
 
     fun broadcastSettings(context: Context) {
-        try { io.github.libxposed.service.XposedProvider.syncToLSPosedRemotePrefs(context) } catch (_: Throwable) {}
+        try { XposedProvider.syncToLSPosedRemotePrefs(context) } catch (_: Throwable) {}
         val master = isMasterRunning(context)
         val autoAccept = isAutoAccept(context)
         val autoReject = isAutoReject(context)
@@ -194,6 +260,12 @@ object SettingsStore {
         val minPrice = getMinPrice(context)
         val maxRest = getMaxDistRest(context)
         val maxCust = getMaxDistCust(context)
+        val hEarly = isHookEarlyCloaker(context)
+        val hSec = isHookSecCloaker(context)
+        val hLoc = isHookLocation(context)
+        val hDev = isHookDeviceSpoofer(context)
+        val hOrd = isHookOrders(context)
+        val hBoot = isHookBootstrapLoop(context)
 
         try {
   val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
@@ -219,6 +291,12 @@ object SettingsStore {
       putExtra("fake_lng", getFakeLng(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
+      putExtra("hook_early_cloaker", hEarly)
+      putExtra("hook_sec_cloaker", hSec)
+      putExtra("hook_location", hLoc)
+      putExtra("hook_device_spoofer", hDev)
+      putExtra("hook_orders", hOrd)
+      putExtra("hook_bootstrap_loop", hBoot)
   }
   context.sendBroadcast(intent)
         } catch (_: Throwable) {}
@@ -244,6 +322,12 @@ object SettingsStore {
       putExtra("fake_lng", getFakeLng(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
+      putExtra("hook_early_cloaker", hEarly)
+      putExtra("hook_sec_cloaker", hSec)
+      putExtra("hook_location", hLoc)
+      putExtra("hook_device_spoofer", hDev)
+      putExtra("hook_orders", hOrd)
+      putExtra("hook_bootstrap_loop", hBoot)
   }
   context.sendBroadcast(gIntent)
         } catch (_: Throwable) {}
@@ -270,6 +354,12 @@ object SettingsStore {
       put("fake_location_enabled", isFakeLocation(context))
       put("fake_lat", getFakeLat(context))
       put("fake_lng", getFakeLng(context))
+      put("hook_early_cloaker", hEarly)
+      put("hook_sec_cloaker", hSec)
+      put("hook_location", hLoc)
+      put("hook_device_spoofer", hDev)
+      put("hook_orders", hOrd)
+      put("hook_bootstrap_loop", hBoot)
   }
   val file = File("/data/local/tmp/saned_config.json")
   file.writeText(json.toString())

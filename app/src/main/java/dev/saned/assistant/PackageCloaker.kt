@@ -42,6 +42,8 @@ object PackageCloaker {
     private val isBlockedActHooked = AtomicBoolean(false)
     private val isSecurityHooked = AtomicBoolean(false)
 
+    fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
+
     fun getAllVersionProfiles(): List<VersionProfile> {
         val raw = Native.safeP()
         val result = mutableListOf<VersionProfile>()
@@ -108,34 +110,15 @@ object PackageCloaker {
     }
 
     /**
-     * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk
+     * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk.
+     * Note: Stubs JNI native methods FIRST, and only suppresses Runtime.loadLibrary0("jahez_fleets")
+     * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build.
      */
     fun hookEarly(module: XposedModule, classLoader: ClassLoader) {
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
 
-        // 1. Lvh1.o: Hook Runtime.loadLibrary0 ONLY (do NOT hook Runtime.exec!)
-        if (isRuntimeHooked.compareAndSet(false, true)) {
-  try {
-      val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
-      val blockedLibName = profiles.firstOrNull { it.nativeLibName.isNotEmpty() }?.nativeLibName ?: "jahez_fleets"
-      for (m in Runtime::class.java.declaredMethods) {
-          if (m.name == targetMethodName && m.parameterTypes.lastOrNull() == String::class.java) {
-              module.hook(m).intercept(object : XposedInterface.Hooker {
-                  override fun intercept(chain: XposedInterface.Chain): Any? {
-                      val lastArg = chain.args.lastOrNull() as? String
-                      if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) {
-                          return null
-                      }
-                      return chain.proceed()
-                  }
-              })
-          }
-      }
-  } catch (_: Throwable) {}
-        }
-
-        // 2. Lvh1.q: Stub native methods on resolved profile's nativeClasses
+        // 1. Lvh1.q: Stub native methods on resolved profile's nativeClasses FIRST
         if (!isNativeStubbed.get()) {
   try {
       val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
@@ -154,11 +137,21 @@ object PackageCloaker {
               }
           } catch (_: Throwable) {}
       }
-      if (hookedCount > 0) isNativeStubbed.set(true)
-  } catch (_: Throwable) {}
+      if (hookedCount > 0) {
+          isNativeStubbed.set(true)
+          DiagnosticLogger.logStep("PackageCloaker", "Stubbed $hookedCount JNI methods on ${resolved?.nativeClasses ?: nativeClassNames}")
+      } else {
+          DiagnosticLogger.logWarn(
+              "PackageCloaker",
+              "No matching native classes found for vCode=$lastCheckedVersionCode (resolvedProfile=${resolved?.loaderClass ?: "null"})."
+          )
+      }
+  } catch (t: Throwable) {
+      DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
+  }
         }
 
-        // 3. Lvh1.j: Hook loaderClass.loaderMethod(String)
+        // 2. Lvh1.j: Hook loaderClass.loaderMethod(String)
         if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
   try {
       val cls = Class.forName(resolved.loaderClass, false, classLoader)
@@ -167,7 +160,41 @@ object PackageCloaker {
           override fun intercept(chain: XposedInterface.Chain): Any? = null
       })
       isLoaderHooked.set(true)
-  } catch (_: Throwable) {}
+      DiagnosticLogger.logStep("PackageCloaker", "Hooked loader ${resolved.loaderClass}.${resolved.loaderMethod}(String)")
+  } catch (t: Throwable) {
+      DiagnosticLogger.logError("PackageCloaker:Loader", "Error hooking loader ${resolved.loaderClass}.${resolved.loaderMethod}", t)
+  }
+        }
+
+        // 3. Lvh1.o: Hook Runtime.loadLibrary0 (only suppress blockedLibName if its JNI methods were stubbed!)
+        if (isRuntimeHooked.compareAndSet(false, true)) {
+  try {
+      val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
+      val blockedLibName = profiles.firstOrNull { it.nativeLibName.isNotEmpty() }?.nativeLibName ?: "jahez_fleets"
+      for (m in Runtime::class.java.declaredMethods) {
+          if (m.name == targetMethodName && m.parameterTypes.lastOrNull() == String::class.java) {
+              module.hook(m).intercept(object : XposedInterface.Hooker {
+                  override fun intercept(chain: XposedInterface.Chain): Any? {
+                      val lastArg = chain.args.lastOrNull() as? String
+                      if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) {
+                          if (isNativeStubbed.get()) {
+                              DiagnosticLogger.logStep("Runtime.loadLibrary0", "Blocked loading native lib '$lastArg' (JNI methods stubbed)")
+                              return null
+                          } else {
+                              DiagnosticLogger.logWarn(
+                                  "Runtime.loadLibrary0",
+                                  "Allowing '$lastArg' to load because JNI methods were NOT stubbed for vCode=$lastCheckedVersionCode (prevents UnsatisfiedLinkError)"
+                              )
+                          }
+                      }
+                      return chain.proceed()
+                  }
+              })
+          }
+      }
+  } catch (t: Throwable) {
+      DiagnosticLogger.logError("PackageCloaker:Runtime", "Error hooking Runtime.loadLibrary0", t)
+  }
         }
 
         // 4. Lvh1.e: Hook Activity.onResume for blockedActivities redirect
@@ -181,18 +208,27 @@ object PackageCloaker {
               override fun intercept(chain: XposedInterface.Chain): Any? {
                   val res = chain.proceed()
                   val act = chain.thisObject as? Activity
-                  if (act != null && blockedActivities.contains(act.javaClass.name) && !act.isFinishing) {
-                      try {
-                          val mainCls = classLoader.loadClass(mainActName)
-                          act.startActivity(android.content.Intent(act, mainCls))
-                          act.finish()
-                      } catch (_: Throwable) {}
+                  if (act != null) {
+                      val actClsName = act.javaClass.name
+                      DiagnosticLogger.logStep("Activity.onResume", "Resumed: $actClsName")
+                      if (blockedActivities.contains(actClsName) && !act.isFinishing) {
+                          try {
+                              DiagnosticLogger.logWarn("BlockedActivity", "Intercepted blocked activity $actClsName -> redirecting to $mainActName")
+                              val mainCls = classLoader.loadClass(mainActName)
+                              act.startActivity(android.content.Intent(act, mainCls))
+                              act.finish()
+                          } catch (t: Throwable) {
+                              DiagnosticLogger.logError("BlockedActivity", "Failed redirecting $actClsName", t)
+                          }
+                      }
                   }
                   return res
               }
           })
       }
-  } catch (_: Throwable) {}
+  } catch (t: Throwable) {
+      DiagnosticLogger.logError("PackageCloaker:BlockedAct", "Error hooking Activity.onResume", t)
+  }
         }
     }
 
@@ -200,7 +236,9 @@ object PackageCloaker {
      * Matches Lu80.p and Lb51.b in SanedAssistant-98-7bac1ec.apk (called in onPackageReady)
      */
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        hookEarly(module, classLoader)
+        if (DiagnosticLogger.hookEarlyCloaker) {
+  hookEarly(module, classLoader)
+        }
         if (!isSecurityHooked.compareAndSet(false, true)) return
 
         // 1. Lu80.C: ApplicationPackageManager.getInstallerPackageName & getInstallSourceInfo
@@ -227,7 +265,9 @@ object PackageCloaker {
           }
       })
   } catch (_: Throwable) {}
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("PackageCloaker:Installer", "Error hooking ApplicationPackageManager", t)
+        }
 
         // 2. Lu80.y: SecurityCallBacksState
         val secClasses = Native.safeN()
@@ -235,6 +275,7 @@ object PackageCloaker {
         if (secStateClsName.isNotEmpty()) {
   try {
       val secCls = classLoader.loadClass(secStateClsName)
+      var secHooked = 0
       for (m in secCls.declaredMethods) {
           if (Modifier.isStatic(m.modifiers) && m.parameterTypes.firstOrNull() == secCls) {
               module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -252,12 +293,15 @@ object PackageCloaker {
                       return chain.proceed()
                   }
               })
+              secHooked++
           }
       }
+      DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState hooked ($secHooked methods)")
   } catch (_: Throwable) {}
         }
 
         // 3. Lu80.G: RootBeer & RootBeerNative
+        var rbHooked = 0
         for (idx in 1..2) {
   val rbClsName = secClasses.getOrNull(idx) ?: continue
   try {
@@ -267,14 +311,17 @@ object PackageCloaker {
               module.hook(m).intercept(object : XposedInterface.Hooker {
                   override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
               })
+              rbHooked++
           } else if (idx == 2 && m.returnType == Int::class.javaPrimitiveType) {
               module.hook(m).intercept(object : XposedInterface.Hooker {
                   override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) 0 else chain.proceed()
               })
+              rbHooked++
           }
       }
   } catch (_: Throwable) {}
         }
+        DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
         // 4. Lu80.L: ShadowArmor profiles (only for detectedVersionIndex if >= 0, matching Lu80.L!)
         try {
@@ -282,6 +329,7 @@ object PackageCloaker {
   val sa = saProfiles.getOrNull(detectedVersionIndex)
   val featureFlags = Native.safeU().toList()
   if (sa != null) {
+      var saCount = 0
       try {
           val rootCls = classLoader.loadClass(sa.rootCheckClass)
           for (m in rootCls.declaredMethods) {
@@ -289,6 +337,7 @@ object PackageCloaker {
                   module.hook(m).intercept(object : XposedInterface.Hooker {
                       override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
                   })
+                  saCount++
               }
           }
       } catch (_: Throwable) {}
@@ -300,6 +349,7 @@ object PackageCloaker {
                       module.hook(m).intercept(object : XposedInterface.Hooker {
                           override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
                       })
+                      saCount++
                   }
               }
           } catch (_: Throwable) {}
@@ -317,12 +367,16 @@ object PackageCloaker {
                               return chain.proceed()
                           }
                       })
+                      saCount++
                   }
               }
           } catch (_: Throwable) {}
       }
+      DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods)")
   }
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+  DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)
+        }
 
         // 5. Lb51.b: ONLY hook getApplicationInfo/getPackageInfo if frameworkName == "Vector" (LSPatch non-root)
         try {

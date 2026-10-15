@@ -36,6 +36,19 @@ class MainActivity : AppCompatActivity() {
     // Tabs
     private lateinit var tabOrdersView: ScrollView
     private lateinit var tabSettingsView: ScrollView
+    private lateinit var tabLogsView: ScrollView
+    private lateinit var navLogsBtn: LinearLayout
+    private lateinit var navLogsIconBg: TextView
+    private lateinit var navLogsLabel: TextView
+    private lateinit var tvDiagLogConsole: TextView
+    private lateinit var tvDiagLogSummary: TextView
+    private var filterErrorsOnly: Boolean = false
+    private lateinit var chkHookEarlyCloaker: CheckBox
+    private lateinit var chkHookSecCloaker: CheckBox
+    private lateinit var chkHookLocation: CheckBox
+    private lateinit var chkHookDeviceSpoofer: CheckBox
+    private lateinit var chkHookOrders: CheckBox
+    private lateinit var chkHookBootstrapLoop: CheckBox
     private lateinit var navOrdersBtn: LinearLayout
     private lateinit var navSettingsBtn: LinearLayout
     private lateinit var navOrdersIconBg: TextView
@@ -147,6 +160,14 @@ class MainActivity : AppCompatActivity() {
         topBar.addView(appTitle)
 
         // Simulate Test Order quick button in top bar
+        val btnTopLogs = TextView(this).apply {
+  text = "📋"
+  textSize = 18f
+  setPadding(20, 10, 20, 10)
+  setOnClickListener { switchTab(2) }
+        }
+        topBar.addView(btnTopLogs)
+
         val btnTopSim = TextView(this).apply {
             text = "⚡"
             textSize = 18f
@@ -195,9 +216,11 @@ class MainActivity : AppCompatActivity() {
 
         tabOrdersView = buildOrdersTabView()
         tabSettingsView = buildSettingsTabView()
+        tabLogsView = buildLogsTabView()
 
         contentFrame.addView(tabOrdersView)
         contentFrame.addView(tabSettingsView)
+        contentFrame.addView(tabLogsView)
         rootContainer.addView(contentFrame)
 
         // ================= BOTTOM NAVIGATION BAR (Orders | Settings matching 34.jpg) =================
@@ -251,8 +274,30 @@ class MainActivity : AppCompatActivity() {
         navSettingsBtn.addView(navSettingsIconBg)
         navSettingsBtn.addView(navSettingsLabel)
 
+        navLogsBtn = LinearLayout(this).apply {
+  orientation = LinearLayout.VERTICAL
+  gravity = Gravity.CENTER
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+  setOnClickListener { switchTab(2) }
+        }
+        navLogsIconBg = TextView(this).apply {
+  text = "📋"
+  textSize = 16f
+  gravity = Gravity.CENTER
+  setPadding(42, 10, 42, 10)
+        }
+        navLogsLabel = TextView(this).apply {
+  text = "Logs"
+  textSize = 12.5f
+  typeface = Typeface.DEFAULT_BOLD
+  setPadding(0, 6, 0, 0)
+        }
+        navLogsBtn.addView(navLogsIconBg)
+        navLogsBtn.addView(navLogsLabel)
+
         bottomNav.addView(navOrdersBtn)
         bottomNav.addView(navSettingsBtn)
+        bottomNav.addView(navLogsBtn)
         rootContainer.addView(bottomNav)
 
         setContentView(rootContainer)
@@ -264,27 +309,267 @@ class MainActivity : AppCompatActivity() {
 
     private fun switchTab(tabIndex: Int) {
         currentTab = tabIndex
-        if (tabIndex == 0) {
-            tabOrdersView.visibility = View.VISIBLE
-            tabSettingsView.visibility = View.GONE
-            navOrdersIconBg.background = roundedBg("#EDE9FE", 20f)
-            navSettingsIconBg.background = null
-            navOrdersLabel.setTextColor(Color.parseColor("#4C1D95"))
-            navSettingsLabel.setTextColor(Color.parseColor("#64748B"))
-            refreshOrdersLogUI()
-        } else {
-            tabOrdersView.visibility = View.GONE
-            tabSettingsView.visibility = View.VISIBLE
-            navOrdersIconBg.background = null
-            navSettingsIconBg.background = roundedBg("#EDE9FE", 20f)
-            navOrdersLabel.setTextColor(Color.parseColor("#64748B"))
-            navSettingsLabel.setTextColor(Color.parseColor("#4C1D95"))
-        }
+        tabOrdersView.visibility = if (tabIndex == 0) View.VISIBLE else View.GONE
+        tabSettingsView.visibility = if (tabIndex == 1) View.VISIBLE else View.GONE
+        tabLogsView.visibility = if (tabIndex == 2) View.VISIBLE else View.GONE
+
+        navOrdersIconBg.background = if (tabIndex == 0) roundedBg("#EDE9FE", 20f) else null
+        navSettingsIconBg.background = if (tabIndex == 1) roundedBg("#EDE9FE", 20f) else null
+        navLogsIconBg.background = if (tabIndex == 2) roundedBg("#EDE9FE", 20f) else null
+
+        navOrdersLabel.setTextColor(Color.parseColor(if (tabIndex == 0) "#4C1D95" else "#64748B"))
+        navSettingsLabel.setTextColor(Color.parseColor(if (tabIndex == 1) "#4C1D95" else "#64748B"))
+        navLogsLabel.setTextColor(Color.parseColor(if (tabIndex == 2) "#4C1D95" else "#64748B"))
+
+        if (tabIndex == 0) refreshOrdersLogUI()
+        if (tabIndex == 2) refreshDiagLogsUI()
     }
 
-    // =========================================================================
-    // TAB 0: ORDERS TAB (Exact visual & functional match to 34.jpg)
-    // =========================================================================
+    private fun buildLogsTabView(): ScrollView {
+        val scroll = ScrollView(this).apply {
+  setBackgroundColor(Color.parseColor("#F4F6F9"))
+  layoutParams = FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      FrameLayout.LayoutParams.MATCH_PARENT
+  )
+        }
+
+        val container = LinearLayout(this).apply {
+  orientation = LinearLayout.VERTICAL
+  setPadding(24, 24, 24, 60)
+        }
+
+        // Card 1: Live Crash & Hook Diagnostic Window
+        val logCard = createStyledCard()
+        val logLayout = LinearLayout(this).apply {
+  orientation = LinearLayout.VERTICAL
+  setPadding(24, 24, 24, 24)
+        }
+
+        val title = TextView(this).apply {
+  text = "📋 نافذة السجل التشخيصي وصيد الكراش (Live Crash & Hook Logs)"
+  textSize = 15.5f
+  typeface = Typeface.DEFAULT_BOLD
+  setTextColor(Color.parseColor("#0F172A"))
+  setPadding(0, 0, 0, 6)
+        }
+        logLayout.addView(title)
+
+        tvDiagLogSummary = TextView(this).apply {
+  text = "جاهز لالتقاط أي خطأ أو Stacktrace فور فتح تطبيق net.jahez.fleets..."
+  textSize = 12f
+  typeface = Typeface.DEFAULT_BOLD
+  setTextColor(Color.parseColor("#059669"))
+  setPadding(0, 0, 0, 12)
+        }
+        logLayout.addView(tvDiagLogSummary)
+
+        // Filter & Action Buttons Row
+        val btnRow1 = LinearLayout(this).apply {
+  orientation = LinearLayout.HORIZONTAL
+  setPadding(0, 0, 0, 10)
+        }
+
+        val btnFilterToggle = Button(this).apply {
+  text = "🔎 الكل / الأخطاء فقط"
+  textSize = 11.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
+      setMargins(0, 0, 8, 0)
+  }
+  setBackgroundColor(Color.parseColor("#4F46E5"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      filterErrorsOnly = !filterErrorsOnly
+      text = if (filterErrorsOnly) "🚨 الأخطاء والكراش فقط" else "🔎 عرض كل السجلات"
+      refreshDiagLogsUI()
+  }
+        }
+        btnRow1.addView(btnFilterToggle)
+
+        val btnCopyLogs = Button(this).apply {
+  text = "📋 نسخ السجل"
+  textSize = 11.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+      setMargins(4, 0, 4, 0)
+  }
+  setBackgroundColor(Color.parseColor("#059669"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      val fullLogs = SettingsStore.getDiagLogs(this@MainActivity)
+      val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", fullLogs.ifEmpty { "No logs yet" }))
+      Toast.makeText(this@MainActivity, "✅ تم نسخ السجل التشخيصي بالكامل للحافظة", Toast.LENGTH_SHORT).show()
+  }
+        }
+        btnRow1.addView(btnCopyLogs)
+
+        val btnClearLogs = Button(this).apply {
+  text = "🗑️ مسح"
+  textSize = 11.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f).apply {
+      setMargins(8, 0, 0, 0)
+  }
+  setBackgroundColor(Color.parseColor("#DC2626"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      SettingsStore.clearDiagLogs(this@MainActivity)
+      refreshDiagLogsUI()
+      Toast.makeText(this@MainActivity, "تم مسح السجل", Toast.LENGTH_SHORT).show()
+  }
+        }
+        btnRow1.addView(btnClearLogs)
+        logLayout.addView(btnRow1)
+
+        // Dark Terminal Console Box
+        val hScroll = HorizontalScrollView(this).apply {
+  background = roundedBg("#0F172A", 14f, "#334155", 2)
+  setPadding(20, 20, 20, 20)
+  layoutParams = LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.MATCH_PARENT,
+      LinearLayout.LayoutParams.WRAP_CONTENT
+  )
+        }
+
+        tvDiagLogConsole = TextView(this).apply {
+  text = "لا توجد سجلات بعد.
+افتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
+  textSize = 11.5f
+  typeface = Typeface.MONOSPACE
+  setTextColor(Color.parseColor("#E2E8F0"))
+  setTextIsSelectable(true)
+  setLineSpacing(6f, 1.0f)
+        }
+        hScroll.addView(tvDiagLogConsole)
+        logLayout.addView(hScroll)
+        logCard.addView(logLayout)
+        container.addView(logCard)
+
+        // Card 2: Per-Hook Group Isolation Toggles
+        val isoCard = createStyledCard()
+        val isoLayout = LinearLayout(this).apply {
+  orientation = LinearLayout.VERTICAL
+  setPadding(24, 24, 24, 24)
+        }
+
+        val isoTitle = TextView(this).apply {
+  text = "🛠️ عزل وتجربة الـ Hooks فردياً (Hook Isolation)"
+  textSize = 15.5f
+  typeface = Typeface.DEFAULT_BOLD
+  setTextColor(Color.parseColor("#0F172A"))
+  setPadding(0, 0, 0, 4)
+        }
+        isoLayout.addView(isoTitle)
+
+        val isoSub = TextView(this).apply {
+  text = "يمكنك إيقاف أو تشغيل أي مجموعة Hooks على حدة ثم إغلاق تطبيق سند وفتحه لمعرفة المسبب لأي سلوك بدقة:"
+  textSize = 12f
+  setTextColor(Color.parseColor("#64748B"))
+  setPadding(0, 0, 0, 12)
+        }
+        isoLayout.addView(isoSub)
+
+        chkHookEarlyCloaker = CheckBox(this).apply {
+  text = "1. حماية المكتبات المبكرة (Early Native Cloaker - Lvh1)"
+  isChecked = SettingsStore.isHookEarlyCloaker(this@MainActivity)
+        }
+        isoLayout.addView(chkHookEarlyCloaker)
+
+        chkHookSecCloaker = CheckBox(this).apply {
+  text = "2. إخفاء الروت والحماية (RootBeer & ShadowArmor - Lu80)"
+  isChecked = SettingsStore.isHookSecCloaker(this@MainActivity)
+        }
+        isoLayout.addView(chkHookSecCloaker)
+
+        chkHookLocation = CheckBox(this).apply {
+  text = "3. خطاف الموقع (Location Hook - Ltz0)"
+  isChecked = SettingsStore.isHookLocation(this@MainActivity)
+        }
+        isoLayout.addView(chkHookLocation)
+
+        chkHookDeviceSpoofer = CheckBox(this).apply {
+  text = "4. خطاف بصمة الجهاز (Android ID Hook - Lly1)"
+  isChecked = SettingsStore.isHookDeviceSpoofer(this@MainActivity)
+        }
+        isoLayout.addView(chkHookDeviceSpoofer)
+
+        chkHookOrders = CheckBox(this).apply {
+  text = "5. خطافات الطلبات (FCM / DispatchActivity / Cipher)"
+  isChecked = SettingsStore.isHookOrders(this@MainActivity)
+        }
+        isoLayout.addView(chkHookOrders)
+
+        chkHookBootstrapLoop = CheckBox(this).apply {
+  text = "6. فحص قاعدة البيانات والسيرفر بالخلفية (DB & Polling Loop)"
+  isChecked = SettingsStore.isHookBootstrapLoop(this@MainActivity)
+        }
+        isoLayout.addView(chkHookBootstrapLoop)
+
+        val btnSaveIso = Button(this).apply {
+  text = "💾 حفظ إعدادات العزل وتطبيقها"
+  textSize = 13.5f
+  typeface = Typeface.DEFAULT_BOLD
+  setBackgroundColor(Color.parseColor("#059669"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      saveAllSettings()
+      Toast.makeText(this@MainActivity, "✅ تم حفظ إعدادات العزل! أعد تشغيل تطبيق net.jahez.fleets للتجربة", Toast.LENGTH_LONG).show()
+  }
+        }
+        isoLayout.addView(btnSaveIso)
+
+        isoCard.addView(isoLayout)
+        container.addView(isoCard)
+
+        scroll.addView(container)
+        return scroll
+    }
+
+    private fun refreshDiagLogsUI() {
+        if (!::tvDiagLogConsole.isInitialized) return
+        val rawLogs = SettingsStore.getDiagLogs(this)
+        if (rawLogs.isBlank()) {
+  tvDiagLogSummary.text = "🟢 لا توجد أخطاء مسجلة — افتح تطبيق net.jahez.fleets لبدء التسجيل المباشر"
+  tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
+  tvDiagLogConsole.text = "لا توجد سجلات بعد.
+افتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
+  tvDiagLogConsole.setTextColor(Color.parseColor("#94A3B8"))
+  return
+        }
+
+        val lines = rawLogs.lines()
+        val crashCount = lines.count { it.contains("[CRASH]") }
+        val errCount = lines.count { it.contains("[ERR]") }
+        val warnCount = lines.count { it.contains("[WARN]") }
+
+        if (crashCount > 0 || errCount > 0) {
+  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)"
+  tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
+        } else {
+  tvDiagLogSummary.text = "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 كراش)"
+  tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
+        }
+
+        val displayText = if (filterErrorsOnly) {
+  val filtered = mutableListOf<String>()
+  var includeContinuation = false
+  for (line in lines) {
+      if (line.startsWith("[")) {
+          includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
+      }
+      if (includeContinuation) filtered.add(line)
+  }
+  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("
+")
+        } else {
+  rawLogs
+        }
+
+        tvDiagLogConsole.text = displayText
+        tvDiagLogConsole.setTextColor(
+  if (crashCount > 0) Color.parseColor("#FCA5A5") else Color.parseColor("#38BDF8")
+        )
+    }
+
     private fun buildOrdersTabView(): ScrollView {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#F8F7FC"))
@@ -1705,6 +1990,15 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setPollInterval(this, pollInterval)
         SettingsStore.setParallelRequests(this, parallelReqs)
 
+        if (::chkHookEarlyCloaker.isInitialized) {
+  SettingsStore.setHookEarlyCloaker(this, chkHookEarlyCloaker.isChecked)
+  SettingsStore.setHookSecCloaker(this, chkHookSecCloaker.isChecked)
+  SettingsStore.setHookLocation(this, chkHookLocation.isChecked)
+  SettingsStore.setHookDeviceSpoofer(this, chkHookDeviceSpoofer.isChecked)
+  SettingsStore.setHookOrders(this, chkHookOrders.isChecked)
+  SettingsStore.setHookBootstrapLoop(this, chkHookBootstrapLoop.isChecked)
+        }
+
         refreshOrdersLogUI()
         Toast.makeText(
             this,
@@ -1718,8 +2012,11 @@ class MainActivity : AppCompatActivity() {
             val action = intent?.action ?: return
             when (action) {
                 "dev.saned.assistant.UI_REFRESH_ORDERS" -> {
-                    refreshOrdersLogUI()
-                }
+          refreshOrdersLogUI()
+      }
+      "dev.saned.assistant.UI_REFRESH_LOGS", "dev.saned.assistant.ACTION_DIAG_LOG" -> {
+          refreshDiagLogsUI()
+      }
                 "dev.jing.sanedhook.b" -> {
                     val ordersJson = intent.getStringExtra("o")
                     if (!ordersJson.isNullOrEmpty() && context != null) {
@@ -1802,11 +2099,14 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshOrdersLogUI()
+        refreshDiagLogsUI()
         SettingsStore.broadcastSettings(this)
 
         try {
             val filter = IntentFilter().apply {
                 addAction("dev.saned.assistant.UI_REFRESH_ORDERS")
+                addAction("dev.saned.assistant.UI_REFRESH_LOGS")
+                addAction("dev.saned.assistant.ACTION_DIAG_LOG")
                 addAction("dev.jing.sanedhook.b")
                 addAction("dev.saned.assistant.UI_PONG_RECEIVED")
                 addAction("dev.saned.assistant.ACTION_PONG")

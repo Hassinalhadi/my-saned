@@ -33,6 +33,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="dev.saned.assistant.ACTION_LOG_ORDER" />
+                <action android:name="dev.saned.assistant.ACTION_DIAG_LOG" />
                 <action android:name="dev.jing.sanedhook.b" />
                 <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
                 <action android:name="dev.saned.assistant.ACTION_PING" />

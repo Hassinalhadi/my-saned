@@ -67,10 +67,9 @@ object DeviceSpoofer {
   )
   module.hook(mGetString).intercept(object : XposedInterface.Hooker {
       override fun intercept(chain: XposedInterface.Chain): Any? {
-          val name = chain.args.getOrNull(1) as? String
-          if (name == "android_id" && isMasterRunning && isSpoofAndroidId) {
-              val clean = spoofedAndroidId.trim()
-              if (clean.isNotEmpty()) return clean
+          val key = chain.args.getOrNull(1) as? String
+          if ("android_id" == key && isMasterRunning && isSpoofAndroidId && spoofedAndroidId.isNotEmpty()) {
+              return spoofedAndroidId
           }
           return chain.proceed()
       }

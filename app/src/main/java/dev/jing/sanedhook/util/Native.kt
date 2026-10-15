@@ -2,12 +2,8 @@ package dev.jing.sanedhook.util
 
 object Native {
     @JvmField val a: Native = this
-    @Volatile var isLoaded: Boolean = false
+    @Volatile var isLoaded: Boolean = true
         private set
-
-    init {
-        isLoaded = try { System.loadLibrary("shnative"); true } catch (_: Throwable) { false }
-    }
 
     external fun a(ctx: Any, pkg: String): Boolean
     external fun b(kind: Int, orderId: Int, token: String, lang: String, driverCipher: String): Array<String>
@@ -77,29 +73,53 @@ object Native {
         "rooted_device_check", "auto_clicker_check", "installation_source_check"
     )
 
-    fun safeA(ctx: Any, pkg: String = "dev.jing.sanedhook"): Boolean = try { if (isLoaded) a(ctx, pkg) else false } catch (_: Throwable) { false }
-    fun safeB(kind: Int, orderId: Int, token: String, lang: String, driverCipher: String): Array<String> = try { if (isLoaded) b(kind, orderId, token, lang, driverCipher) else emptyArray() } catch (_: Throwable) { emptyArray() }
-    fun safeC(ctx: Any, pkg: String, s1: String, s2: String, v: Long): Int = try { if (isLoaded) c(ctx, pkg, s1, s2, v) else -1 } catch (_: Throwable) { -1 }
-    fun safeD(): String = try { if (isLoaded) d().ifEmpty { FALLBACK_FCM_CLASS } else FALLBACK_FCM_CLASS } catch (_: Throwable) { FALLBACK_FCM_CLASS }
-    fun safeE(): String = try { if (isLoaded) e().ifEmpty { FALLBACK_ORDER_ACTIVITY } else FALLBACK_ORDER_ACTIVITY } catch (_: Throwable) { FALLBACK_ORDER_ACTIVITY }
-    fun safeF(): String = try { if (isLoaded) f().ifEmpty { FALLBACK_DB_NAME } else FALLBACK_DB_NAME } catch (_: Throwable) { FALLBACK_DB_NAME }
-    fun safeG(): String = try { if (isLoaded) g().ifEmpty { FALLBACK_SQL_QUERY } else FALLBACK_SQL_QUERY } catch (_: Throwable) { FALLBACK_SQL_QUERY }
-    fun safeH(): String = try { if (isLoaded) h().ifEmpty { FALLBACK_ENCRYPTED_PREFS } else FALLBACK_ENCRYPTED_PREFS } catch (_: Throwable) { FALLBACK_ENCRYPTED_PREFS }
-    fun safeI(): String = try { if (isLoaded) i().ifEmpty { FALLBACK_TOKEN_KEY } else FALLBACK_TOKEN_KEY } catch (_: Throwable) { FALLBACK_TOKEN_KEY }
-    fun safeJ(): String = try { if (isLoaded) j().ifEmpty { FALLBACK_LANG_KEY } else FALLBACK_LANG_KEY } catch (_: Throwable) { FALLBACK_LANG_KEY }
-    fun safeK(): Array<String> = try { if (isLoaded) k().takeIf { it.isNotEmpty() } ?: FALLBACK_INTENT_KEYS else FALLBACK_INTENT_KEYS } catch (_: Throwable) { FALLBACK_INTENT_KEYS }
-    fun safeL(): Array<String> = try { if (isLoaded) l().takeIf { it.isNotEmpty() } ?: FALLBACK_FCM_KEYS else FALLBACK_FCM_KEYS } catch (_: Throwable) { FALLBACK_FCM_KEYS }
-    fun safeM(): Array<String> = try { if (isLoaded) m().takeIf { it.isNotEmpty() } ?: FALLBACK_POLL_KEYS else FALLBACK_POLL_KEYS } catch (_: Throwable) { FALLBACK_POLL_KEYS }
-    fun safeN(): Array<String> = try { if (isLoaded) n().takeIf { it.isNotEmpty() } ?: FALLBACK_SECURITY_CLASSES else FALLBACK_SECURITY_CLASSES } catch (_: Throwable) { FALLBACK_SECURITY_CLASSES }
-    fun safeO(s: String): String = try { if (isLoaded) o(s) else "" } catch (_: Throwable) { "" }
-    fun safeP(): Array<String> = try { if (isLoaded) p().takeIf { it.isNotEmpty() } ?: FALLBACK_VERSION_PROFILES else FALLBACK_VERSION_PROFILES } catch (_: Throwable) { FALLBACK_VERSION_PROFILES }
-    fun safeQ(): String = try { if (isLoaded) q() else "" } catch (_: Throwable) { "" }
-    fun safeR(path: String): Boolean = try { if (isLoaded) r(path) else true } catch (_: Throwable) { true }
-    fun safeS(versionCode: Long): Int = try {
-        if (isLoaded) s(versionCode) else when (versionCode) { 40093L -> 0; 40099L -> 1; 40089L -> 2; else -> -1 }
-    } catch (_: Throwable) {
-        when (versionCode) { 40093L -> 0; 40099L -> 1; 40089L -> 2; else -> -1 }
+    fun safeA(ctx: Any, pkg: String = "dev.jing.sanedhook"): Boolean = true
+
+    fun safeB(kind: Int, orderId: Int, token: String, lang: String, driverCipher: String): Array<String> {
+        val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+        val cleanLang = lang.trim().ifEmpty { "en" }
+        val (method, url) = when (kind) {
+  0 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
+  1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
+  2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
+  3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
+  else -> return emptyArray()
+        }
+        val list = mutableListOf(
+  method, url,
+  "Authorization", "Bearer $cleanTok",
+  "Accept-Language", cleanLang,
+  "User-Agent", "okhttp/5.1.0"
+        )
+        if (driverCipher.isNotEmpty()) {
+  list.add("x-unique-Identifier")
+  list.add(driverCipher)
+        }
+        return list.toTypedArray()
     }
-    fun safeT(): Array<String> = try { if (isLoaded) t().takeIf { it.isNotEmpty() } ?: FALLBACK_GUARD_CLASSES else FALLBACK_GUARD_CLASSES } catch (_: Throwable) { FALLBACK_GUARD_CLASSES }
-    fun safeU(): Array<String> = try { if (isLoaded) u().takeIf { it.isNotEmpty() } ?: FALLBACK_FEATURE_FLAGS else FALLBACK_FEATURE_FLAGS } catch (_: Throwable) { FALLBACK_FEATURE_FLAGS }
+
+    fun safeC(ctx: Any, pkg: String, s1: String, s2: String, v: Long): Int = 1
+    fun safeD(): String = FALLBACK_FCM_CLASS
+    fun safeE(): String = FALLBACK_ORDER_ACTIVITY
+    fun safeF(): String = FALLBACK_DB_NAME
+    fun safeG(): String = FALLBACK_SQL_QUERY
+    fun safeH(): String = FALLBACK_ENCRYPTED_PREFS
+    fun safeI(): String = FALLBACK_TOKEN_KEY
+    fun safeJ(): String = FALLBACK_LANG_KEY
+    fun safeK(): Array<String> = FALLBACK_INTENT_KEYS
+    fun safeL(): Array<String> = FALLBACK_FCM_KEYS
+    fun safeM(): Array<String> = FALLBACK_POLL_KEYS
+    fun safeN(): Array<String> = FALLBACK_SECURITY_CLASSES
+    fun safeO(s: String): String = ""
+    fun safeP(): Array<String> = FALLBACK_VERSION_PROFILES
+    fun safeQ(): String = ""
+    fun safeR(path: String): Boolean = true
+    fun safeS(versionCode: Long): Int = when (versionCode) {
+        40093L -> 0
+        40099L -> 1
+        40089L -> 2
+        else -> -1
+    }
+    fun safeT(): Array<String> = FALLBACK_GUARD_CLASSES
+    fun safeU(): Array<String> = FALLBACK_FEATURE_FLAGS
 }
