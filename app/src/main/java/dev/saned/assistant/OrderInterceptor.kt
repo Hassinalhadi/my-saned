@@ -211,6 +211,8 @@ object OrderInterceptor {
         if (idVal != 0) idVal else intent.getIntExtra("order_id", 0)
     } catch (_: Throwable) { 0 }
 
+    val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
+
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
         if (orderIdInt == 0) return
         val entry = handledOrdersMap[orderIdInt] ?: return
@@ -225,9 +227,33 @@ object OrderInterceptor {
       }
   } catch (_: Throwable) {}
         }
+        // If decision is ACCEPT, only finish IncomingDispatchActivity if API accept already succeeded (200..299).
+        // Otherwise, trigger UI auto-accept on IncomingDispatchActivity as backup so the order is never lost!
+        if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
+  DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending/failed -> triggering UI auto-accept backup")
+  for (delayMs in listOf(120L, 300L, 600L)) {
+      mainHandler.postDelayed({
+          try {
+              if (apiConfirmedAcceptIds.contains(orderIdInt)) {
+                  closeDispatchActivitySafely(activity, entry.wasInBackground)
+              } else if (!activity.isFinishing && !activity.isDestroyed) {
+                  val decor = activity.window?.decorView
+                  if (decor != null) {
+                      findAndTriggerOrder(decor, activity, System.currentTimeMillis())
+                  }
+              }
+          } catch (_: Throwable) {}
+      }, delayMs)
+  }
+  return
+        }
+        closeDispatchActivitySafely(activity, entry.wasInBackground)
+    }
+
+    private fun closeDispatchActivitySafely(activity: Activity, wasInBackground: Boolean) {
         mainHandler.post {
   try {
-      if (activity.isTaskRoot && !entry.wasInBackground) {
+      if (activity.isTaskRoot && !wasInBackground) {
           val mainCls = PackageCloaker.getMainActivityClassName()
           if (mainCls.isNotEmpty()) activity.startActivity(Intent().setClassName(activity.packageName, mainCls))
       }
@@ -1556,7 +1582,7 @@ object OrderInterceptor {
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
                                   val entry = handledOrdersMap[orderIdInt]
-                                  if (entry != null && (entry.decision == "ACCEPT" || entry.decision == "REJECT")) {
+                                  if (entry != null && (entry.decision == "REJECT" || (entry.decision == "ACCEPT" && apiConfirmedAcceptIds.contains(orderIdInt)))) {
                                       if ((SystemClock.elapsedRealtime() - entry.timestampRealtime) <= 60_000L) {
                                           if (isStayInBackground && entry.wasInBackground) return null
                                           val flags = intent.flags
@@ -2123,7 +2149,7 @@ object OrderInterceptor {
                         }
                     }
                 } catch (_: Throwable) {}
-                val delayMs = ((pollIntervalSec.coerceIn(0.2f, 10.0f)) * 1000).toLong()
+                val delayMs = ((pollIntervalSec.coerceIn(2.0f, 10.0f)) * 1000).toLong()
                 delay(delayMs)
             }
         }
@@ -2155,7 +2181,9 @@ object OrderInterceptor {
           val body = resp.body?.string() ?: ""
           resp.close()
           if (code == 401 || code == 403) {
+              cachedAuthToken = ""
               cachedEncPrefs = null
+              if (ctx != null) readExactJahezEncryptedPrefs(ctx)
           } else if (code in 200..299 && body.isNotEmpty()) {
               failedPollingCount = 0
               findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
@@ -2432,7 +2460,9 @@ object OrderInterceptor {
                     return
                 }
 
-                if (loggedOrderIds.add(orderId)) {
+                val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
+                orderId = normOrderId
+                if (loggedOrderIds.add(normOrderId)) {
                     lastOrderEvent = "Order $orderId detected via $channelSource"
                     handleOrderViaApi(
                         orderId = orderId,
@@ -2462,17 +2492,33 @@ object OrderInterceptor {
         }
 
         val failedReasons = mutableListOf<String>()
-        if (minOrderPrice > 0.0 && price > 0.0 && price < minOrderPrice) {
-  val fmtP = String.format(Locale.US, "%.2f", price)
-  failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
+        if (minOrderPrice > 0.0) {
+  if (price <= 0.0) {
+      failedReasons.add("price unknown")
+  } else if (price < minOrderPrice) {
+      val fmtP = String.format(Locale.US, "%.2f", price)
+      failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
+  }
         }
-        if (maxDistToRestaurant > 0.0 && distRest > 0.0 && distRest > maxDistToRestaurant) {
-  val fmtD = String.format(Locale.US, "%.2f", distRest)
-  failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
+        if (maxDistToRestaurant > 0.0) {
+  if (distRest <= 0.0) {
+      if (!LocationEngine.isFixLocationUnknownEnabled) {
+          failedReasons.add("location unknown")
+      }
+  } else if (distRest > maxDistToRestaurant) {
+      val fmtD = String.format(Locale.US, "%.2f", distRest)
+      failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
+  }
         }
-        if (maxDistCustomer > 0.0 && distCust > 0.0 && distCust > maxDistCustomer) {
-  val fmtC = String.format(Locale.US, "%.2f", distCust)
-  failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
+        if (maxDistCustomer > 0.0) {
+  if (distCust <= 0.0) {
+      if (!LocationEngine.isFixLocationUnknownEnabled) {
+          if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
+      }
+  } else if (distCust > maxDistCustomer) {
+      val fmtC = String.format(Locale.US, "%.2f", distCust)
+      failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
+  }
         }
 
         if (failedReasons.isNotEmpty()) {
@@ -2515,11 +2561,13 @@ object OrderInterceptor {
     ): String {
         val rawId = orderId.replace("#", "").trim()
         if (rawId.isEmpty()) return ""
+        val normOrderId = "#$rawId"
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+        val nowRealtime = SystemClock.elapsedRealtime()
 
         if (orderIdInt != 0) {
   val existing = handledOrdersMap[orderIdInt]
-  if (existing != null && (SystemClock.elapsedRealtime() - existing.timestampRealtime) < 60_000L) {
+  if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
       return existing.decision
   }
         }
@@ -2528,34 +2576,37 @@ object OrderInterceptor {
 
         if (orderIdInt != 0) {
   val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
-  val prev = handledOrdersMap.putIfAbsent(orderIdInt, HandledOrderEntry(action, SystemClock.elapsedRealtime(), wasInBg))
-  if (prev != null && (SystemClock.elapsedRealtime() - prev.timestampRealtime) < 60_000L) {
-      return prev.decision
+  synchronized(handledOrdersMap) {
+      val prev = handledOrdersMap[orderIdInt]
+      if (prev != null && (nowRealtime - prev.timestampRealtime) < 60_000L) {
+          return prev.decision
+      }
+      handledOrdersMap[orderIdInt] = HandledOrderEntry(action, nowRealtime, wasInBg)
   }
         }
 
-        DiagnosticLogger.logStep("OrderDecision", "Order $orderId [$sourceChannel] -> $action ($reason)")
+        DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason)")
 
         when (action) {
   "REJECT" -> {
-      lastOrderEvent = "Order $orderId auto-rejected ($reason)"
-      currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $orderId: $reason") }
-      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
+      lastOrderEvent = "Order $normOrderId auto-rejected ($reason)"
+      currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $normOrderId: $reason") }
+      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
       executeDirectApiCall(rawId, "REJECT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason)
   }
   "DRY_RUN" -> {
-      lastOrderEvent = "Order $orderId dry-run ($reason)"
-      currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $orderId ($reason)") }
-      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
+      lastOrderEvent = "Order $normOrderId dry-run ($reason)"
+      currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $normOrderId ($reason)") }
+      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
   }
   "ACCEPT" -> {
-      lastOrderEvent = "⚡ جاري قبول الطلب $orderId..."
+      lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId..."
       executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason)
   }
   else -> {
-      lastOrderEvent = "Order $orderId left for manual review ($reason)"
-      currentActivity?.let { act -> showToast(act, "↩️ تُرك $orderId لك: $reason") }
-      sendOrderToLog(orderId = orderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
+      lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
+      currentActivity?.let { act -> showToast(act, "↩️ تُرك $normOrderId لك: $reason") }
+      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
   }
         }
         return action
@@ -2592,6 +2643,9 @@ object OrderInterceptor {
      * - Queries Native.b(kind, orderIdInt, token, lang, driverCipher) if available
      * - Executes parallelRequests (1..8) concurrent HTTP calls synchronized with CountDownLatch(1)
      */
+    @Volatile var verifiedAcceptMethod: String = ""
+    @Volatile var verifiedAcceptUrlTemplate: String = ""
+
     private fun executeDirectApiCall(
         orderIdNum: String,
         action: String,
@@ -2608,9 +2662,8 @@ object OrderInterceptor {
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
-        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        var token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val isAccept = (action == "ACCEPT")
-        val burstCount = if (isAccept) parallelRequests.coerceIn(1, 8) else 1
         val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
         if (token.isEmpty()) {
@@ -2625,108 +2678,137 @@ object OrderInterceptor {
   val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
   if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
   try {
-      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-      val nativeHeaders = LinkedHashMap<String, String>()
-      var primaryMethod = "PUT"
-      var primaryUrl = if (isAccept) "https://gateway.saned.io/api/v1/dispatch/accept/$orderIdInt" else "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt"
-
-      if (orderIdInt > 0) {
-          try {
-              if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
-              val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
-              if (spec.size >= 2 && spec[1].startsWith("http")) {
-                  primaryMethod = spec[0]
-                  primaryUrl = spec[1]
-                  var idx = 2
-                  while (idx + 1 < spec.size) { nativeHeaders[spec[idx]] = spec[idx + 1]; idx += 2 }
-              }
-          } catch (_: Throwable) {}
-      }
-      if (nativeHeaders.isEmpty()) {
-          nativeHeaders["Authorization"] = "Bearer $rawTok"
-          nativeHeaders["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
-          nativeHeaders["User-Agent"] = "okhttp/5.1.0"
-          if (capturedDriverCipherB64.isNotEmpty()) {
-              nativeHeaders["x-unique-Identifier"] = capturedDriverCipherB64
-          }
-      }
-
-      val candidateSpecs = if (isAccept) listOf(
-          primaryMethod to primaryUrl,
-          "PUT" to "https://gateway.saned.io/api/v1/dispatch/accept/$orderIdInt",
-          "POST" to "https://gateway.saned.io/api/v1/dispatch/accept/$orderIdInt",
-          "PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept",
-          "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept",
-          "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt"
-      ).distinct() else listOf(
-          primaryMethod to primaryUrl,
-          "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt",
-          "PUT" to "https://gateway.saned.io/api/v1/dispatch/driver-rejection/$orderIdInt",
-          "POST" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt",
-          "PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/reject",
-          "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/reject"
-      ).distinct()
-
-      val emptyBody = "".toRequestBody(null)
-      val latch = CountDownLatch(1)
-      val winnerCode = AtomicReference<Int>(null)
-      val lastErrorPair = AtomicReference<Pair<Int, String>>(null)
-      val remaining = AtomicInteger(burstCount)
-
-      for (burst in 0 until burstCount) {
-          launch {
+      fun buildHeaders(tok: String): LinkedHashMap<String, String> {
+          val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
+          val map = LinkedHashMap<String, String>()
+          if (orderIdInt > 0) {
               try {
-                  for ((mName, uStr) in candidateSpecs) {
-                      if (winnerCode.get() != null) return@launch
-                      httpRequestsCount.incrementAndGet()
-                      lastInterceptedUrl = uStr
-                      val rb = Request.Builder().url(uStr)
-                      if (mName.equals("PUT", ignoreCase = true)) {
-                          rb.put(emptyBody)
-                      } else if (mName.equals("POST", ignoreCase = true)) {
-                          rb.post(emptyBody)
-                      } else {
-                          rb.get()
-                      }
-                      for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                      val resp = clientToUse.newCall(rb.build()).execute()
-                      val code = resp.code
-                      val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
-                      resp.close()
-                      lastHttpResponseCode = code
-                      if (code in 200..299) {
-                          cachedApiHost = "https://gateway.saned.io"
-                          if (winnerCode.compareAndSet(null, code)) {
-                              DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via $mName $uStr (HTTP $code)")
-                              latch.countDown()
-                          }
-                          return@launch
-                      } else {
-                          lastErrorPair.set(code to bodyStr)
-                          if (burst == 0) {
-                              DiagnosticLogger.logWarn("DirectApi", "Attempt $mName $uStr -> HTTP $code (${bodyStr.take(80)})")
-                          }
-                          // If 404 or 405 (Method Not Allowed / Not Found), immediately try next candidate spec!
-                          if (code != 405 && code != 404) {
-                              break
-                          }
-                      }
-                  }
-              } catch (t: Throwable) {
-                  lastErrorPair.set(-1 to (t.message ?: t.javaClass.simpleName))
-              } finally {
-                  if (remaining.decrementAndGet() == 0) {
-                      latch.countDown()
-                  }
+                  if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+                  val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+                  var idx = 2
+                  while (idx + 1 < spec.size) { map[spec[idx]] = spec[idx + 1]; idx += 2 }
+              } catch (_: Throwable) {}
+          }
+          if (map.isEmpty()) {
+              map["Authorization"] = "Bearer $rawTok"
+              map["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
+              map["User-Agent"] = "okhttp/5.1.0"
+              if (capturedDriverCipherB64.isNotEmpty()) {
+                  map["x-unique-Identifier"] = capturedDriverCipherB64
               }
           }
+          return map
       }
-      try { latch.await(12, TimeUnit.SECONDS) } catch (_: Throwable) {}
 
-      val win = winnerCode.get()
-      if (win != null) {
+      var nativeHeaders = buildHeaders(token)
+      val emptyBody = "".toRequestBody(null)
+      val jsonAcceptBody = JSONObject().apply {
+          if (orderIdInt > 0) put("requestId", orderIdInt)
+          put("order_id", orderIdNum)
+          put("status", "ACCEPTED")
+      }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+      val candidateSpecs = mutableListOf<Pair<String, String>>()
+      if (!isAccept) {
+          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
+      } else {
+          if (verifiedAcceptMethod.isNotEmpty() && verifiedAcceptUrlTemplate.isNotEmpty()) {
+              candidateSpecs.add(verifiedAcceptMethod to verifiedAcceptUrlTemplate.replace("{id}", orderIdInt.toString()))
+          }
+          candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
+          candidateSpecs.add("PATCH" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
+          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
+          candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
+          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/driver-acceptance/$orderIdInt")
+          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
+      }
+
+      var winCode: Int? = null
+      var lastErrCode = 0
+      var lastErrBody = ""
+
+      // Execute sequentially on a single high-priority coroutine to NEVER trigger Cloudflare 429 (error code: 1015)!
+      var specIdx = 0
+      val distinctSpecs = candidateSpecs.distinct().toMutableList()
+      var retried401 = false
+
+      while (specIdx < distinctSpecs.size) {
+          val (mName, uStr) = distinctSpecs[specIdx]
+          specIdx++
+          try {
+              httpRequestsCount.incrementAndGet()
+              lastInterceptedUrl = uStr
+              val rb = Request.Builder().url(uStr)
+              when (mName.uppercase(Locale.US)) {
+                  "PUT" -> rb.put(emptyBody)
+                  "POST" -> rb.post(if (uStr.endsWith("/$orderIdInt")) jsonAcceptBody else emptyBody)
+                  "PATCH" -> rb.patch(jsonAcceptBody)
+                  else -> rb.get()
+              }
+              for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+              val resp = clientToUse.newCall(rb.build()).execute()
+              val code = resp.code
+              val allowHdr = resp.header("Allow") ?: resp.header("allow") ?: ""
+              val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
+              resp.close()
+              lastHttpResponseCode = code
+
+              if (code in 200..299) {
+                  cachedApiHost = "https://gateway.saned.io"
+                  winCode = code
+                  if (isAccept && orderIdInt != 0) {
+                      apiConfirmedAcceptIds.add(orderIdInt)
+                      verifiedAcceptMethod = mName
+                      verifiedAcceptUrlTemplate = uStr.replace(orderIdInt.toString(), "{id}")
+                  }
+                  DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via $mName $uStr (HTTP $code)")
+                  break
+              }
+
+              lastErrCode = code
+              lastErrBody = bodyStr
+              DiagnosticLogger.logWarn("DirectApi", "Attempt $mName $uStr -> HTTP $code allow=[$allowHdr] body=(${bodyStr.replace("\n", " ").take(100)})")
+
+              // Handle 401 TokenExpired automatically by reloading ENCRYPTED_SANED_PREFERENCES and retrying once
+              if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
+                  retried401 = true
+                  cachedAuthToken = ""
+                  cachedEncPrefs = null
+                  readExactJahezEncryptedPrefs(ctx)
+                  if (cachedAuthToken.isNotEmpty()) {
+                      token = cachedAuthToken
+                      nativeHeaders = buildHeaders(token)
+                      DiagnosticLogger.logStep("DirectApi", "Refreshed expired token from EncryptedPrefs, retrying $mName $uStr")
+                      specIdx--
+                      continue
+                  }
+              }
+
+              // If 405 returns an Allow header (e.g. Allow: POST or PUT or PATCH), prioritize that method on the same URL!
+              if (code == 405 && allowHdr.isNotEmpty()) {
+                  for (allowed in allowHdr.split(",")) {
+                      val cleanM = allowed.trim().uppercase(Locale.US)
+                      if (cleanM in listOf("PUT", "POST", "PATCH", "GET") && cleanM != mName.uppercase(Locale.US)) {
+                          val newPair = cleanM to uStr
+                          if (!distinctSpecs.contains(newPair)) {
+                              distinctSpecs.add(specIdx, newPair)
+                          }
+                      }
+                  }
+              }
+
+              if (code != 404 && code != 405) {
+                  break
+              }
+          } catch (t: Throwable) {
+              lastErrCode = -1
+              lastErrBody = t.message ?: t.javaClass.simpleName
+          }
+      }
+
+      if (winCode != null) {
           if (isAccept) {
-              lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $win)"
+              lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $winCode)"
               if (ctx != null) showToast(ctx, "✅ تم قبول الطلب #$orderIdNum")
               sendOrderToLog(
                   orderId = "#$orderIdNum",
@@ -2740,7 +2822,7 @@ object OrderInterceptor {
                   cashAmount = cashAmt,
                   pickupAddress = pickupAddr,
                   customerDistanceKm = custDist,
-                  decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $win)" },
+                  decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $winCode)" },
                   notifyUser = true
               )
               playAlertSound()
@@ -2751,35 +2833,27 @@ object OrderInterceptor {
               }
           }
       } else if (isAccept) {
-          val err = lastErrorPair.get()
-          val errCode = err?.first ?: 0
-          val rawErr = err?.second ?: ""
           var errMsg = ""
-          if (rawErr.trim().startsWith("{")) {
+          if (lastErrBody.trim().startsWith("{")) {
               try {
-                  val j = JSONObject(rawErr)
+                  val j = JSONObject(lastErrBody)
                   errMsg = extractFirstString(j, "message", "error", "title")
               } catch (_: Throwable) {}
           }
-          if (errMsg.isEmpty()) errMsg = if (errCode > 0) "HTTP $errCode" else "Network timeout"
-          DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $errCode)")
-          lastOrderEvent = "❌ فشل قبول #$orderIdNum ($errMsg)"
-          if (ctx != null) showToast(ctx, "❌ فشل قبول الطلب #$orderIdNum: $errMsg")
-          sendOrderToLog(
-              orderId = "#$orderIdNum",
-              price = price,
-              dist = dist,
-              restaurant = restaurant,
-              status = "Accept Failed ❌ · $errMsg",
-              customerName = custName,
-              customerPhone = custPhone,
-              address = custAddr,
-              cashAmount = cashAmt,
-              pickupAddress = pickupAddr,
-              customerDistanceKm = custDist,
-              decisionReason = errMsg,
-              notifyUser = false
-          )
+          if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
+          DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+          lastOrderEvent = "❌ تعذر القبول المباشر #$orderIdNum ($errMsg)"
+          // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
+          currentActivity?.let { act ->
+              if (!act.isFinishing && !act.isDestroyed) {
+                  act.runOnUiThread {
+                      try {
+                          val decor = act.window?.decorView
+                          if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
+                      } catch (_: Throwable) {}
+                  }
+              }
+          }
       }
   } catch (_: Throwable) {
   } finally {
