@@ -182,6 +182,7 @@ object OrderInterceptor {
     @Volatile var currentActivity: Activity? = null
     private var isScreenWatcherActive = false
     val loggedOrderIds = ConcurrentHashMap.newKeySet<String>()
+    val knownDbOrderIds = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var lastHandledOrderSignature = ""
     @Volatile private var lastHandledTimestamp = 0L
 
@@ -360,7 +361,6 @@ object OrderInterceptor {
                             custDist = calcCustDist,
                             sourceChannel = "SCREEN"
                         )
-                        handlePostOrderActivityCreate(activity, reqId)
                         return
                     }
                 }
@@ -784,6 +784,13 @@ object OrderInterceptor {
 
   // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
   try { Thread.sleep(3000) } catch (_: Throwable) {}
+  try {
+      val initCtx = resolveApplicationContext()
+      if (initCtx != null) {
+          readExactJahezEncryptedPrefs(initCtx)
+          scanJahezDatabases(initCtx)
+      }
+  } catch (_: Throwable) {}
   if (DiagnosticLogger.hookBootstrapLoop) {
       startActiveServerPolling()
   }
@@ -1221,16 +1228,23 @@ object OrderInterceptor {
   val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
   module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
       override fun intercept(chain: XposedInterface.Chain): Any? {
-          val res = chain.proceed()
           val act = chain.thisObject as? Activity
+          var reqId = 0
           if (act != null) {
               try {
                   initAppContext(act.applicationContext)
                   currentActivity = act
-                  val reqId = onActivityPreCreated(act)
-                  if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
+                  reqId = onActivityPreCreated(act)
               } catch (t: Throwable) {
-                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in onCreate hook", t)
+                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in pre-onCreate hook", t)
+              }
+          }
+          val res = chain.proceed()
+          if (act != null && reqId != 0) {
+              try {
+                  handlePostOrderActivityCreate(act, reqId)
+              } catch (t: Throwable) {
+                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in post-onCreate hook", t)
               }
           }
           return res
@@ -1831,6 +1845,9 @@ object OrderInterceptor {
             calcCustDist = LocationEngine.calculateDistance(posPickupLat, posPickupLng, posDestLat, posDestLng)
         }
 
+        knownDbOrderIds.add(idStr)
+        if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
+        loggedOrderIds.add("#$idStr")
         val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}"
         if (loggedOrderIds.add(syncSignature)) {
             val normStatus = normalizeOrderStatusDisplay(rawStatus)
@@ -2186,6 +2203,7 @@ object OrderInterceptor {
               if (ctx != null) readExactJahezEncryptedPrefs(ctx)
           } else if (code in 200..299 && body.isNotEmpty()) {
               failedPollingCount = 0
+              if (ctx != null) scanJahezDatabases(ctx)
               findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
               return
           }
@@ -2437,7 +2455,8 @@ object OrderInterceptor {
 
                 // If order is from SQLite DB or already has a historical/active status (Delivered, Completed, Accepted, Picked Up, Cancelled),
                 // sync it directly to the Orders tab with its real status without running new-offer Auto-Accept/Reject gates!
-                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson)) {
+                val rawOrderIdClean = orderId.replace("#", "").trim()
+                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
                     val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}"
                     if (loggedOrderIds.add(dedupKey)) {
@@ -2712,15 +2731,7 @@ object OrderInterceptor {
       if (!isAccept) {
           candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
       } else {
-          if (verifiedAcceptMethod.isNotEmpty() && verifiedAcceptUrlTemplate.isNotEmpty()) {
-              candidateSpecs.add(verifiedAcceptMethod to verifiedAcceptUrlTemplate.replace("{id}", orderIdInt.toString()))
-          }
-          candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
-          candidateSpecs.add("PATCH" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
-          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
-          candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
-          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/driver-acceptance/$orderIdInt")
-          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
+          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
       }
 
       var winCode: Int? = null
@@ -2784,19 +2795,6 @@ object OrderInterceptor {
                   }
               }
 
-              // If 405 returns an Allow header (e.g. Allow: POST or PUT or PATCH), prioritize that method on the same URL!
-              if (code == 405 && allowHdr.isNotEmpty()) {
-                  for (allowed in allowHdr.split(",")) {
-                      val cleanM = allowed.trim().uppercase(Locale.US)
-                      if (cleanM in listOf("PUT", "POST", "PATCH", "GET") && cleanM != mName.uppercase(Locale.US)) {
-                          val newPair = cleanM to uStr
-                          if (!distinctSpecs.contains(newPair)) {
-                              distinctSpecs.add(specIdx, newPair)
-                          }
-                      }
-                  }
-              }
-
               if (code != 404 && code != 405) {
                   break
               }
@@ -2841,6 +2839,10 @@ object OrderInterceptor {
               } catch (_: Throwable) {}
           }
           if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
+          if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+              handledOrdersMap.remove(orderIdInt)
+              loggedOrderIds.remove("#$orderIdNum")
+          }
           DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
           lastOrderEvent = "❌ تعذر القبول المباشر #$orderIdNum ($errMsg)"
           // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!

@@ -79,7 +79,7 @@ object Native {
         val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
         val cleanLang = lang.trim().ifEmpty { "en" }
         val (method, url) = when (kind) {
-  0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
+  0 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderId"
   1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
   2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
   3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
