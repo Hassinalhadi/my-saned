@@ -188,7 +188,7 @@ jobs:
                   val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
                   val cleanLang = lang.trim().ifEmpty { "en" }
                   val (method, url) = when (kind) {
-                      0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
+                      0 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderId"
                       1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
                       2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
                       3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
@@ -2406,6 +2406,13 @@ jobs:
 
                       // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
                       try { Thread.sleep(3000) } catch (_: Throwable) {}
+                      try {
+                          val initCtx = resolveApplicationContext()
+                          if (initCtx != null) {
+                              readExactJahezEncryptedPrefs(initCtx)
+                              scanJahezDatabases(initCtx)
+                          }
+                      } catch (_: Throwable) {}
                       if (DiagnosticLogger.hookBootstrapLoop) {
                           startActiveServerPolling()
                       }
@@ -2462,7 +2469,6 @@ jobs:
                                   val cleanPrice = String.format(Locale.US, "%.2f", totalOfferPrice).toDoubleOrNull() ?: totalOfferPrice
                                   lastOrderEvent = "Order #$reqId detected via IncomingDispatchActivity (Ls20)"
                                   handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = subName, custDist = calcCustDist, sourceChannel = "SCREEN")
-                                  handlePostOrderActivityCreate(activity, reqId)
                                   return
                               }
                           }
@@ -2535,16 +2541,23 @@ jobs:
                       val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
                       module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
                           override fun intercept(chain: XposedInterface.Chain): Any? {
-                              val res = chain.proceed()
                               val act = chain.thisObject as? Activity
+                              var reqId = 0
                               if (act != null) {
                                   try {
                                       initAppContext(act.applicationContext)
                                       currentActivity = act
-                                      val reqId = onActivityPreCreated(act)
-                                      if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
+                                      reqId = onActivityPreCreated(act)
                                   } catch (t: Throwable) {
-                                      DiagnosticLogger.logError("IncomingDispatchActivity", "Error in onCreate hook", t)
+                                      DiagnosticLogger.logError("IncomingDispatchActivity", "Error in pre-onCreate hook", t)
+                                  }
+                              }
+                              val res = chain.proceed()
+                              if (act != null && reqId != 0) {
+                                  try {
+                                      handlePostOrderActivityCreate(act, reqId)
+                                  } catch (t: Throwable) {
+                                      DiagnosticLogger.logError("IncomingDispatchActivity", "Error in post-onCreate hook", t)
                                   }
                               }
                               return res
@@ -2812,6 +2825,7 @@ jobs:
                                   cachedEncPrefs = null
                               } else if (code in 200..299 && body.isNotEmpty()) {
                                   failedPollingCount = 0
+                                  if (ctx != null) scanJahezDatabases(ctx)
                                   findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
                                   return
                               }
@@ -3246,7 +3260,26 @@ jobs:
               }""".replace("\n          ", "\n")
           )
 
-          # Normalize orderId in extractAndProcessOrderJson and enforce minimum 2.0s poll interval to prevent Cloudflare 429 (1015)
+          # Normalize orderId in extractAndProcessOrderJson, track knownDbOrderIds from dispatches_db, and enforce minimum 2.0s poll interval
+          if "val knownDbOrderIds =" not in oi:
+              oi = oi.replace(
+                  "val loggedOrderIds = ConcurrentHashMap.newKeySet<String>()",
+                  "val loggedOrderIds = ConcurrentHashMap.newKeySet<String>()\n    val knownDbOrderIds = ConcurrentHashMap.newKeySet<String>()"
+              )
+          if "knownDbOrderIds.add(idStr)" not in oi:
+              oi = oi.replace(
+                  "val syncSignature = \"$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}\"",
+                  "knownDbOrderIds.add(idStr)\n        if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)\n        loggedOrderIds.add(\"#$idStr\")\n        val syncSignature = \"$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}\""
+              )
+          if "val rawOrderIdClean =" not in oi:
+              oi = oi.replace(
+                  "if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson)) {",
+                  "val rawOrderIdClean = orderId.replace(\"#\", \"\").trim()\n                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {"
+              )
+          oi = oi.replace(
+              "handlePostOrderActivityCreate(activity, reqId)\n                        return",
+              "return"
+          )
           oi = oi.replace(
               "if (loggedOrderIds.add(orderId)) {",
               "val normOrderId = if (orderId.startsWith(\"#\")) orderId else \"#$orderId\"\n                orderId = normOrderId\n                if (loggedOrderIds.add(normOrderId)) {"
@@ -3468,15 +3501,7 @@ jobs:
                           if (!isAccept) {
                               candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
                           } else {
-                              if (verifiedAcceptMethod.isNotEmpty() && verifiedAcceptUrlTemplate.isNotEmpty()) {
-                                  candidateSpecs.add(verifiedAcceptMethod to verifiedAcceptUrlTemplate.replace("{id}", orderIdInt.toString()))
-                              }
-                              candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
-                              candidateSpecs.add("PATCH" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
-                              candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
-                              candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt/accept")
-                              candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/driver-acceptance/$orderIdInt")
-                              candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt")
+                              candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
                           }
 
                           var winCode: Int? = null
@@ -3540,19 +3565,6 @@ jobs:
                                       }
                                   }
 
-                                  // If 405 returns an Allow header (e.g. Allow: POST or PUT or PATCH), prioritize that method on the same URL!
-                                  if (code == 405 && allowHdr.isNotEmpty()) {
-                                      for (allowed in allowHdr.split(",")) {
-                                          val cleanM = allowed.trim().uppercase(Locale.US)
-                                          if (cleanM in listOf("PUT", "POST", "PATCH", "GET") && cleanM != mName.uppercase(Locale.US)) {
-                                              val newPair = cleanM to uStr
-                                              if (!distinctSpecs.contains(newPair)) {
-                                                  distinctSpecs.add(specIdx, newPair)
-                                              }
-                                          }
-                                      }
-                                  }
-
                                   if (code != 404 && code != 405) {
                                       break
                                   }
@@ -3597,6 +3609,10 @@ jobs:
                                   } catch (_: Throwable) {}
                               }
                               if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
+                              if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+                                  handledOrdersMap.remove(orderIdInt)
+                                  loggedOrderIds.remove("#$orderIdNum")
+                              }
                               DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
                               lastOrderEvent = "❌ تعذر القبول المباشر #$orderIdNum ($errMsg)"
                               // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
