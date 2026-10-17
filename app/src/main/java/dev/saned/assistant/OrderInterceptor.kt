@@ -2835,24 +2835,77 @@ object OrderInterceptor {
           if (lastErrBody.trim().startsWith("{")) {
               try {
                   val j = JSONObject(lastErrBody)
-                  errMsg = extractFirstString(j, "message", "error", "title")
+                  errMsg = extractFirstString(j, "message", "error", "title").trim()
               } catch (_: Throwable) {}
           }
           if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
-          if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
-              handledOrdersMap.remove(orderIdInt)
-              loggedOrderIds.remove("#$orderIdNum")
-          }
-          DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
-          lastOrderEvent = "❌ تعذر القبول المباشر #$orderIdNum ($errMsg)"
-          // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
-          currentActivity?.let { act ->
-              if (!act.isFinishing && !act.isDestroyed) {
-                  act.runOnUiThread {
-                      try {
-                          val decor = act.window?.decorView
-                          if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
-                      } catch (_: Throwable) {}
+          val isTakenByOtherDriver = errMsg.contains("already accepted", ignoreCase = true) ||
+              errMsg.contains("already assigned", ignoreCase = true) ||
+              errMsg.contains("not available", ignoreCase = true)
+
+          if (isTakenByOtherDriver) {
+              val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
+              val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg)"
+              lastOrderEvent = takenToast
+              DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode)")
+              if (ctx != null) showToast(ctx, takenToast)
+              sendOrderToLog(
+                  orderId = "#$orderIdNum",
+                  price = price,
+                  dist = dist,
+                  restaurant = restaurant,
+                  status = "تم قبوله من سائق آخر ⚠️",
+                  customerName = custName,
+                  customerPhone = custPhone,
+                  address = custAddr,
+                  cashAmount = cashAmt,
+                  pickupAddress = pickupAddr,
+                  customerDistanceKm = custDist,
+                  decisionReason = takenReason,
+                  notifyUser = true
+              )
+              if (orderIdInt != 0) {
+                  apiConfirmedAcceptIds.add(orderIdInt)
+                  currentActivity?.let { act ->
+                      if (act.javaClass.name == Native.safeE()) {
+                          handlePostOrderActivityCreate(act, orderIdInt)
+                      }
+                  }
+              }
+          } else {
+              if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+                  handledOrdersMap.remove(orderIdInt)
+                  loggedOrderIds.remove("#$orderIdNum")
+              }
+              val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
+              val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
+              DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+              lastOrderEvent = failToast
+              if (ctx != null) showToast(ctx, failToast)
+              sendOrderToLog(
+                  orderId = "#$orderIdNum",
+                  price = price,
+                  dist = dist,
+                  restaurant = restaurant,
+                  status = "فشل القبول ❌",
+                  customerName = custName,
+                  customerPhone = custPhone,
+                  address = custAddr,
+                  cashAmount = cashAmt,
+                  pickupAddress = pickupAddr,
+                  customerDistanceKm = custDist,
+                  decisionReason = failReason,
+                  notifyUser = true
+              )
+              // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
+              currentActivity?.let { act ->
+                  if (!act.isFinishing && !act.isDestroyed) {
+                      act.runOnUiThread {
+                          try {
+                              val decor = act.window?.decorView
+                              if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
+                          } catch (_: Throwable) {}
+                      }
                   }
               }
           }
