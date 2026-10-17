@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDiagLogConsole: TextView
     private lateinit var tvDiagLogSummary: TextView
     private var filterErrorsOnly: Boolean = false
+    private var filterNavLogsOnly: Boolean = false
     private lateinit var chkHookEarlyCloaker: CheckBox
     private lateinit var chkHookSecCloaker: CheckBox
     private lateinit var chkHookLocation: CheckBox
@@ -371,20 +372,38 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnFilterToggle = Button(this).apply {
-  text = "🔎 الكل / الأخطاء فقط"
-  textSize = 11.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
-      setMargins(0, 0, 8, 0)
+  text = "🔎 الكل / الأخطاء"
+  textSize = 11f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+      setMargins(0, 0, 6, 0)
   }
   setBackgroundColor(Color.parseColor("#4F46E5"))
   setTextColor(Color.WHITE)
   setOnClickListener {
+      filterNavLogsOnly = false
       filterErrorsOnly = !filterErrorsOnly
-      text = if (filterErrorsOnly) "🚨 الأخطاء والكراش فقط" else "🔎 عرض كل السجلات"
+      text = if (filterErrorsOnly) "🚨 الأخطاء فقط" else "🔎 الكل / الأخطاء"
       refreshDiagLogsUI()
   }
         }
         btnRow1.addView(btnFilterToggle)
+
+        val btnNavLogFilter = Button(this).apply {
+  text = "🧭 سجل الملاحة"
+  textSize = 11f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+      setMargins(4, 0, 6, 0)
+  }
+  setBackgroundColor(Color.parseColor("#0284C7"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      filterErrorsOnly = false
+      filterNavLogsOnly = !filterNavLogsOnly
+      text = if (filterNavLogsOnly) "🧭 الملاحة فقط ✓" else "🧭 سجل الملاحة"
+      refreshDiagLogsUI()
+  }
+        }
+        btnRow1.addView(btnNavLogFilter)
 
         val btnCopyLogs = Button(this).apply {
   text = "📋 نسخ السجل"
@@ -538,27 +557,33 @@ class MainActivity : AppCompatActivity() {
         val crashCount = lines.count { it.contains("[CRASH]") }
         val errCount = lines.count { it.contains("[ERR]") }
         val warnCount = lines.count { it.contains("[WARN]") }
+        val navCount = lines.count { it.contains("[NavLog]") }
 
         if (crashCount > 0 || errCount > 0) {
-  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)"
+  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ | 🧭 $navCount سجل ملاحة (إجمالي ${lines.size} سطر)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
         } else {
-  tvDiagLogSummary.text = "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 كراش)"
+  tvDiagLogSummary.text = "✅ السجل يعمل (${lines.size} سطر | 🧭 $navCount ملاحة | $warnCount تنبيه | 0 كراش)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
         }
 
-        val displayText = if (filterErrorsOnly) {
-  val filtered = mutableListOf<String>()
-  var includeContinuation = false
-  for (line in lines) {
-      if (line.startsWith("[")) {
-          includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
-      }
-      if (includeContinuation) filtered.add(line)
+        val displayText = when {
+  filterNavLogsOnly -> {
+      val navLines = lines.filter { it.contains("[NavLog]") }
+      if (navLines.isEmpty()) "لا توجد سجلات ملاحة [NavLog] بعد — افتح طلب في تطبيق سند أو اضغط ⚡ لتجربة التوجيه للعميل" else navLines.joinToString("\n")
   }
-  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
-        } else {
-  rawLogs
+  filterErrorsOnly -> {
+      val filtered = mutableListOf<String>()
+      var includeContinuation = false
+      for (line in lines) {
+          if (line.startsWith("[")) {
+              includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
+          }
+          if (includeContinuation) filtered.add(line)
+      }
+      if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
+  }
+  else -> rawLogs
         }
 
         tvDiagLogConsole.text = displayText
@@ -821,6 +846,61 @@ class MainActivity : AppCompatActivity() {
      * - Prepaid / Cash collection box (✔️ Prepaid - Nothing to collect OR 💵 Collect cash)
      * - Call & WhatsApp buttons row (📞 Call  |  💬 WhatsApp)
      */
+    /**
+     * Exact implementation of Lg8.U & Lg8.W in SanedAssistant-98-7bac1ec.apk:
+     * Opens Google Maps navigation to (targetLat, targetLng), optionally starting from (originLat, originLng),
+     * so the driver can view & navigate to the customer's home BEFORE confirming pickup in Saned!
+     */
+    private fun openGoogleMapsNavigation(
+        targetLat: Double,
+        targetLng: Double,
+        originLat: Double = 0.0,
+        originLng: Double = 0.0,
+        fallbackQuery: String = "",
+        label: String = ""
+    ) {
+        val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(java.util.Date())
+        if (targetLat != 0.0 && targetLng != 0.0) {
+            val url = if (originLat != 0.0 && originLng != 0.0) {
+                "https://www.google.com/maps/dir/?api=1&origin=$originLat,$originLng&destination=$targetLat,$targetLng&travelmode=driving"
+            } else {
+                "https://www.google.com/maps/dir/?api=1&destination=$targetLat,$targetLng&travelmode=driving"
+            }
+            io.github.libxposed.service.XposedProvider.appendDiagLog(
+                this,
+                "[$ts] [STEP] [NavLog] UI Navigate clicked [$label]: target=($targetLat,$targetLng) origin=($originLat,$originLng) url=$url"
+            )
+            try {
+                val mapsIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    setPackage("com.google.android.apps.maps")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(mapsIntent)
+                return
+            } catch (_: Throwable) {
+                try {
+                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(browserIntent)
+                    return
+                } catch (_: Throwable) {}
+            }
+        }
+        if (fallbackQuery.isNotEmpty() && fallbackQuery != "Location on map") {
+            io.github.libxposed.service.XposedProvider.appendDiagLog(
+                this,
+                "[$ts] [STEP] [NavLog] UI Navigate fallback [$label]: query=$fallbackQuery"
+            )
+            try {
+                val mapUri = Uri.parse("geo:0,0?q=${Uri.encode(fallbackQuery)}")
+                startActivity(Intent(Intent.ACTION_VIEW, mapUri))
+                return
+            } catch (_: Throwable) {}
+        }
+        Toast.makeText(this, "⚠️ إحداثيات الموقع غير متوفرة بعد لهذا الطلب", Toast.LENGTH_SHORT).show()
+    }
+
     private fun buildActiveOrderCard(order: OrderModel): CardView {
         val rawId = if (order.reference.isNotEmpty()) order.reference else order.id.toString()
         val displayId = if (rawId.startsWith("#")) rawId else "#$rawId"
@@ -878,7 +958,7 @@ class MainActivity : AppCompatActivity() {
         headerRow.addView(idCopyTv)
         inner.addView(headerRow)
 
-        // 2. Pickup Box (Matches 34.jpg gray rounded box)
+        // 2. Pickup Box (Matches 34.jpg & Lg8.U case 0: tapping opens Google Maps directions to restaurant)
         val pickupBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -889,6 +969,14 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(0, 0, 0, 16)
+            }
+            setOnClickListener {
+                openGoogleMapsNavigation(
+                    targetLat = order.pickupLat,
+                    targetLng = order.pickupLng,
+                    fallbackQuery = order.pickupAddress.ifEmpty { order.restaurant },
+                    label = "Pickup ($displayId)"
+                )
             }
         }
 
@@ -913,8 +1001,11 @@ class MainActivity : AppCompatActivity() {
         val pickupNameTv = TextView(this).apply {
             val restTitle = order.restaurant.ifEmpty { "JAHEZ Restaurant" }
             val pickAddr = if (order.pickupAddress.isNotEmpty() && order.pickupAddress != restTitle) "\n${order.pickupAddress}" else ""
-            text = "$restTitle$pickAddr"
-            textSize = 15f
+            val pickCoordStr = if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
+                String.format(Locale.US, "\n📍 %.5f, %.5f", order.pickupLat, order.pickupLng)
+            } else ""
+            text = "$restTitle$pickAddr$pickCoordStr"
+            textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
             setPadding(0, 4, 0, 0)
@@ -922,9 +1013,19 @@ class MainActivity : AppCompatActivity() {
         pickupTextCol.addView(pickupLabel)
         pickupTextCol.addView(pickupNameTv)
         pickupBox.addView(pickupTextCol)
+
+        val pickupNavBtn = TextView(this).apply {
+            text = "Navigate ↗"
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#334155"))
+            background = roundedBg("#E2E8F0", 12f)
+            setPadding(18, 10, 18, 10)
+        }
+        pickupBox.addView(pickupNavBtn)
         inner.addView(pickupBox)
 
-        // 3. Drop-off Box (Matches 34.jpg light purple box with "Drop-off [NEXT]" & "Location on map")
+        // 3. Drop-off Box (Matches 34.jpg & Lg8.U case 1: opens customer home location in Google Maps BEFORE or AFTER pickup!)
         val dropoffBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -937,13 +1038,14 @@ class MainActivity : AppCompatActivity() {
                 setMargins(0, 0, 0, 16)
             }
             setOnClickListener {
-                val query = order.address.ifEmpty { order.customerName }
-                if (query.isNotEmpty()) {
-                    try {
-                        val mapUri = Uri.parse("geo:0,0?q=${Uri.encode(query)}")
-                        startActivity(Intent(Intent.ACTION_VIEW, mapUri))
-                    } catch (_: Throwable) {}
-                }
+                openGoogleMapsNavigation(
+                    targetLat = order.destLat,
+                    targetLng = order.destLng,
+                    originLat = order.pickupLat,
+                    originLng = order.pickupLng,
+                    fallbackQuery = order.address.takeIf { it != "Location on map" } ?: order.customerName,
+                    label = "Customer Drop-off ($displayId)"
+                )
             }
         }
 
@@ -1002,15 +1104,34 @@ class MainActivity : AppCompatActivity() {
         val dropoffDetailTv = TextView(this).apply {
             val parts = mutableListOf<String>()
             if (order.customerName.isNotEmpty() && order.customerName != "Customer") parts.add(order.customerName)
-            if (order.address.isNotEmpty()) parts.add(order.address)
-            text = if (parts.isNotEmpty()) parts.joinToString(" — ") else "Location on map"
-            textSize = 14.5f
+            if (order.address.isNotEmpty() && order.address != "Location on map") parts.add(order.address)
+            val hasDestCoords = order.destLat != 0.0 && order.destLng != 0.0
+            val coordLine = if (hasDestCoords) {
+                String.format(Locale.US, "📍 منزل العميل: %.5f, %.5f", order.destLat, order.destLng)
+            } else ""
+            text = when {
+                parts.isNotEmpty() && coordLine.isNotEmpty() -> "${parts.joinToString(" — ")}\n$coordLine"
+                parts.isNotEmpty() -> parts.joinToString(" — ")
+                coordLine.isNotEmpty() -> "$coordLine\nاضغط لفتح موقع العميل في الخريطة (قبل الاستلام)"
+                else -> "Location on map"
+            }
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
             setPadding(0, 6, 0, 0)
         }
         dropoffTextCol.addView(dropoffDetailTv)
         dropoffBox.addView(dropoffTextCol)
+
+        val dropoffNavBtn = TextView(this).apply {
+            text = "Navigate ↗"
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = roundedBg("#5B3FD3", 12f)
+            setPadding(18, 10, 18, 10)
+        }
+        dropoffBox.addView(dropoffNavBtn)
         inner.addView(dropoffBox)
 
         // 4. Payment & Price Box (Matches 34.jpg "Prepaid / Nothing to collect" + Delivery Fee)
@@ -1241,6 +1362,17 @@ class MainActivity : AppCompatActivity() {
         row.addView(priceRightTv)
 
         outerCol.addView(row)
+        if (order.destLat != 0.0 && order.destLng != 0.0) {
+            card.setOnClickListener {
+                openGoogleMapsNavigation(
+                    targetLat = order.destLat,
+                    targetLng = order.destLng,
+                    originLat = order.pickupLat,
+                    originLng = order.pickupLng,
+                    label = "Missed Order (${order.reference})"
+                )
+            }
+        }
         card.addView(outerCol)
         return card
     }
@@ -1458,6 +1590,10 @@ class MainActivity : AppCompatActivity() {
                 cashAmount = 0.0,
                 distanceKm = 0.5,
                 customerDistanceKm = 2.8,
+                pickupLat = 24.7685,
+                pickupLng = 46.6182,
+                destLat = 24.7912,
+                destLng = 46.6345,
                 decisionReason = "Accepted (0.5km / 2.8km)",
                 isMissedOrRejected = false,
                 time = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date())
@@ -2080,7 +2216,7 @@ class MainActivity : AppCompatActivity() {
                 Status Code: HTTP $code (${latency}ms)
                 Auth Token: $tokenStr
                 Target URL: $url
-                
+
                 Response Preview:
                 $body
             """.trimIndent()

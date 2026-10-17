@@ -350,6 +350,11 @@ object OrderInterceptor {
                             0.0
                         }
 
+                        cacheOrderCoords(reqId.toString(), pLat, pLng, dLat, dLng)
+                        DiagnosticLogger.logStep(
+                            "NavLog",
+                            "IncomingDispatchActivity #$reqId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) restDist=${String.format(Locale.US, "%.2f", calcRestDist)}km custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km"
+                        )
                         val totalOfferPrice = delivPrice + bonusAmt
                         val cleanPrice = String.format(Locale.US, "%.2f", totalOfferPrice).toDoubleOrNull() ?: totalOfferPrice
                         lastOrderEvent = "Order #$reqId detected via IncomingDispatchActivity (Ls20)"
@@ -359,6 +364,10 @@ object OrderInterceptor {
                             dist = calcRestDist,
                             restaurant = subName,
                             custDist = calcCustDist,
+                            pickupLat = pLat,
+                            pickupLng = pLng,
+                            destLat = dLat,
+                            destLng = dLng,
                             sourceChannel = "SCREEN"
                         )
                         return
@@ -445,41 +454,43 @@ object OrderInterceptor {
                 }
             }
 
-            // Compute Haversine distances from coordinates if direct distance extra is 0.0 (matching Lqz.a & Ls20.e)
-            if (foundDist == 0.0) {
-                var pLat = 0.0
-                var pLng = 0.0
-                var dLat = 0.0
-                var dLng = 0.0
-                for (k in extras.keySet()) {
-                    val lk = k.lowercase()
-                    val v = extras.get(k) ?: continue
-                    val d = (v as? Number)?.toDouble() ?: v.toString().toDoubleOrNull() ?: continue
-                    if (d in 15.0..35.0) {
-                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLat == 0.0) {
-                            if (pLat == 0.0) pLat = d else if (dLat == 0.0) dLat = d
-                        } else if (dLat == 0.0) {
-                            dLat = d
-                        }
-                    } else if (d in 34.0..56.0) {
-                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLng == 0.0) {
-                            if (pLng == 0.0) pLng = d else if (dLng == 0.0) dLng = d
-                        } else if (dLng == 0.0) {
-                            dLng = d
-                        }
+            // Extract coordinates and compute Haversine distances (matching Lqz.a & Ls20.e)
+            var pLat = 0.0
+            var pLng = 0.0
+            var dLat = 0.0
+            var dLng = 0.0
+            for (k in extras.keySet()) {
+                val lk = k.lowercase()
+                val v = extras.get(k) ?: continue
+                val d = (v as? Number)?.toDouble() ?: v.toString().toDoubleOrNull() ?: continue
+                if (d in 15.0..35.0) {
+                    if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLat == 0.0) {
+                        if (pLat == 0.0) pLat = d else if (dLat == 0.0) dLat = d
+                    } else if (dLat == 0.0) {
+                        dLat = d
+                    }
+                } else if (d in 34.0..56.0) {
+                    if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLng == 0.0) {
+                        if (pLng == 0.0) pLng = d else if (dLng == 0.0) dLng = d
+                    } else if (dLng == 0.0) {
+                        dLng = d
                     }
                 }
-                val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-                val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
-                if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
-                    foundDist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
-                }
-                if (foundCustDist == 0.0 && pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) {
-                    foundCustDist = LocationEngine.calculateDistance(pLat, pLng, dLat, dLng)
-                }
+            }
+            val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+            val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+            if (foundDist == 0.0 && pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
+                foundDist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
+            }
+            if (foundCustDist == 0.0 && pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) {
+                foundCustDist = LocationEngine.calculateDistance(pLat, pLng, dLat, dLng)
             }
 
             if (foundId.isNotEmpty() && (foundPrice > 0.0 || foundDist > 0.0 || foundStore.isNotEmpty())) {
+                cacheOrderCoords(foundId, pLat, pLng, dLat, dLng)
+                if (pLat != 0.0 || dLat != 0.0) {
+                    DiagnosticLogger.logStep("NavLog", "Activity Intent $foundId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) custDist=${String.format(Locale.US, "%.2f", foundCustDist)}km")
+                }
                 val cleanPrice = String.format(Locale.US, "%.2f", foundPrice).toDoubleOrNull() ?: foundPrice
                 lastOrderEvent = "Order $foundId detected via Activity Intent"
                 handleOrderViaApi(
@@ -491,7 +502,11 @@ object OrderInterceptor {
                     custAddr = foundAddress,
                     custName = foundCustomer,
                     custPhone = foundPhone,
-                    cashAmt = foundCash
+                    cashAmt = foundCash,
+                    pickupLat = pLat,
+                    pickupLng = pLng,
+                    destLat = dLat,
+                    destLng = dLng
                 )
             }
         } catch (_: Throwable) {}
@@ -684,6 +699,14 @@ object OrderInterceptor {
         val testCash = 55.00
         val testStatus = "Accepted (Auto-Accept ⚡)"
 
+        val simPLat = 24.7685
+        val simPLng = 46.6182
+        val simDLat = 24.7912
+        val simDLng = 46.6345
+        val simCustDist = LocationEngine.calculateDistance(simPLat, simPLng, simDLat, simDLng)
+        cacheOrderCoords(testId, simPLat, simPLng, simDLat, simDLng)
+        cacheOrderCoords(testRef, simPLat, simPLng, simDLat, simDLng)
+        DiagnosticLogger.logStep("NavLog", "Simulated Order $testId: pickup=($simPLat,$simPLng) -> customer=($simDLat,$simDLng) custDist=${String.format(Locale.US, "%.2f", simCustDist)}km")
         lastOrderEvent = "Simulated Order $testId received"
         sendOrderToLog(
             orderId = testId,
@@ -696,15 +719,20 @@ object OrderInterceptor {
             address = testAddress,
             cashAmount = testCash,
             currency = "SAR",
-            reference = testRef
+            reference = testRef,
+            customerDistanceKm = simCustDist,
+            pickupLat = simPLat,
+            pickupLng = simPLng,
+            destLat = simDLat,
+            destLng = simDLng
         )
         playAlertSound()
         currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
 
-        handleOrderViaApi(testId, testPrice, testDist, testStore)
+        handleOrderViaApi(testId, testPrice, testDist, testStore, custDist = simCustDist, pickupLat = simPLat, pickupLng = simPLng, destLat = simDLat, destLng = simDLng)
     }
 
-    
+
     private var wakeLock: PowerManager.WakeLock? = null
 
     /**
@@ -728,6 +756,30 @@ object OrderInterceptor {
     // Matches Ljw.a in SanedAssistant-98: caches (customerName, customerPhone, cashAmount) per orderId
     private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()
     private val fetchedDetailIds = ConcurrentHashMap.newKeySet<String>()
+    // Caches [pickupLat, pickupLng, destLat, destLng] per orderId / referenceId (matching Luf1 h,i,j,k)
+    private val coordsCache = ConcurrentHashMap<String, DoubleArray>()
+    private val loggedNavOrderKeys = ConcurrentHashMap.newKeySet<String>()
+    private val loggedLocationSchema = AtomicBoolean(false)
+
+    fun cacheOrderCoords(idOrRef: String, pLat: Double, pLng: Double, dLat: Double, dLng: Double) {
+        val key = idOrRef.replace("#", "").trim()
+        if (key.isEmpty()) return
+        if (pLat == 0.0 && pLng == 0.0 && dLat == 0.0 && dLng == 0.0) return
+        val prev = coordsCache[key]
+        val merged = doubleArrayOf(
+            if (pLat != 0.0 && !pLat.isNaN()) pLat else (prev?.getOrNull(0) ?: 0.0),
+            if (pLng != 0.0 && !pLng.isNaN()) pLng else (prev?.getOrNull(1) ?: 0.0),
+            if (dLat != 0.0 && !dLat.isNaN()) dLat else (prev?.getOrNull(2) ?: 0.0),
+            if (dLng != 0.0 && !dLng.isNaN()) dLng else (prev?.getOrNull(3) ?: 0.0)
+        )
+        coordsCache[key] = merged
+    }
+
+    fun getCachedCoords(idOrRef: String): DoubleArray? {
+        val key = idOrRef.replace("#", "").trim()
+        if (key.isEmpty()) return null
+        return coordsCache[key]
+    }
 
     fun resolveApplicationContext(): Context? {
         appContext?.let { return it }
@@ -1007,6 +1059,8 @@ object OrderInterceptor {
                     isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)
                     isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)
                     isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)
+                    licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
+                    licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
                     isActivePolling = bundle.getBoolean("active_polling", isActivePolling)
                     pollIntervalSec = bundle.getFloat("poll_interval_sec", pollIntervalSec)
                     parallelRequests = bundle.getInt("parallel_requests", parallelRequests)
@@ -1028,6 +1082,8 @@ object OrderInterceptor {
             isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)
             isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)
             isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)
+            licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
+            licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
             isActivePolling = p.getBoolean("active_polling", isActivePolling)
             pollIntervalSec = p.getFloat("poll_interval_sec", pollIntervalSec)
             parallelRequests = p.getInt("parallel_requests", parallelRequests)
@@ -1594,6 +1650,111 @@ object OrderInterceptor {
                           if (intent != null) {
                               val callerObj = chain.args.getOrNull(activityIdx)
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
+                              try {
+                                  val actStr = intent.action ?: ""
+                                  val dataStr = intent.dataString ?: ""
+                                  val cmpStr = intent.component?.className ?: ""
+                                  val pkgStr = intent.`package` ?: ""
+                                  val isNavIntent = dataStr.contains("geo:", ignoreCase = true) ||
+                                      dataStr.contains("google.navigation", ignoreCase = true) ||
+                                      dataStr.contains("maps.google", ignoreCase = true) ||
+                                      dataStr.contains("maps/dir", ignoreCase = true) ||
+                                      dataStr.contains("waze", ignoreCase = true) ||
+                                      pkgStr.contains("maps", ignoreCase = true) ||
+                                      (actStr == Intent.ACTION_VIEW && dataStr.isNotEmpty())
+                                  if (isNavIntent && !intent.getBooleanExtra("saned_nav_bypass", false)) {
+                                      if (coordsCache.isEmpty()) {
+                                          try { resolveApplicationContext()?.let { scanJahezDatabases(it) } } catch (_: Throwable) {}
+                                      }
+                                      // Match order by pickup coordinates in URI, or fallback to latest active order in coordsCache
+                                      var matchedEntry: Map.Entry<String, DoubleArray>? = null
+                                      for (entry in coordsCache.entries) {
+                                          val pl = entry.value.getOrNull(0) ?: 0.0
+                                          val pg = entry.value.getOrNull(1) ?: 0.0
+                                          if (pl != 0.0 && pg != 0.0) {
+                                              val plPrefix = String.format(Locale.US, "%.3f", pl)
+                                              val pgPrefix = String.format(Locale.US, "%.3f", pg)
+                                              if (dataStr.contains(plPrefix) || dataStr.contains(pgPrefix)) {
+                                                  matchedEntry = entry
+                                                  break
+                                              }
+                                          }
+                                      }
+                                      if (matchedEntry == null) {
+                                          matchedEntry = coordsCache.entries.lastOrNull { (it.value.getOrNull(2) ?: 0.0) != 0.0 }
+                                              ?: coordsCache.entries.lastOrNull()
+                                      }
+                                      val ordKey = matchedEntry?.key ?: "none"
+                                      val lc = matchedEntry?.value
+                                      val pLat = lc?.getOrNull(0) ?: 0.0
+                                      val pLng = lc?.getOrNull(1) ?: 0.0
+                                      val dLat = lc?.getOrNull(2) ?: 0.0
+                                      val dLng = lc?.getOrNull(3) ?: 0.0
+                                      DiagnosticLogger.logStep(
+                                          "NavLog",
+                                          "Saned Navigate button clicked! action=$actStr uri=[$dataStr] pkg=$pkgStr caller=${callerObj?.javaClass?.simpleName ?: "App"} | order=#$ordKey pickup=($pLat,$pLng) customerDest=($dLat,$dLng)"
+                                      )
+                                      val dLatPrefix = if (dLat != 0.0) String.format(Locale.US, "%.3f", dLat) else ""
+                                      val alreadyGoingToCustomer = dLatPrefix.isNotEmpty() && dataStr.contains(dLatPrefix)
+                                      val callerAct = (callerObj as? Activity) ?: currentActivity
+                                      if (isMasterRunning && dLat != 0.0 && dLng != 0.0 && !alreadyGoingToCustomer && callerAct != null && !callerAct.isFinishing && !callerAct.isDestroyed) {
+                                          val custDistKm = if (pLat != 0.0 && pLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
+                                          val distInfo = if (custDistKm > 0.0) String.format(Locale.US, " (يبعد %.1f كم عن المطعم)", custDistKm) else ""
+                                          DiagnosticLogger.logStep("NavLog", "Showing Pre-Pickup Navigation Chooser for #$ordKey: Restaurant=($pLat,$pLng) vs Customer=($dLat,$dLng)")
+                                          callerAct.runOnUiThread {
+                                              try {
+                                                  android.app.AlertDialog.Builder(callerAct)
+                                                      .setTitle("🧭 اختر وجهة التوجيه (الطلب #$ordKey)")
+                                                      .setMessage("تم كشف موقع منزل العميل قبل استلام الطلب!\n\n🏪 المطعم: ${String.format(Locale.US, "%.5f, %.5f", pLat, pLng)}\n🏠 منزل العميل: ${String.format(Locale.US, "%.5f, %.5f", dLat, dLng)}$distInfo")
+                                                      .setPositiveButton("🏠 موقع العميل (قبل الاستلام)") { _, _ ->
+                                                          try {
+                                                              val custUrl = if (pLat != 0.0 && pLng != 0.0) {
+                                                                  "https://www.google.com/maps/dir/?api=1&origin=$pLat,$pLng&destination=$dLat,$dLng&travelmode=driving"
+                                                              } else {
+                                                                  "https://www.google.com/maps/dir/?api=1&destination=$dLat,$dLng&travelmode=driving"
+                                                              }
+                                                              DiagnosticLogger.logStep("NavLog", "Driver chose Customer Navigation before pickup: $custUrl")
+                                                              val mapsIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(custUrl)).apply {
+                                                                  setPackage("com.google.android.apps.maps")
+                                                                  putExtra("saned_nav_bypass", true)
+                                                                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                              }
+                                                              try {
+                                                                  callerAct.startActivity(mapsIntent)
+                                                              } catch (_: Throwable) {
+                                                                  val fallbackIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(custUrl)).apply {
+                                                                      putExtra("saned_nav_bypass", true)
+                                                                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                                  }
+                                                                  callerAct.startActivity(fallbackIntent)
+                                                              }
+                                                          } catch (_: Throwable) {}
+                                                      }
+                                                      .setNegativeButton("🏪 موقع المطعم") { _, _ ->
+                                                          try {
+                                                              DiagnosticLogger.logStep("NavLog", "Driver chose Restaurant Navigation: $dataStr")
+                                                              intent.putExtra("saned_nav_bypass", true)
+                                                              callerAct.startActivity(intent)
+                                                          } catch (_: Throwable) {}
+                                                      }
+                                                      .show()
+                                              } catch (_: Throwable) {
+                                                  try {
+                                                      intent.putExtra("saned_nav_bypass", true)
+                                                      callerAct.startActivity(intent)
+                                                  } catch (_: Throwable) {}
+                                              }
+                                          }
+                                          return null
+                                      }
+                                  } else if (cmpStr.contains("dispatch", ignoreCase = true) || cmpStr.contains("order", ignoreCase = true) || orderIdInt != 0) {
+                                      val extKeys = intent.extras?.keySet()?.joinToString(",") ?: "none"
+                                      DiagnosticLogger.logStep(
+                                          "NavLog",
+                                          "Saned Activity start: cmp=${cmpStr.substringAfterLast('.')} orderId=$orderIdInt extras=[$extKeys]"
+                                      )
+                                  }
+                              } catch (_: Throwable) {}
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
                                   val entry = handledOrdersMap[orderIdInt]
                                   if (entry != null && (entry.decision == "REJECT" || (entry.decision == "ACCEPT" && apiConfirmedAcceptIds.contains(orderIdInt)))) {
@@ -1689,10 +1850,26 @@ object OrderInterceptor {
         val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
         val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distVal
         val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
+        cacheOrderCoords(reqId.toString(), pLat, pLng, dLat, dLng)
         val cleanPrice = String.format(Locale.US, "%.2f", delivPrice + bonusAmt).toDoubleOrNull() ?: (delivPrice + bonusAmt)
         lastOrderEvent = "Order #$reqId detected via FCM Push (Ls90)"
         DiagnosticLogger.logStep("FCM", "Order #$reqId received (price=$cleanPrice, restDist=$calcRestDist)")
-        return handleOrderViaApi(orderId = "#$reqId", price = cleanPrice, dist = calcRestDist, restaurant = restName, custDist = calcCustDist, sourceChannel = "PUSH")
+        DiagnosticLogger.logStep(
+            "NavLog",
+            "FCM Push Order #$reqId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) restDist=${String.format(Locale.US, "%.2f", calcRestDist)}km custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km"
+        )
+        return handleOrderViaApi(
+            orderId = "#$reqId",
+            price = cleanPrice,
+            dist = calcRestDist,
+            restaurant = restName,
+            custDist = calcCustDist,
+            pickupLat = pLat,
+            pickupLng = pLng,
+            destLat = dLat,
+            destLng = dLng,
+            sourceChannel = "PUSH"
+        )
     }
 
     private fun hookSQLite(module: XposedModule) {
@@ -1750,8 +1927,7 @@ object OrderInterceptor {
         return when {
             u.contains("DELIVERED") || u == "DELIVER" -> "Delivered"
             u.contains("COMPLETED") || u == "COMPLETE" -> "Completed"
-            u.contains("PICKED") ||
-               u.contains("DISPATCH") || u.contains("COLLECTED") -> "Picked Up"
+            u.contains("PICKED") || u.contains("COLLECTED") -> "Picked Up"
             u.contains("ARRIVED") -> "Arrived"
             u.contains("WAY") || u.contains("PROGRESS") -> "In Progress"
             u.contains("ACCEPT") || u.contains("قبول") -> "Accepted"
@@ -1847,23 +2023,40 @@ object OrderInterceptor {
             if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
         }
 
+        cacheOrderCoords(idStr, posPickupLat, posPickupLng, posDestLat, posDestLng)
+        if (refStr.isNotEmpty()) cacheOrderCoords(refStr, posPickupLat, posPickupLng, posDestLat, posDestLng)
+        val cachedC = getCachedCoords(idStr) ?: getCachedCoords(refStr)
+        val effPickupLat = if (posPickupLat != 0.0) posPickupLat else (cachedC?.getOrNull(0) ?: 0.0)
+        val effPickupLng = if (posPickupLng != 0.0) posPickupLng else (cachedC?.getOrNull(1) ?: 0.0)
+        val effDestLat = if (posDestLat != 0.0) posDestLat else (cachedC?.getOrNull(2) ?: 0.0)
+        val effDestLng = if (posDestLng != 0.0) posDestLng else (cachedC?.getOrNull(3) ?: 0.0)
+
         var calcDist = posDistKm
-        if (calcDist == 0.0 && posPickupLat != 0.0 && posPickupLng != 0.0) {
+        if (calcDist == 0.0 && effPickupLat != 0.0 && effPickupLng != 0.0) {
             val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
             val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
             if (drvLat != 0.0 && drvLng != 0.0) {
-                calcDist = LocationEngine.calculateDistance(drvLat, drvLng, posPickupLat, posPickupLng)
+                calcDist = LocationEngine.calculateDistance(drvLat, drvLng, effPickupLat, effPickupLng)
             }
         }
         var calcCustDist = 0.0
-        if (posPickupLat != 0.0 && posPickupLng != 0.0 && posDestLat != 0.0 && posDestLng != 0.0) {
-            calcCustDist = LocationEngine.calculateDistance(posPickupLat, posPickupLng, posDestLat, posDestLng)
+        if (effPickupLat != 0.0 && effPickupLng != 0.0 && effDestLat != 0.0 && effDestLng != 0.0) {
+            calcCustDist = LocationEngine.calculateDistance(effPickupLat, effPickupLng, effDestLat, effDestLng)
+        }
+
+        val navSig = "$idStr:$rawStatus:${String.format(Locale.US, "%.4f,%.4f->%.4f,%.4f", effPickupLat, effPickupLng, effDestLat, effDestLng)}:$posAddr"
+        if (loggedNavOrderKeys.add(navSig)) {
+            DiagnosticLogger.logStep(
+                "NavLog",
+                "SQLite dispatches_db #$idStr (ref=$refStr) status=[$rawStatus]: pickup=($effPickupLat,$effPickupLng) -> customer=($effDestLat,$effDestLng) custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km addr='${posAddr.ifEmpty { "Location on map" }}'"
+            )
         }
 
         knownDbOrderIds.add(idStr)
         if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
         loggedOrderIds.add("#$idStr")
-        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}"
+        val hasCoordFlag = (effDestLat != 0.0 && effDestLng != 0.0)
+        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:$hasCoordFlag"
         if (loggedOrderIds.add(syncSignature)) {
             val normStatus = normalizeOrderStatusDisplay(rawStatus)
             sendOrderToLog(
@@ -1874,11 +2067,15 @@ object OrderInterceptor {
                 status = normStatus,
                 customerName = finalCustName,
                 customerPhone = finalCustPhone,
-                address = posAddr.ifEmpty { if (posDestLat != 0.0) "Location on map" else "" },
+                address = posAddr.ifEmpty { if (effDestLat != 0.0) "Location on map" else "" },
                 cashAmount = effectiveCash,
                 currency = posCurrency,
                 reference = refStr,
                 customerDistanceKm = calcCustDist,
+                pickupLat = effPickupLat,
+                pickupLng = effPickupLng,
+                destLat = effDestLat,
+                destLng = effDestLng,
                 notifyUser = false
             )
         }
@@ -1946,6 +2143,33 @@ object OrderInterceptor {
       } finally {
           try { payCursor?.close() } catch (_: Throwable) {}
       }
+      // Pre-scan location table in dispatches_db so pickup & customer coordinates are always cached & logged in [NavLog]
+      var locCursor: Cursor? = null
+      try {
+          locCursor = openedDb.rawQuery("SELECT * FROM location", null)
+          val lCols = locCursor.columnNames ?: emptyArray()
+          if (loggedLocationSchema.compareAndSet(false, true)) {
+              DiagnosticLogger.logStep("NavLog", "dispatches_db.location columns: [${lCols.joinToString(", ")}]")
+          }
+          val dispIdIdx = lCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
+          val pLatIdx = lCols.indexOfFirst { it.contains("pickupLat", ignoreCase = true) }
+          val pLngIdx = lCols.indexOfFirst { it.contains("pickupLong", ignoreCase = true) || it.contains("pickupLng", ignoreCase = true) }
+          val dLatIdx = lCols.indexOfFirst { it.contains("destLat", ignoreCase = true) || it.contains("destinationLat", ignoreCase = true) || it.contains("dropoffLat", ignoreCase = true) }
+          val dLngIdx = lCols.indexOfFirst { it.contains("destLong", ignoreCase = true) || it.contains("destinationLong", ignoreCase = true) || it.contains("destLng", ignoreCase = true) || it.contains("dropoffLong", ignoreCase = true) }
+          if (dispIdIdx >= 0) {
+              while (locCursor.moveToNext()) {
+                  val dId = cursorStringOrNull(locCursor, dispIdIdx) ?: cursorDoubleOrNull(locCursor, dispIdIdx)?.toLong()?.toString() ?: continue
+                  val pl = if (pLatIdx >= 0) (cursorDoubleOrNull(locCursor, pLatIdx) ?: 0.0) else 0.0
+                  val pg = if (pLngIdx >= 0) (cursorDoubleOrNull(locCursor, pLngIdx) ?: 0.0) else 0.0
+                  val dl = if (dLatIdx >= 0) (cursorDoubleOrNull(locCursor, dLatIdx) ?: 0.0) else 0.0
+                  val dg = if (dLngIdx >= 0) (cursorDoubleOrNull(locCursor, dLngIdx) ?: 0.0) else 0.0
+                  cacheOrderCoords(dId, pl, pg, dl, dg)
+              }
+          }
+      } catch (_: Throwable) {
+      } finally {
+          try { locCursor?.close() } catch (_: Throwable) {}
+      }
       val c = openedDb.rawQuery(exactSql, null)
       exactCursor = c
       while (c.moveToNext()) {
@@ -2004,8 +2228,10 @@ object OrderInterceptor {
           }
       } catch (_: Throwable) {}
 
-      // 2. If food/cash amount is still 0.0 on an assigned order, fetch read-only dispatch details GET /api/v1/dispatch/{id}
-      if (cCash <= 0.0 && knownDbOrderIds.contains(cleanId)) {
+      // 2. If food/cash amount or customer coordinates are missing on an assigned order, fetch read-only dispatch details GET /api/v1/dispatch/{id}
+      val existingCoords = getCachedCoords(cleanId)
+      val needCoords = existingCoords == null || existingCoords.getOrNull(2) == 0.0
+      if ((cCash <= 0.0 || needCoords) && knownDbOrderIds.contains(cleanId)) {
           try {
               val rb = Request.Builder().url("https://gateway.saned.io/api/v1/dispatch/$orderIdInt").get()
                   .header("Authorization", "Bearer $rawTok")
@@ -2034,12 +2260,43 @@ object OrderInterceptor {
                           extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
                       }
                   }
+                  val locObj = dataObj.optJSONObject("location") ?: json.optJSONObject("location")
+                  val pickObj = dataObj.optJSONObject("pickup") ?: locObj?.optJSONObject("pickup")
+                  val dstObj = dataObj.optJSONObject("destination") ?: dataObj.optJSONObject("dropoff") ?: locObj?.optJSONObject("destination")
+                  var apiPLat = extractFirstDouble(locObj ?: dataObj, "pickupLatitude", "pickupLat", "dispatchPickupLat")
+                  var apiPLng = extractFirstDouble(locObj ?: dataObj, "pickupLongitude", "pickupLng", "dispatchPickupLng")
+                  var apiDLat = extractFirstDouble(locObj ?: dataObj, "destinationLatitude", "destLat", "dispatchDestLat")
+                  var apiDLng = extractFirstDouble(locObj ?: dataObj, "destinationLongitude", "destLng", "dispatchDestLng")
+                  if (apiPLat == 0.0 && pickObj != null) {
+                      apiPLat = extractFirstDouble(pickObj, "lat", "latitude")
+                      apiPLng = extractFirstDouble(pickObj, "lng", "lon", "longitude")
+                      val pc = pickObj.optJSONArray("coordinates")
+                      if (pc != null && pc.length() >= 2) {
+                          val c0 = pc.optDouble(0, 0.0); val c1 = pc.optDouble(1, 0.0)
+                          if (c1 in 15.0..35.0) { apiPLng = c0; apiPLat = c1 } else { apiPLat = c0; apiPLng = c1 }
+                      }
+                  }
+                  if (apiDLat == 0.0 && dstObj != null) {
+                      apiDLat = extractFirstDouble(dstObj, "lat", "latitude")
+                      apiDLng = extractFirstDouble(dstObj, "lng", "lon", "longitude")
+                      val dc = dstObj.optJSONArray("coordinates")
+                      if (dc != null && dc.length() >= 2) {
+                          val c0 = dc.optDouble(0, 0.0); val c1 = dc.optDouble(1, 0.0)
+                          if (c1 in 15.0..35.0) { apiDLng = c0; apiDLat = c1 } else { apiDLat = c0; apiDLng = c1 }
+                      }
+                  }
+                  if (apiPLat != 0.0 || apiDLat != 0.0) {
+                      cacheOrderCoords(cleanId, apiPLat, apiPLng, apiDLat, apiDLng)
+                      DiagnosticLogger.logStep("NavLog", "API /dispatch/$orderIdInt coords: pickup=($apiPLat,$apiPLng) -> customer=($apiDLat,$apiDLng)")
+                  }
               }
           } catch (_: Throwable) {}
       }
 
-      if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0) {
-          customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
+      if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0 || getCachedCoords(cleanId) != null) {
+          if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0) {
+              customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
+          }
           DiagnosticLogger.logStep("ContactFetch", "Fetched details for #$cleanId (phone=${cPhone.isNotEmpty()}, cash=$cCash)")
           if (ctx != null) scanJahezDatabases(ctx)
       }
@@ -2495,11 +2752,11 @@ object OrderInterceptor {
 
             // Coordinate-based Haversine distance calculation matching Lb11.e, Ls90.g, and Lqz.a
             var custDist = 0.0
+            var pLat = extractFirstDouble(json, "dispatchPickupLat", "pickupLatitude", "pickup_lat", "pickupLat", "store_lat", "branch_lat", "restaurant_lat")
+            var pLng = extractFirstDouble(json, "dispatchPickupLng", "pickupLongitude", "pickup_lng", "pickupLng", "pickup_lon", "store_lng", "branch_lng", "restaurant_lng")
+            var dLat = extractFirstDouble(json, "dispatchDestLat", "destinationLatitude", "dest_lat", "destLat", "dropoff_lat", "customer_lat")
+            var dLng = extractFirstDouble(json, "dispatchDestLng", "destinationLongitude", "dest_lng", "destLng", "dropoff_lng", "customer_lng")
             run {
-                var pLat = extractFirstDouble(json, "dispatchPickupLat", "pickupLatitude", "pickup_lat", "pickupLat", "store_lat", "branch_lat", "restaurant_lat")
-                var pLng = extractFirstDouble(json, "dispatchPickupLng", "pickupLongitude", "pickup_lng", "pickupLng", "pickup_lon", "store_lng", "branch_lng", "restaurant_lng")
-                var dLat = extractFirstDouble(json, "dispatchDestLat", "destinationLatitude", "dest_lat", "destLat", "dropoff_lat", "customer_lat")
-                var dLng = extractFirstDouble(json, "dispatchDestLng", "destinationLongitude", "dest_lng", "destLng", "dropoff_lng", "customer_lng")
 
                 if (pLat == 0.0 && pickupObj != null) {
                     pLat = extractFirstDouble(pickupObj, "lat", "latitude")
@@ -2555,6 +2812,19 @@ object OrderInterceptor {
                 // If order is from SQLite DB or already has a historical/active status (Delivered, Completed, Accepted, Picked Up, Cancelled),
                 // sync it directly to the Orders tab with its real status without running new-offer Auto-Accept/Reject gates!
                 val rawOrderIdClean = orderId.replace("#", "").trim()
+                cacheOrderCoords(rawOrderIdClean, pLat, pLng, dLat, dLng)
+                if (reference.isNotEmpty()) cacheOrderCoords(reference, pLat, pLng, dLat, dLng)
+                val cachedCoords = getCachedCoords(rawOrderIdClean) ?: getCachedCoords(reference)
+                if (pLat == 0.0) pLat = cachedCoords?.getOrNull(0) ?: 0.0
+                if (pLng == 0.0) pLng = cachedCoords?.getOrNull(1) ?: 0.0
+                if (dLat == 0.0) dLat = cachedCoords?.getOrNull(2) ?: 0.0
+                if (dLng == 0.0) dLng = cachedCoords?.getOrNull(3) ?: 0.0
+                if ((pLat != 0.0 || dLat != 0.0) && loggedNavOrderKeys.add("json:$rawOrderIdClean:$pLat:$dLat")) {
+                    DiagnosticLogger.logStep(
+                        "NavLog",
+                        "JSON [$channelSource] #$rawOrderIdClean: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) custDist=${String.format(Locale.US, "%.2f", custDist)}km"
+                    )
+                }
                 if (cashAmount <= 0.0) {
                     val cachedC = customerDetailsCache[rawOrderIdClean]?.third ?: customerDetailsCache[reference]?.third ?: 0.0
                     val syncedC = synchronized(syncedOrdersCache) {
@@ -2564,7 +2834,8 @@ object OrderInterceptor {
                 }
                 if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
-                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}"
+                    val hasCoords = (dLat != 0.0 && dLng != 0.0)
+                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}:$hasCoords"
                     if (loggedOrderIds.add(dedupKey)) {
                         lastOrderEvent = "Order $orderId synced ($normStatus) via $channelSource"
                         sendOrderToLog(
@@ -2580,13 +2851,17 @@ object OrderInterceptor {
                             currency = currency,
                             reference = reference,
                             customerDistanceKm = custDist,
+                            pickupLat = pLat,
+                            pickupLng = pLng,
+                            destLat = dLat,
+                            destLng = dLng,
                             notifyUser = false
                         )
                     }
                     return
                 }
 
-    val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
+                val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
                 orderId = normOrderId
                 if (loggedOrderIds.add(normOrderId)) {
                     lastOrderEvent = "Order $orderId detected via $channelSource"
@@ -2600,6 +2875,10 @@ object OrderInterceptor {
                         custName = customerName,
                         custPhone = customerPhone,
                         cashAmt = cashAmount,
+                        pickupLat = pLat,
+                        pickupLng = pLng,
+                        destLat = dLat,
+                        destLng = dLng,
                         sourceChannel = if (channelSource.contains("POLL", ignoreCase = true)) "POLL" else "PUSH"
                     )
                 }
@@ -2683,57 +2962,62 @@ object OrderInterceptor {
         custName: String = "",
         custPhone: String = "",
         cashAmt: Double = 0.0,
+        pickupLat: Double = 0.0,
+        pickupLng: Double = 0.0,
+        destLat: Double = 0.0,
+        destLng: Double = 0.0,
         sourceChannel: String = "PUSH"
     ): String {
         val rawId = orderId.replace("#", "").trim()
         if (rawId.isEmpty()) return ""
+        cacheOrderCoords(rawId, pickupLat, pickupLng, destLat, destLng)
         val normOrderId = "#$rawId"
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
         val nowRealtime = SystemClock.elapsedRealtime()
 
         if (orderIdInt != 0) {
-  val existing = handledOrdersMap[orderIdInt]
-  if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
-      return existing.decision
-  }
+            val existing = handledOrdersMap[orderIdInt]
+            if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
+                return existing.decision
+            }
         }
 
         val (action, reason) = evaluateOrderDecision(price, dist, custDist)
 
         if (orderIdInt != 0) {
-  val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
-  synchronized(handledOrdersMap) {
-      val prev = handledOrdersMap[orderIdInt]
-      if (prev != null && (nowRealtime - prev.timestampRealtime) < 60_000L) {
-          return prev.decision
-      }
-      handledOrdersMap[orderIdInt] = HandledOrderEntry(action, nowRealtime, wasInBg)
-  }
+            val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
+            synchronized(handledOrdersMap) {
+                val prev = handledOrdersMap[orderIdInt]
+                if (prev != null && (nowRealtime - prev.timestampRealtime) < 60_000L) {
+                    return prev.decision
+                }
+                handledOrdersMap[orderIdInt] = HandledOrderEntry(action, nowRealtime, wasInBg)
+            }
         }
 
         DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason)")
 
         when (action) {
-  "REJECT" -> {
-      lastOrderEvent = "Order $normOrderId auto-rejected ($reason)"
-      currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $normOrderId: $reason") }
-      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
-      executeDirectApiCall(rawId, "REJECT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason)
-  }
-  "DRY_RUN" -> {
-      lastOrderEvent = "Order $normOrderId dry-run ($reason)"
-      currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $normOrderId ($reason)") }
-      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
-  }
-  "ACCEPT" -> {
-      lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId..."
-      executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason)
-  }
-  else -> {
-      lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
-      currentActivity?.let { act -> showToast(act, "↩️ تُرك $normOrderId لك: $reason") }
-      sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, decisionReason = reason, notifyUser = false)
-  }
+            "REJECT" -> {
+                lastOrderEvent = "Order $normOrderId auto-rejected ($reason)"
+                currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $normOrderId: $reason") }
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+                executeDirectApiCall(rawId, "REJECT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng)
+            }
+            "DRY_RUN" -> {
+                lastOrderEvent = "Order $normOrderId dry-run ($reason)"
+                currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $normOrderId ($reason)") }
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+            }
+            "ACCEPT" -> {
+                lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId..."
+                executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng)
+            }
+            else -> {
+                lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
+                currentActivity?.let { act -> showToast(act, "↩️ تُرك $normOrderId لك: $reason") }
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+            }
         }
         return action
     }
@@ -2784,7 +3068,11 @@ object OrderInterceptor {
         custName: String = "",
         custPhone: String = "",
         cashAmt: Double = 0.0,
-        decisionReason: String = ""
+        decisionReason: String = "",
+        pickupLat: Double = 0.0,
+        pickupLng: Double = 0.0,
+        destLat: Double = 0.0,
+        destLng: Double = 0.0
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
@@ -2927,6 +3215,10 @@ object OrderInterceptor {
                   cashAmount = cashAmt,
                   pickupAddress = pickupAddr,
                   customerDistanceKm = custDist,
+                  pickupLat = pickupLat,
+                  pickupLng = pickupLng,
+                  destLat = destLat,
+                  destLng = destLng,
                   decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $winCode)" },
                   notifyUser = true
               )
@@ -2968,6 +3260,10 @@ object OrderInterceptor {
                   cashAmount = cashAmt,
                   pickupAddress = pickupAddr,
                   customerDistanceKm = custDist,
+                  pickupLat = pickupLat,
+                  pickupLng = pickupLng,
+                  destLat = destLat,
+                  destLng = destLng,
                   decisionReason = takenReason,
                   notifyUser = true
               )
@@ -3001,6 +3297,10 @@ object OrderInterceptor {
                   cashAmount = cashAmt,
                   pickupAddress = pickupAddr,
                   customerDistanceKm = custDist,
+                  pickupLat = pickupLat,
+                  pickupLng = pickupLng,
+                  destLat = destLat,
+                  destLng = destLng,
                   decisionReason = failReason,
                   notifyUser = true
               )
@@ -3038,6 +3338,10 @@ object OrderInterceptor {
         reference: String = "",
         pickupAddress: String = "",
         customerDistanceKm: Double = 0.0,
+        pickupLat: Double = 0.0,
+        pickupLng: Double = 0.0,
+        destLat: Double = 0.0,
+        destLng: Double = 0.0,
         decisionReason: String = "",
         notifyUser: Boolean = true
     ) {
@@ -3049,16 +3353,26 @@ object OrderInterceptor {
         val cacheKey = ref.ifEmpty { cleanOrderId }
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
+        cacheOrderCoords(idKey, pickupLat, pickupLng, destLat, destLng)
+        if (cacheKey != idKey) cacheOrderCoords(cacheKey, pickupLat, pickupLng, destLat, destLng)
+
         val prevJson = synchronized(syncedOrdersCache) {
             syncedOrdersCache[cacheKey] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
         }
         val cachedTriple = customerDetailsCache[idKey] ?: customerDetailsCache[cacheKey] ?: customerDetailsCache[cleanOrderId]
+        val cachedCoords = getCachedCoords(idKey) ?: getCachedCoords(cacheKey) ?: getCachedCoords(cleanOrderId)
 
         val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }
         val mergedPickupAddr = pickupAddress.ifEmpty { prevJson?.optString("pickupAddress", "") ?: "" }
         val mergedCustName = customerName.ifEmpty { cachedTriple?.first?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerName", "") ?: "" }
         val mergedCustPhone = customerPhone.ifEmpty { cachedTriple?.second?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerPhone", "") ?: "" }
-        val mergedAddress = address.ifEmpty { prevJson?.optString("address", "") ?: "" }
+        val prevAddr = prevJson?.optString("address", "") ?: ""
+        val mergedAddress = when {
+            address.isNotEmpty() && address != "Location on map" -> address
+            prevAddr.isNotEmpty() && prevAddr != "Location on map" -> prevAddr
+            address.isNotEmpty() -> address
+            else -> prevAddr
+        }
         val prevPrice = prevJson?.optDouble("price", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
         val mergedPrice = if (price > 0.0) price else prevPrice
         val prevCash = prevJson?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
@@ -3072,7 +3386,41 @@ object OrderInterceptor {
         val prevDist = prevJson?.optDouble("distanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
         val mergedDist = if (dist > 0.0) dist else prevDist
         val prevCustDist = prevJson?.optDouble("customerDistanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-        val mergedCustDist = if (customerDistanceKm > 0.0) customerDistanceKm else prevCustDist
+
+        val prevPLat = prevJson?.optDouble("pickupLat", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val prevPLng = prevJson?.optDouble("pickupLng", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val prevDLat = prevJson?.optDouble("destLat", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val prevDLng = prevJson?.optDouble("destLng", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+
+        val mergedPLat = when {
+            pickupLat != 0.0 -> pickupLat
+            (cachedCoords?.getOrNull(0) ?: 0.0) != 0.0 -> cachedCoords!![0]
+            else -> prevPLat
+        }
+        val mergedPLng = when {
+            pickupLng != 0.0 -> pickupLng
+            (cachedCoords?.getOrNull(1) ?: 0.0) != 0.0 -> cachedCoords!![1]
+            else -> prevPLng
+        }
+        val mergedDLat = when {
+            destLat != 0.0 -> destLat
+            (cachedCoords?.getOrNull(2) ?: 0.0) != 0.0 -> cachedCoords!![2]
+            else -> prevDLat
+        }
+        val mergedDLng = when {
+            destLng != 0.0 -> destLng
+            (cachedCoords?.getOrNull(3) ?: 0.0) != 0.0 -> cachedCoords!![3]
+            else -> prevDLng
+        }
+
+        val calcFromMergedCoords = if (mergedPLat != 0.0 && mergedPLng != 0.0 && mergedDLat != 0.0 && mergedDLng != 0.0) {
+            LocationEngine.calculateDistance(mergedPLat, mergedPLng, mergedDLat, mergedDLng)
+        } else 0.0
+        val mergedCustDist = when {
+            customerDistanceKm > 0.0 -> customerDistanceKm
+            prevCustDist > 0.0 -> prevCustDist
+            else -> calcFromMergedCoords
+        }
 
         val order = OrderModel(
             id = intId,
@@ -3088,6 +3436,10 @@ object OrderInterceptor {
             cashAmount = mergedCash,
             distanceKm = mergedDist,
             customerDistanceKm = mergedCustDist,
+            pickupLat = mergedPLat,
+            pickupLng = mergedPLng,
+            destLat = mergedDLat,
+            destLng = mergedDLng,
             decisionReason = decisionReason,
             time = timeStr
         )
@@ -3121,6 +3473,10 @@ object OrderInterceptor {
                     putExtra("price", order.price)
                     putExtra("distance", order.distanceKm)
                     putExtra("customer_distance", order.customerDistanceKm)
+                    putExtra("pickup_lat", order.pickupLat)
+                    putExtra("pickup_lng", order.pickupLng)
+                    putExtra("dest_lat", order.destLat)
+                    putExtra("dest_lng", order.destLng)
                     putExtra("restaurant", order.restaurant)
                     putExtra("pickup_address", order.pickupAddress)
                     putExtra("status", order.status)

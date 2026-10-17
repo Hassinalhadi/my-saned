@@ -109,8 +109,12 @@ object NotificationHelper {
   if (order.customerName.isNotEmpty()) {
       bigText += "\n👤 ${order.customerName}"
   }
-  if (order.address.isNotEmpty()) {
+  if (order.address.isNotEmpty() && order.address != "Location on map") {
       bigText += "\n📍 ${order.address}"
+  }
+  if (order.destLat != 0.0 && order.destLng != 0.0) {
+      val cDist = if (order.customerDistanceKm > 0.0) String.format(Locale.US, " (%.1f km)", order.customerDistanceKm) else ""
+      bigText += String.format(Locale.US, "\n🏠 موقع العميل: %.5f, %.5f%s", order.destLat, order.destLng, cDist)
   }
 
   val pm = context.packageManager
