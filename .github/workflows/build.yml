@@ -4031,234 +4031,234 @@ jobs:
               'val refStr = if (!posRef.isNullOrEmpty()) posRef else idStr',
               'private fun invokeNativeInit(context: Context) {',
               r"""val refStr = if (!posRef.isNullOrEmpty()) posRef else idStr
-        val rawStatus = posStatus ?: "Delivered"
-        val cachedDetail = customerDetailsCache[idStr] ?: customerDetailsCache[refStr]
-        val syncedPrev = synchronized(syncedOrdersCache) {
-            syncedOrdersCache[refStr] ?: syncedOrdersCache[idStr]
-        }
-        val prevSyncedCash = syncedPrev?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() && it > 0.0 } ?: 0.0
-        val finalCustName = posCustName ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""
-        val finalCustPhone = posCustPhone ?: cachedDetail?.second?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerPhone", "") ?: ""
-        val finalCash = when {
-            posCash > 0.0 -> posCash
-            (cachedDetail?.third ?: 0.0) > 0.0 -> cachedDetail!!.third
-            prevSyncedCash > 0.0 -> prevSyncedCash
-            else -> 0.0
-        }
-        val effectiveCash = finalCash
-        if (effectiveCash > 0.0 || finalCustPhone.isNotEmpty() || finalCustName.isNotEmpty()) {
-            customerDetailsCache[idStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
-            if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
-        }
+                  val rawStatus = posStatus ?: "Delivered"
+                  val cachedDetail = customerDetailsCache[idStr] ?: customerDetailsCache[refStr]
+                  val syncedPrev = synchronized(syncedOrdersCache) {
+                      syncedOrdersCache[refStr] ?: syncedOrdersCache[idStr]
+                  }
+                  val prevSyncedCash = syncedPrev?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() && it > 0.0 } ?: 0.0
+                  val finalCustName = posCustName ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""
+                  val finalCustPhone = posCustPhone ?: cachedDetail?.second?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerPhone", "") ?: ""
+                  val finalCash = when {
+                      posCash > 0.0 -> posCash
+                      (cachedDetail?.third ?: 0.0) > 0.0 -> cachedDetail!!.third
+                      prevSyncedCash > 0.0 -> prevSyncedCash
+                      else -> 0.0
+                  }
+                  val effectiveCash = finalCash
+                  if (effectiveCash > 0.0 || finalCustPhone.isNotEmpty() || finalCustName.isNotEmpty()) {
+                      customerDetailsCache[idStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
+                      if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
+                  }
 
-        var calcDist = posDistKm
-        if (calcDist == 0.0 && posPickupLat != 0.0 && posPickupLng != 0.0) {
-            val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-            val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
-            if (drvLat != 0.0 && drvLng != 0.0) {
-                calcDist = LocationEngine.calculateDistance(drvLat, drvLng, posPickupLat, posPickupLng)
-            }
-        }
-        var calcCustDist = 0.0
-        if (posPickupLat != 0.0 && posPickupLng != 0.0 && posDestLat != 0.0 && posDestLng != 0.0) {
-            calcCustDist = LocationEngine.calculateDistance(posPickupLat, posPickupLng, posDestLat, posDestLng)
-        }
+                  var calcDist = posDistKm
+                  if (calcDist == 0.0 && posPickupLat != 0.0 && posPickupLng != 0.0) {
+                      val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                      val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                      if (drvLat != 0.0 && drvLng != 0.0) {
+                          calcDist = LocationEngine.calculateDistance(drvLat, drvLng, posPickupLat, posPickupLng)
+                      }
+                  }
+                  var calcCustDist = 0.0
+                  if (posPickupLat != 0.0 && posPickupLng != 0.0 && posDestLat != 0.0 && posDestLng != 0.0) {
+                      calcCustDist = LocationEngine.calculateDistance(posPickupLat, posPickupLng, posDestLat, posDestLng)
+                  }
 
-        knownDbOrderIds.add(idStr)
-        if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
-        loggedOrderIds.add("#$idStr")
-        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}"
-        if (loggedOrderIds.add(syncSignature)) {
-            val normStatus = normalizeOrderStatusDisplay(rawStatus)
-            sendOrderToLog(
-                orderId = "#$idStr",
-                price = posPrice,
-                dist = calcDist,
-                restaurant = restName,
-                status = normStatus,
-                customerName = finalCustName,
-                customerPhone = finalCustPhone,
-                address = posAddr.ifEmpty { if (posDestLat != 0.0) "Location on map" else "" },
-                cashAmount = effectiveCash,
-                currency = posCurrency,
-                reference = refStr,
-                customerDistanceKm = calcCustDist,
-                notifyUser = false
-            )
-        }
+                  knownDbOrderIds.add(idStr)
+                  if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
+                  loggedOrderIds.add("#$idStr")
+                  val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}"
+                  if (loggedOrderIds.add(syncSignature)) {
+                      val normStatus = normalizeOrderStatusDisplay(rawStatus)
+                      sendOrderToLog(
+                          orderId = "#$idStr",
+                          price = posPrice,
+                          dist = calcDist,
+                          restaurant = restName,
+                          status = normStatus,
+                          customerName = finalCustName,
+                          customerPhone = finalCustPhone,
+                          address = posAddr.ifEmpty { if (posDestLat != 0.0) "Location on map" else "" },
+                          cashAmount = effectiveCash,
+                          currency = posCurrency,
+                          reference = refStr,
+                          customerDistanceKm = calcCustDist,
+                          notifyUser = false
+                      )
+                  }
 
-        val uSt = rawStatus.uppercase(Locale.US)
-        val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-        if ((finalCustPhone.isEmpty() || effectiveCash <= 0.0) && !isCompleteOrOld) {
-            fetchOrderCustomerDetailsAsync(idStr)
-        }
-    }"""
+                  val uSt = rawStatus.uppercase(Locale.US)
+                  val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
+                  if ((finalCustPhone.isEmpty() || effectiveCash <= 0.0) && !isCompleteOrOld) {
+                      fetchOrderCustomerDetailsAsync(idStr)
+                  }
+              }"""
           )
           if 'val paymentObj = json.optJSONObject("payment")' not in oi:
               oi = oi.replace(
                   r"""val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store") ?: json.optJSONObject("branch") ?: dataObj?.optJSONObject("branch")
-            if (pickupObj != null) {
-                if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
-            }""",
+                      if (pickupObj != null) {
+                          if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
+                      }""",
                   r"""val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store") ?: json.optJSONObject("branch") ?: dataObj?.optJSONObject("branch") ?: json.optJSONObject("vendor") ?: dataObj?.optJSONObject("vendor")
-            if (pickupObj != null) {
-                if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "vendorName", "name", "store_name", "restaurant_name")
-            }
+                      if (pickupObj != null) {
+                          if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "vendorName", "name", "store_name", "restaurant_name")
+                      }
 
-            val paymentObj = json.optJSONObject("payment") ?: dataObj?.optJSONObject("payment")
-            if (paymentObj != null) {
-                if (price == 0.0) price = extractFirstDouble(paymentObj, "deliveryPrice", "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee")
-                if (cashAmount == 0.0) cashAmount = extractFirstDouble(paymentObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount", "amount")
-                val pCurr = extractFirstString(paymentObj, "currencyCode", "currency", "curr")
-                if (pCurr.isNotEmpty()) currency = pCurr
-            }
-            if (cashAmount == 0.0) {
-                cashAmount = extractFirstDouble(json, "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
-                if (cashAmount == 0.0 && dataObj != null) {
-                    cashAmount = extractFirstDouble(dataObj, "collectionAmount", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
-                }
-            }"""
+                      val paymentObj = json.optJSONObject("payment") ?: dataObj?.optJSONObject("payment")
+                      if (paymentObj != null) {
+                          if (price == 0.0) price = extractFirstDouble(paymentObj, "deliveryPrice", "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee")
+                          if (cashAmount == 0.0) cashAmount = extractFirstDouble(paymentObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount", "amount")
+                          val pCurr = extractFirstString(paymentObj, "currencyCode", "currency", "curr")
+                          if (pCurr.isNotEmpty()) currency = pCurr
+                      }
+                      if (cashAmount == 0.0) {
+                          cashAmount = extractFirstDouble(json, "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
+                          if (cashAmount == 0.0 && dataObj != null) {
+                              cashAmount = extractFirstDouble(dataObj, "collectionAmount", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
+                          }
+                      }"""
               )
           oi = replace_block(
               oi,
               'val rawOrderIdClean = orderId.replace("#", "").trim()',
               'val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"',
               r"""val rawOrderIdClean = orderId.replace("#", "").trim()
-                if (cashAmount <= 0.0) {
-                    val cachedC = customerDetailsCache[rawOrderIdClean]?.third ?: customerDetailsCache[reference]?.third ?: 0.0
-                    val syncedC = synchronized(syncedOrdersCache) {
-                        (syncedOrdersCache[reference] ?: syncedOrdersCache[rawOrderIdClean])?.optDouble("cashAmount", 0.0) ?: 0.0
-                    }
-                    cashAmount = if (cachedC > 0.0) cachedC else if (!syncedC.isNaN() && syncedC > 0.0) syncedC else 0.0
-                }
-                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
-                    val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
-                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}"
-                    if (loggedOrderIds.add(dedupKey)) {
-                        lastOrderEvent = "Order $orderId synced ($normStatus) via $channelSource"
-                        sendOrderToLog(
-                            orderId = orderId,
-                            price = cleanPrice,
-                            dist = dist,
-                            restaurant = restaurant,
-                            status = normStatus,
-                            customerName = customerName,
-                            customerPhone = customerPhone,
-                            address = address,
-                            cashAmount = cashAmount,
-                            currency = currency,
-                            reference = reference,
-                            customerDistanceKm = custDist,
-                            notifyUser = false
-                        )
-                    }
-                    return
-                }"""
+                          if (cashAmount <= 0.0) {
+                              val cachedC = customerDetailsCache[rawOrderIdClean]?.third ?: customerDetailsCache[reference]?.third ?: 0.0
+                              val syncedC = synchronized(syncedOrdersCache) {
+                                  (syncedOrdersCache[reference] ?: syncedOrdersCache[rawOrderIdClean])?.optDouble("cashAmount", 0.0) ?: 0.0
+                              }
+                              cashAmount = if (cachedC > 0.0) cachedC else if (!syncedC.isNaN() && syncedC > 0.0) syncedC else 0.0
+                          }
+                          if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
+                              val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
+                              val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}"
+                              if (loggedOrderIds.add(dedupKey)) {
+                                  lastOrderEvent = "Order $orderId synced ($normStatus) via $channelSource"
+                                  sendOrderToLog(
+                                      orderId = orderId,
+                                      price = cleanPrice,
+                                      dist = dist,
+                                      restaurant = restaurant,
+                                      status = normStatus,
+                                      customerName = customerName,
+                                      customerPhone = customerPhone,
+                                      address = address,
+                                      cashAmount = cashAmount,
+                                      currency = currency,
+                                      reference = reference,
+                                      customerDistanceKm = custDist,
+                                      notifyUser = false
+                                  )
+                              }
+                              return
+                          }"""
           )
           oi = replace_block(
               oi,
               'fun sendOrderToLog(',
               '// 1. Direct synchronous ContentProvider IPC to XposedProvider',
               r"""fun sendOrderToLog(
-        orderId: String,
-        price: Double,
-        dist: Double,
-        restaurant: String,
-        status: String,
-        customerName: String = "",
-        customerPhone: String = "",
-        address: String = "",
-        cashAmount: Double = 0.0,
-        currency: String = "SAR",
-        reference: String = "",
-        pickupAddress: String = "",
-        customerDistanceKm: Double = 0.0,
-        decisionReason: String = "",
-        notifyUser: Boolean = true
-    ) {
-        val ctx = resolveApplicationContext() ?: currentActivity
-        val cleanOrderId = orderId.replace("#", "").trim()
-        val ref = if (reference.isNotEmpty()) reference else cleanOrderId
-        val intId = cleanOrderId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
-        val idKey = if (intId != 0) intId.toString() else cleanOrderId
-        val cacheKey = ref.ifEmpty { cleanOrderId }
-        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                  orderId: String,
+                  price: Double,
+                  dist: Double,
+                  restaurant: String,
+                  status: String,
+                  customerName: String = "",
+                  customerPhone: String = "",
+                  address: String = "",
+                  cashAmount: Double = 0.0,
+                  currency: String = "SAR",
+                  reference: String = "",
+                  pickupAddress: String = "",
+                  customerDistanceKm: Double = 0.0,
+                  decisionReason: String = "",
+                  notifyUser: Boolean = true
+              ) {
+                  val ctx = resolveApplicationContext() ?: currentActivity
+                  val cleanOrderId = orderId.replace("#", "").trim()
+                  val ref = if (reference.isNotEmpty()) reference else cleanOrderId
+                  val intId = cleanOrderId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+                  val idKey = if (intId != 0) intId.toString() else cleanOrderId
+                  val cacheKey = ref.ifEmpty { cleanOrderId }
+                  val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
-        val prevJson = synchronized(syncedOrdersCache) {
-            syncedOrdersCache[cacheKey] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
-        }
-        val cachedTriple = customerDetailsCache[idKey] ?: customerDetailsCache[cacheKey] ?: customerDetailsCache[cleanOrderId]
+                  val prevJson = synchronized(syncedOrdersCache) {
+                      syncedOrdersCache[cacheKey] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
+                  }
+                  val cachedTriple = customerDetailsCache[idKey] ?: customerDetailsCache[cacheKey] ?: customerDetailsCache[cleanOrderId]
 
-        val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }
-        val mergedPickupAddr = pickupAddress.ifEmpty { prevJson?.optString("pickupAddress", "") ?: "" }
-        val mergedCustName = customerName.ifEmpty { cachedTriple?.first?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerName", "") ?: "" }
-        val mergedCustPhone = customerPhone.ifEmpty { cachedTriple?.second?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerPhone", "") ?: "" }
-        val mergedAddress = address.ifEmpty { prevJson?.optString("address", "") ?: "" }
-        val prevPrice = prevJson?.optDouble("price", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-        val mergedPrice = if (price > 0.0) price else prevPrice
-        val prevCash = prevJson?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-        val cachedCash = cachedTriple?.third ?: 0.0
-        val mergedCash = when {
-            cashAmount > 0.0 -> cashAmount
-            cachedCash > 0.0 -> cachedCash
-            prevCash > 0.0 -> prevCash
-            else -> 0.0
-        }
-        val prevDist = prevJson?.optDouble("distanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-        val mergedDist = if (dist > 0.0) dist else prevDist
-        val prevCustDist = prevJson?.optDouble("customerDistanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-        val mergedCustDist = if (customerDistanceKm > 0.0) customerDistanceKm else prevCustDist
+                  val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }
+                  val mergedPickupAddr = pickupAddress.ifEmpty { prevJson?.optString("pickupAddress", "") ?: "" }
+                  val mergedCustName = customerName.ifEmpty { cachedTriple?.first?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerName", "") ?: "" }
+                  val mergedCustPhone = customerPhone.ifEmpty { cachedTriple?.second?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerPhone", "") ?: "" }
+                  val mergedAddress = address.ifEmpty { prevJson?.optString("address", "") ?: "" }
+                  val prevPrice = prevJson?.optDouble("price", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+                  val mergedPrice = if (price > 0.0) price else prevPrice
+                  val prevCash = prevJson?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+                  val cachedCash = cachedTriple?.third ?: 0.0
+                  val mergedCash = when {
+                      cashAmount > 0.0 -> cashAmount
+                      cachedCash > 0.0 -> cachedCash
+                      prevCash > 0.0 -> prevCash
+                      else -> 0.0
+                  }
+                  val prevDist = prevJson?.optDouble("distanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+                  val mergedDist = if (dist > 0.0) dist else prevDist
+                  val prevCustDist = prevJson?.optDouble("customerDistanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+                  val mergedCustDist = if (customerDistanceKm > 0.0) customerDistanceKm else prevCustDist
 
-        val order = OrderModel(
-            id = intId,
-            reference = ref,
-            status = status,
-            restaurant = mergedRestaurant,
-            pickupAddress = mergedPickupAddr,
-            customerName = mergedCustName,
-            customerPhone = mergedCustPhone,
-            address = mergedAddress,
-            price = mergedPrice,
-            currency = currency,
-            cashAmount = mergedCash,
-            distanceKm = mergedDist,
-            customerDistanceKm = mergedCustDist,
-            decisionReason = decisionReason,
-            time = timeStr
-        )
+                  val order = OrderModel(
+                      id = intId,
+                      reference = ref,
+                      status = status,
+                      restaurant = mergedRestaurant,
+                      pickupAddress = mergedPickupAddr,
+                      customerName = mergedCustName,
+                      customerPhone = mergedCustPhone,
+                      address = mergedAddress,
+                      price = mergedPrice,
+                      currency = currency,
+                      cashAmount = mergedCash,
+                      distanceKm = mergedDist,
+                      customerDistanceKm = mergedCustDist,
+                      decisionReason = decisionReason,
+                      time = timeStr
+                  )
 
-        if (cacheKey.isNotEmpty()) {
-            syncedOrdersCache[cacheKey] = order.toJson()
-        }
-        if (idKey.isNotEmpty() && idKey != cacheKey) {
-            syncedOrdersCache[idKey] = order.toJson()
-        }
+                  if (cacheKey.isNotEmpty()) {
+                      syncedOrdersCache[cacheKey] = order.toJson()
+                  }
+                  if (idKey.isNotEmpty() && idKey != cacheKey) {
+                      syncedOrdersCache[idKey] = order.toJson()
+                  }
 
-        if (ctx != null) {"""
+                  if (ctx != null) {"""
           )
           oi = oi.replace(
               """                    putExtra("price", price)
-                    putExtra("distance", dist)
-                    putExtra("customer_distance", customerDistanceKm)
-                    putExtra("restaurant", restaurant)
-                    putExtra("pickup_address", pickupAddress)
-                    putExtra("status", status)
-                    putExtra("decision_reason", decisionReason)
-                    putExtra("customer_name", customerName)
-                    putExtra("customer_phone", customerPhone)
-                    putExtra("address", address)
-                    putExtra("cash_amount", cashAmount)""",
+                              putExtra("distance", dist)
+                              putExtra("customer_distance", customerDistanceKm)
+                              putExtra("restaurant", restaurant)
+                              putExtra("pickup_address", pickupAddress)
+                              putExtra("status", status)
+                              putExtra("decision_reason", decisionReason)
+                              putExtra("customer_name", customerName)
+                              putExtra("customer_phone", customerPhone)
+                              putExtra("address", address)
+                              putExtra("cash_amount", cashAmount)""",
               """                    putExtra("price", order.price)
-                    putExtra("distance", order.distanceKm)
-                    putExtra("customer_distance", order.customerDistanceKm)
-                    putExtra("restaurant", order.restaurant)
-                    putExtra("pickup_address", order.pickupAddress)
-                    putExtra("status", order.status)
-                    putExtra("decision_reason", order.decisionReason)
-                    putExtra("customer_name", order.customerName)
-                    putExtra("customer_phone", order.customerPhone)
-                    putExtra("address", order.address)
-                    putExtra("cash_amount", order.cashAmount)"""
+                              putExtra("distance", order.distanceKm)
+                              putExtra("customer_distance", order.customerDistanceKm)
+                              putExtra("restaurant", order.restaurant)
+                              putExtra("pickup_address", order.pickupAddress)
+                              putExtra("status", order.status)
+                              putExtra("decision_reason", order.decisionReason)
+                              putExtra("customer_name", order.customerName)
+                              putExtra("customer_phone", order.customerPhone)
+                              putExtra("address", order.address)
+                              putExtra("cash_amount", order.cashAmount)"""
           )
 
           open(oi_path, "w").write(oi)
