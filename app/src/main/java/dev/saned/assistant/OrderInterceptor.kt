@@ -1750,7 +1750,8 @@ object OrderInterceptor {
         return when {
             u.contains("DELIVERED") || u == "DELIVER" -> "Delivered"
             u.contains("COMPLETED") || u == "COMPLETE" -> "Completed"
-            u.contains("PICKED") || u.contains("COLLECTED") -> "Picked Up"
+            u.contains("PICKED") ||
+               u.contains("DISPATCH") || u.contains("COLLECTED") -> "Picked Up"
             u.contains("ARRIVED") -> "Arrived"
             u.contains("WAY") || u.contains("PROGRESS") -> "In Progress"
             u.contains("ACCEPT") || u.contains("قبول") -> "Accepted"
@@ -1769,6 +1770,7 @@ object OrderInterceptor {
                u.contains("COMPLET") ||
                u.contains("COLLECT") ||
                u.contains("PICKED") ||
+               u.contains("DISPATCH") ||
                u.contains("ACCEPT") ||
                u.contains("ARRIV") ||
                u.contains("PROGRESS") ||
@@ -1827,10 +1829,23 @@ object OrderInterceptor {
         val refStr = if (!posRef.isNullOrEmpty()) posRef else idStr
         val rawStatus = posStatus ?: "Delivered"
         val cachedDetail = customerDetailsCache[idStr] ?: customerDetailsCache[refStr]
-        val finalCustName = posCustName ?: cachedDetail?.first ?: ""
-        val finalCustPhone = posCustPhone ?: cachedDetail?.second ?: ""
-        val finalCash = if (posCash > 0.0) posCash else (cachedDetail?.third ?: 0.0)
-        val effectiveCash = if (posPayMethod.contains("PREPAID", ignoreCase = true) || posPayMethod.contains("ONLINE", ignoreCase = true)) 0.0 else finalCash
+        val syncedPrev = synchronized(syncedOrdersCache) {
+            syncedOrdersCache[refStr] ?: syncedOrdersCache[idStr]
+        }
+        val prevSyncedCash = syncedPrev?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() && it > 0.0 } ?: 0.0
+        val finalCustName = posCustName ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""
+        val finalCustPhone = posCustPhone ?: cachedDetail?.second?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerPhone", "") ?: ""
+        val finalCash = when {
+            posCash > 0.0 -> posCash
+            (cachedDetail?.third ?: 0.0) > 0.0 -> cachedDetail!!.third
+            prevSyncedCash > 0.0 -> prevSyncedCash
+            else -> 0.0
+        }
+        val effectiveCash = finalCash
+        if (effectiveCash > 0.0 || finalCustPhone.isNotEmpty() || finalCustName.isNotEmpty()) {
+            customerDetailsCache[idStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
+            if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
+        }
 
         var calcDist = posDistKm
         if (calcDist == 0.0 && posPickupLat != 0.0 && posPickupLng != 0.0) {
@@ -1848,7 +1863,7 @@ object OrderInterceptor {
         knownDbOrderIds.add(idStr)
         if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
         loggedOrderIds.add("#$idStr")
-        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}"
+        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}"
         if (loggedOrderIds.add(syncSignature)) {
             val normStatus = normalizeOrderStatusDisplay(rawStatus)
             sendOrderToLog(
@@ -1870,7 +1885,7 @@ object OrderInterceptor {
 
         val uSt = rawStatus.uppercase(Locale.US)
         val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-        if (finalCustPhone.isEmpty() && !isCompleteOrOld) {
+        if ((finalCustPhone.isEmpty() || effectiveCash <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
     }
@@ -1904,6 +1919,33 @@ object OrderInterceptor {
       val flags = SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
       val openedDb = SQLiteDatabase.openDatabase(dbFile.path, null, flags)
       exactDb = openedDb
+      // Pre-scan payment table for any food/order/collection amount columns so Picked Up orders never lose food price
+      var payCursor: Cursor? = null
+      try {
+          payCursor = openedDb.rawQuery("SELECT * FROM payment", null)
+          val colNames = payCursor.columnNames ?: emptyArray()
+          val idColIdx = colNames.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
+          if (idColIdx >= 0) {
+              while (payCursor.moveToNext()) {
+                  val dId = cursorStringOrNull(payCursor, idColIdx) ?: cursorDoubleOrNull(payCursor, idColIdx)?.toLong()?.toString() ?: continue
+                  var bestFoodAmt = 0.0
+                  for (ci in colNames.indices) {
+                      if (ci == idColIdx) continue
+                      val cn = colNames[ci].lowercase(Locale.US)
+                      if (cn.contains("delivery") || cn.contains("driver") || cn.contains("bonus") || cn.contains("tip") || cn.contains("id")) continue
+                      val dv = cursorDoubleOrNull(payCursor, ci) ?: 0.0
+                      if (dv > bestFoodAmt) bestFoodAmt = dv
+                  }
+                  if (bestFoodAmt > 0.0) {
+                      val prev = customerDetailsCache[dId]
+                      customerDetailsCache[dId] = Triple(prev?.first ?: "", prev?.second ?: "", bestFoodAmt)
+                  }
+              }
+          }
+      } catch (_: Throwable) {
+      } finally {
+          try { payCursor?.close() } catch (_: Throwable) {}
+      }
       val c = openedDb.rawQuery(exactSql, null)
       exactCursor = c
       while (c.moveToNext()) {
@@ -1932,10 +1974,14 @@ object OrderInterceptor {
   val kClientPhone = serverKeys.getOrNull(5) ?: "clientPhone"
   val kContactNum = serverKeys.getOrNull(6) ?: "contactNumber"
 
-  // 1. Exact Ljw.a endpoint via Native.safeB(3, orderIdInt, ...): GET https://gateway.saned.io/api/v1/dispatch-location/contact-number/{id}
   if (orderIdInt > 0) {
+      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+      var cPhone = customerDetailsCache[cleanId]?.second ?: ""
+      var cName = customerDetailsCache[cleanId]?.first ?: ""
+      var cCash = customerDetailsCache[cleanId]?.third ?: 0.0
+
+      // 1. Exact Ljw.a endpoint via Native.safeB(3, orderIdInt, ...): GET https://gateway.saned.io/api/v1/dispatch-location/contact-number/{id}
       try {
-          val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
           val spec = Native.safeB(3, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
           if (spec.size >= 2 && spec[1].startsWith("http")) {
               val rb = Request.Builder().url(spec[1]).get()
@@ -1948,17 +1994,55 @@ object OrderInterceptor {
               if (code in 200..299 && body.trim().startsWith("{")) {
                   val json = JSONObject(body)
                   val dataObj = json.optJSONObject("data") ?: json
-                  val cPhone = extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
-                  val cName = extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
-                  val cCash = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount")
-                  if (cPhone.isNotEmpty() || cName.isNotEmpty()) {
-                      customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
-                      DiagnosticLogger.logStep("ContactFetch", "Fetched customer phone for #$cleanId via Ljw.a")
-                      return@launch
-                  }
+                  val p = extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
+                  val n = extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
+                  val ca = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal")
+                  if (p.isNotEmpty()) cPhone = p
+                  if (n.isNotEmpty()) cName = n
+                  if (ca > 0.0) cCash = ca
               }
           }
       } catch (_: Throwable) {}
+
+      // 2. If food/cash amount is still 0.0 on an assigned order, fetch read-only dispatch details GET /api/v1/dispatch/{id}
+      if (cCash <= 0.0 && knownDbOrderIds.contains(cleanId)) {
+          try {
+              val rb = Request.Builder().url("https://gateway.saned.io/api/v1/dispatch/$orderIdInt").get()
+                  .header("Authorization", "Bearer $rawTok")
+                  .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
+                  .header("User-Agent", "okhttp/5.1.0")
+              if (capturedDriverCipherB64.isNotEmpty()) rb.header("x-unique-Identifier", capturedDriverCipherB64)
+              val resp = client.newCall(rb.build()).execute()
+              val code = resp.code
+              val body = resp.body?.string() ?: ""
+              resp.close()
+              if (code in 200..299 && body.trim().startsWith("{")) {
+                  val json = JSONObject(body)
+                  val dataObj = json.optJSONObject("data") ?: json
+                  val payObj = dataObj.optJSONObject("payment") ?: json.optJSONObject("payment")
+                  var ca = if (payObj != null) extractFirstDouble(payObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal", "amount") else 0.0
+                  if (ca <= 0.0) ca = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal")
+                  if (ca > 0.0) cCash = ca
+                  val clObj = dataObj.optJSONObject("client") ?: dataObj.optJSONObject("customer")
+                  if (cPhone.isEmpty()) {
+                      cPhone = (if (clObj != null) extractFirstString(clObj, kClientPhone, kContactNum, "phone", "mobile") else "").ifEmpty {
+                          extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
+                      }
+                  }
+                  if (cName.isEmpty()) {
+                      cName = (if (clObj != null) extractFirstString(clObj, "subscriberName", "name", "customer_name") else "").ifEmpty {
+                          extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
+                      }
+                  }
+              }
+          } catch (_: Throwable) {}
+      }
+
+      if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0) {
+          customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
+          DiagnosticLogger.logStep("ContactFetch", "Fetched details for #$cleanId (phone=${cPhone.isNotEmpty()}, cash=$cCash)")
+          if (ctx != null) scanJahezDatabases(ctx)
+      }
   }
         }
     }
@@ -2205,6 +2289,7 @@ object OrderInterceptor {
               failedPollingCount = 0
               if (ctx != null) scanJahezDatabases(ctx)
               findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+              if (ctx != null) scanJahezDatabases(ctx)
               return
           }
       }
@@ -2389,9 +2474,23 @@ object OrderInterceptor {
                 if (address.isEmpty()) address = extractFirstString(dropoffObj, "address", "location_name", "formatted_address", "name")
             }
 
-            val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store") ?: json.optJSONObject("branch") ?: dataObj?.optJSONObject("branch")
+            val pickupObj = json.optJSONObject("pickup") ?: dataObj?.optJSONObject("pickup") ?: json.optJSONObject("store") ?: dataObj?.optJSONObject("store") ?: json.optJSONObject("branch") ?: dataObj?.optJSONObject("branch") ?: json.optJSONObject("vendor") ?: dataObj?.optJSONObject("vendor")
             if (pickupObj != null) {
-                if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "name", "store_name", "restaurant_name")
+                if (restaurant.isEmpty()) restaurant = extractFirstString(pickupObj, "vendorName", "name", "store_name", "restaurant_name")
+            }
+
+            val paymentObj = json.optJSONObject("payment") ?: dataObj?.optJSONObject("payment")
+            if (paymentObj != null) {
+                if (price == 0.0) price = extractFirstDouble(paymentObj, "deliveryPrice", "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee")
+                if (cashAmount == 0.0) cashAmount = extractFirstDouble(paymentObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount", "amount")
+                val pCurr = extractFirstString(paymentObj, "currencyCode", "currency", "curr")
+                if (pCurr.isNotEmpty()) currency = pCurr
+            }
+            if (cashAmount == 0.0) {
+                cashAmount = extractFirstDouble(json, "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
+                if (cashAmount == 0.0 && dataObj != null) {
+                    cashAmount = extractFirstDouble(dataObj, "collectionAmount", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
+                }
             }
 
             // Coordinate-based Haversine distance calculation matching Lb11.e, Ls90.g, and Lqz.a
@@ -2456,9 +2555,16 @@ object OrderInterceptor {
                 // If order is from SQLite DB or already has a historical/active status (Delivered, Completed, Accepted, Picked Up, Cancelled),
                 // sync it directly to the Orders tab with its real status without running new-offer Auto-Accept/Reject gates!
                 val rawOrderIdClean = orderId.replace("#", "").trim()
+                if (cashAmount <= 0.0) {
+                    val cachedC = customerDetailsCache[rawOrderIdClean]?.third ?: customerDetailsCache[reference]?.third ?: 0.0
+                    val syncedC = synchronized(syncedOrdersCache) {
+                        (syncedOrdersCache[reference] ?: syncedOrdersCache[rawOrderIdClean])?.optDouble("cashAmount", 0.0) ?: 0.0
+                    }
+                    cashAmount = if (cachedC > 0.0) cachedC else if (!syncedC.isNaN() && syncedC > 0.0) syncedC else 0.0
+                }
                 if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
-                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}"
+                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}"
                     if (loggedOrderIds.add(dedupKey)) {
                         lastOrderEvent = "Order $orderId synced ($normStatus) via $channelSource"
                         sendOrderToLog(
@@ -2473,13 +2579,14 @@ object OrderInterceptor {
                             cashAmount = cashAmount,
                             currency = currency,
                             reference = reference,
+                            customerDistanceKm = custDist,
                             notifyUser = false
                         )
                     }
                     return
                 }
 
-                val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
+    val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
                 orderId = normOrderId
                 if (loggedOrderIds.add(normOrderId)) {
                     lastOrderEvent = "Order $orderId detected via $channelSource"
@@ -2935,35 +3042,66 @@ object OrderInterceptor {
         notifyUser: Boolean = true
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
-        val ref = if (reference.isNotEmpty()) reference else orderId.replace("#", "")
-        val intId = orderId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+        val cleanOrderId = orderId.replace("#", "").trim()
+        val ref = if (reference.isNotEmpty()) reference else cleanOrderId
+        val intId = cleanOrderId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+        val idKey = if (intId != 0) intId.toString() else cleanOrderId
+        val cacheKey = ref.ifEmpty { cleanOrderId }
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+        val prevJson = synchronized(syncedOrdersCache) {
+            syncedOrdersCache[cacheKey] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
+        }
+        val cachedTriple = customerDetailsCache[idKey] ?: customerDetailsCache[cacheKey] ?: customerDetailsCache[cleanOrderId]
+
+        val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }
+        val mergedPickupAddr = pickupAddress.ifEmpty { prevJson?.optString("pickupAddress", "") ?: "" }
+        val mergedCustName = customerName.ifEmpty { cachedTriple?.first?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerName", "") ?: "" }
+        val mergedCustPhone = customerPhone.ifEmpty { cachedTriple?.second?.takeIf { it.isNotEmpty() } ?: prevJson?.optString("customerPhone", "") ?: "" }
+        val mergedAddress = address.ifEmpty { prevJson?.optString("address", "") ?: "" }
+        val prevPrice = prevJson?.optDouble("price", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val mergedPrice = if (price > 0.0) price else prevPrice
+        val prevCash = prevJson?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val cachedCash = cachedTriple?.third ?: 0.0
+        val mergedCash = when {
+            cashAmount > 0.0 -> cashAmount
+            cachedCash > 0.0 -> cachedCash
+            prevCash > 0.0 -> prevCash
+            else -> 0.0
+        }
+        val prevDist = prevJson?.optDouble("distanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val mergedDist = if (dist > 0.0) dist else prevDist
+        val prevCustDist = prevJson?.optDouble("customerDistanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val mergedCustDist = if (customerDistanceKm > 0.0) customerDistanceKm else prevCustDist
 
         val order = OrderModel(
             id = intId,
             reference = ref,
             status = status,
-            restaurant = restaurant,
-            pickupAddress = pickupAddress,
-            customerName = customerName,
-            customerPhone = customerPhone,
-            address = address,
-            price = price,
+            restaurant = mergedRestaurant,
+            pickupAddress = mergedPickupAddr,
+            customerName = mergedCustName,
+            customerPhone = mergedCustPhone,
+            address = mergedAddress,
+            price = mergedPrice,
             currency = currency,
-            cashAmount = cashAmount,
-            distanceKm = dist,
-            customerDistanceKm = customerDistanceKm,
+            cashAmount = mergedCash,
+            distanceKm = mergedDist,
+            customerDistanceKm = mergedCustDist,
             decisionReason = decisionReason,
             time = timeStr
         )
 
-        val cacheKey = ref.ifEmpty { orderId.replace("#", "").trim() }
         if (cacheKey.isNotEmpty()) {
             syncedOrdersCache[cacheKey] = order.toJson()
         }
+        if (idKey.isNotEmpty() && idKey != cacheKey) {
+            syncedOrdersCache[idKey] = order.toJson()
+        }
 
         if (ctx != null) {
-            // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
+
+    // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
             try {
                 val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
                 val extras = android.os.Bundle().apply {
@@ -2980,17 +3118,17 @@ object OrderInterceptor {
                     addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
                     putExtra("order_id", orderId)
                     putExtra("reference", ref)
-                    putExtra("price", price)
-                    putExtra("distance", dist)
-                    putExtra("customer_distance", customerDistanceKm)
-                    putExtra("restaurant", restaurant)
-                    putExtra("pickup_address", pickupAddress)
-                    putExtra("status", status)
-                    putExtra("decision_reason", decisionReason)
-                    putExtra("customer_name", customerName)
-                    putExtra("customer_phone", customerPhone)
-                    putExtra("address", address)
-                    putExtra("cash_amount", cashAmount)
+                    putExtra("price", order.price)
+                    putExtra("distance", order.distanceKm)
+                    putExtra("customer_distance", order.customerDistanceKm)
+                    putExtra("restaurant", order.restaurant)
+                    putExtra("pickup_address", order.pickupAddress)
+                    putExtra("status", order.status)
+                    putExtra("decision_reason", order.decisionReason)
+                    putExtra("customer_name", order.customerName)
+                    putExtra("customer_phone", order.customerPhone)
+                    putExtra("address", order.address)
+                    putExtra("cash_amount", order.cashAmount)
                     putExtra("currency", currency)
                     putExtra("notify_user", notifyUser)
                 }

@@ -131,7 +131,10 @@ class XposedProvider : ContentProvider() {
                   address = order.address.ifEmpty { oldModel.address },
                   pickupAddress = order.pickupAddress.ifEmpty { oldModel.pickupAddress },
                   restaurant = order.restaurant.ifEmpty { oldModel.restaurant },
-                  price = if (order.price > 0.0) order.price else oldModel.price
+                  price = if (order.price > 0.0) order.price else oldModel.price,
+                  cashAmount = if (order.cashAmount > 0.0) order.cashAmount else oldModel.cashAmount,
+                  distanceKm = if (order.distanceKm > 0.0) order.distanceKm else oldModel.distanceKm,
+                  customerDistanceKm = if (order.customerDistanceKm > 0.0) order.customerDistanceKm else oldModel.customerDistanceKm
               )
               break
           }
