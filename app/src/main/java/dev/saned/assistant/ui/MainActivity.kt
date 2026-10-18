@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
+    private lateinit var edtMaxOrders: EditText
 
     // Active Server Polling & Parallel Acceptance
     private lateinit var chkActivePolling: CheckBox
@@ -835,9 +836,11 @@ class MainActivity : AppCompatActivity() {
             val maxRest = SettingsStore.getMaxDistRest(this)
             val maxCust = SettingsStore.getMaxDistCust(this)
             val minP = SettingsStore.getMinPrice(this)
+            val maxOrd = SettingsStore.getMaxOrdersLimit(this)
+            val maxOrdStr = if (maxOrd <= 0) "∞ Unlimited" else maxOrd.toString()
             val showFood = SettingsStore.isShowFoodPrice(this)
             tvOrdersSubStatus.text = if (isRun) {
-                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
+                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Orders Limit: $maxOrdStr • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
             } else {
                 "🔴 Master Switch OFF (Incoming orders are still captured & shown below)"
             }
@@ -2138,6 +2141,10 @@ class MainActivity : AppCompatActivity() {
         edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
         layout.addView(edtMaxDistCust)
 
+        layout.addView(createLabel("How many order you want (عدد الطلبات المسموح بقبولها - Set 0 for Unlimited / عدد لا متناهي):"))
+        edtMaxOrders = createInput(SettingsStore.getMaxOrdersLimit(this).toString())
+        layout.addView(edtMaxOrders)
+
         card.addView(layout)
         return card
     }
@@ -2243,6 +2250,7 @@ class MainActivity : AppCompatActivity() {
         val minPrice = edtMinPrice.text.toString().toDoubleOrNull() ?: 0.0
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
+        val maxOrders = if (::edtMaxOrders.isInitialized) (edtMaxOrders.text.toString().trim().toIntOrNull() ?: 0) else 0
 
         val activePolling = chkActivePolling.isChecked
         val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
@@ -2270,6 +2278,7 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setMinPrice(this, minPrice)
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)
+        SettingsStore.setMaxOrdersLimit(this, maxOrders)
 
         SettingsStore.setActivePolling(this, activePolling)
         SettingsStore.setPollInterval(this, pollInterval)

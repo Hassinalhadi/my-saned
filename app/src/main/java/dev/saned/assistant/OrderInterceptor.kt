@@ -98,8 +98,35 @@ object OrderInterceptor {
     @Volatile var minOrderPrice: Double = 0.0
     @Volatile var maxDistToRestaurant: Double = 0.0
     @Volatile var maxDistCustomer: Double = 0.0
+    @Volatile var maxOrdersLimit: Int = 0 // 0 = Unlimited (عدد لا متناهي), > 0 = custom target count
+    val acceptedSessionOrdersCount = AtomicInteger(0)
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
+
+    data class PendingMaxOrderRetry(
+        val orderIdNum: String,
+        val orderIdInt: Int,
+        val price: Double,
+        val dist: Double,
+        val restaurant: String,
+        val custDist: Double,
+        val pickupAddr: String,
+        val custAddr: String,
+        val custName: String,
+        val custPhone: String,
+        val cashAmt: Double,
+        val decisionReason: String,
+        val pickupLat: Double,
+        val pickupLng: Double,
+        val destLat: Double,
+        val destLng: Double,
+        val foodPrice: Double,
+        val paymentMethod: String,
+        val reference: String,
+        val enqueuedAtRealtime: Long = SystemClock.elapsedRealtime()
+    )
+    val pendingMaxLimitOrders = ConcurrentHashMap<Int, PendingMaxOrderRetry>()
+    private val isRetryLoopActive = AtomicBoolean(false)
 
     // Active Server Polling & Parallel Acceptance
     @Volatile var isActivePolling: Boolean = true
@@ -894,9 +921,7 @@ object OrderInterceptor {
               if (appContext == null) {
                   try { initAppContext(ctx) } catch (_: Throwable) {}
               }
-              if (cachedAuthToken.isEmpty()) {
-                  readExactJahezEncryptedPrefs(ctx)
-              }
+              readExactJahezEncryptedPrefs(ctx)
               scanJahezDatabases(ctx)
           }
       } catch (t: Throwable) {
@@ -1039,6 +1064,7 @@ object OrderInterceptor {
         minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
         maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
+        maxOrdersLimit = intent.getIntExtra("max_orders_limit", maxOrdersLimit).coerceAtLeast(0)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
         isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
         LocationEngine.isMasterRunning = isMasterRunning
@@ -1071,6 +1097,7 @@ object OrderInterceptor {
                 minOrderPrice = json.optDouble("min_price", minOrderPrice)
                 maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
                 maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
+                maxOrdersLimit = json.optInt("max_orders_limit", maxOrdersLimit).coerceAtLeast(0)
             }
         } catch (_: Throwable) {}
     }
@@ -1107,6 +1134,7 @@ object OrderInterceptor {
                     minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
                     maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
                     maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
+                    maxOrdersLimit = bundle.getString("max_orders_limit_str", null)?.toIntOrNull() ?: bundle.getInt("max_orders_limit", maxOrdersLimit)
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
                 }
@@ -1130,6 +1158,7 @@ object OrderInterceptor {
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
+            maxOrdersLimit = p.getString("max_orders_limit_str", null)?.toIntOrNull() ?: p.getInt("max_orders_limit", maxOrdersLimit)
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
@@ -1238,8 +1267,9 @@ object OrderInterceptor {
   }
   val tok = prefs.getString(Native.safeI(), "") ?: ""
   if (tok.isNotEmpty()) {
-      if (cachedAuthToken.isEmpty()) {
-          DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
+      val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
+      if (cachedAuthToken != normNew) {
+          DiagnosticLogger.logStep("EncryptedPrefs", "Auth token refreshed from EncryptedPrefs (len=${tok.length})")
       }
       checkAndSetToken(tok, Native.safeI())
   }
@@ -1695,13 +1725,23 @@ object OrderInterceptor {
                                   val dataStr = intent.dataString ?: ""
                                   val cmpStr = intent.component?.className ?: ""
                                   val pkgStr = intent.`package` ?: ""
-                                  val isNavIntent = dataStr.contains("geo:", ignoreCase = true) ||
+                                  val isInternalSanedIntent = dataStr.startsWith("saned://", ignoreCase = true) ||
+                                      dataStr.contains("dispatch.assigning", ignoreCase = true) ||
+                                      pkgStr.equals("net.jahez.fleets", ignoreCase = true) ||
+                                      cmpStr.contains("jahez", ignoreCase = true) ||
+                                      cmpStr.contains("saned", ignoreCase = true) ||
+                                      orderIdInt != 0
+                                  val isNavIntent = !isInternalSanedIntent && (
+                                      dataStr.startsWith("geo:", ignoreCase = true) ||
                                       dataStr.contains("google.navigation", ignoreCase = true) ||
                                       dataStr.contains("maps.google", ignoreCase = true) ||
+                                      dataStr.contains("google.com/maps", ignoreCase = true) ||
+                                      dataStr.contains("maps.app.goo.gl", ignoreCase = true) ||
                                       dataStr.contains("maps/dir", ignoreCase = true) ||
                                       dataStr.contains("waze", ignoreCase = true) ||
                                       pkgStr.contains("maps", ignoreCase = true) ||
-                                      (actStr == Intent.ACTION_VIEW && dataStr.isNotEmpty())
+                                      pkgStr.contains("waze", ignoreCase = true)
+                                  )
                                   if (isNavIntent && !intent.getBooleanExtra("saned_nav_bypass", false)) {
                                       if (coordsCache.isEmpty()) {
                                           try { resolveApplicationContext()?.let { scanJahezDatabases(it) } } catch (_: Throwable) {}
@@ -2156,6 +2196,11 @@ object OrderInterceptor {
 
         val uSt = rawStatus.uppercase(Locale.US)
         val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
+        if (uSt.contains("PICKED") || uSt.contains("COLLECT") || isCompleteOrOld) {
+            if (pendingMaxLimitOrders.isNotEmpty()) {
+                triggerPendingMaxLimitOrdersRetry("Order #$idStr status -> $rawStatus")
+            }
+        }
         if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
@@ -2494,8 +2539,11 @@ object OrderInterceptor {
           if (inputBytes != null && outputBytes != null) {
               try {
                   if (startsWithDriverIdPrefix(inputBytes)) {
-                      capturedDriverCipherB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
-                      DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
+                      val newB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
+                      if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
+                          capturedDriverCipherB64 = newB64
+                          DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
+                      }
                   }
               } catch (_: Throwable) {}
           }
@@ -3079,9 +3127,31 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
+    fun countCurrentActiveOrders(): Int {
+        var count = 0
+        synchronized(syncedOrdersCache) {
+            for (obj in syncedOrdersCache.values) {
+                val st = obj.optString("status", "").uppercase(Locale.US)
+                val isMissed = obj.optBoolean("isMissedOrRejected", false)
+                if (!isMissed && (st.contains("ACCEPT") || st.contains("DISPATCH") || st.contains("PICKED") || st.contains("ARRIV") || st.contains("PROGRESS"))) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
         if (!isMasterRunning) {
             return "MANUAL" to "Master switch off"
+        }
+
+        // Check user's "How many order you want" limit (0 = Unlimited / عدد لا متناهي من الطلبات)
+        if (maxOrdersLimit > 0) {
+            val currentActive = countCurrentActiveOrders()
+            if (currentActive >= maxOrdersLimit) {
+                return "MANUAL" to "Reached your configured order limit ($currentActive / $maxOrdersLimit orders)"
+            }
         }
 
         val failedReasons = mutableListOf<String>()
@@ -3274,7 +3344,8 @@ object OrderInterceptor {
         reference: String = ""
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
-        if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
+        // Always refresh token from in-memory EncryptedSharedPreferences before firing PUT so we never hit HTTP 401 TokenExpired!
+        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
         var token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val isAccept = (action == "ACCEPT")
         val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
@@ -3315,10 +3386,20 @@ object OrderInterceptor {
 
                 var nativeHeaders = buildHeaders(token)
                 val emptyBody = "".toRequestBody(null)
+                val effectiveDesiredMax = if (maxOrdersLimit > 0) maxOrdersLimit else 999
                 val jsonAcceptBody = JSONObject().apply {
-                    if (orderIdInt > 0) put("requestId", orderIdInt)
+                    if (orderIdInt > 0) {
+                        put("requestId", orderIdInt)
+                        put("dispatchId", orderIdInt)
+                    }
                     put("order_id", orderIdNum)
                     put("status", "ACCEPTED")
+                    put("force", true)
+                    put("forceAccept", true)
+                    put("ignoreLimit", true)
+                    put("ignoreMaxOrders", true)
+                    put("maxAcceptedOrders", effectiveDesiredMax)
+                    put("maxOrders", effectiveDesiredMax)
                 }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
                 val candidateSpecs = mutableListOf<Pair<String, String>>()
@@ -3326,6 +3407,9 @@ object OrderInterceptor {
                     candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
                 } else {
                     candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
+                    candidateSpecs.add("PUT_FORCE_JSON" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
+                    candidateSpecs.add("POST" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
+                    candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept/$orderIdInt")
                 }
 
                 var winCode: Int? = null
@@ -3347,7 +3431,16 @@ object OrderInterceptor {
                         val rb = Request.Builder().url(uStr)
                         when (mName.uppercase(Locale.US)) {
                             "PUT" -> rb.put(emptyBody)
-                            "POST" -> rb.post(if (uStr.endsWith("/$orderIdInt")) jsonAcceptBody else emptyBody)
+                            "PUT_FORCE_JSON" -> {
+                                rb.put(jsonAcceptBody)
+                                rb.header("x-ignore-limit", "true")
+                                rb.header("x-max-orders", effectiveDesiredMax.toString())
+                            }
+                            "POST" -> {
+                                rb.post(jsonAcceptBody)
+                                rb.header("x-ignore-limit", "true")
+                                rb.header("x-max-orders", effectiveDesiredMax.toString())
+                            }
                             "PATCH" -> rb.patch(jsonAcceptBody)
                             else -> rb.get()
                         }
@@ -3392,7 +3485,11 @@ object OrderInterceptor {
                             }
                         }
 
-                        if (code != 404 && code != 405) {
+                        val isMaxLimitErr = (code == 400 || code == 409 || code == 422) &&
+                            (bodyStr.contains("maximum number", ignoreCase = true) ||
+                             bodyStr.contains("max", ignoreCase = true) ||
+                             bodyStr.contains("limit", ignoreCase = true))
+                        if (code != 404 && code != 405 && !isMaxLimitErr) {
                             break
                         }
                     } catch (t: Throwable) {
@@ -3431,11 +3528,14 @@ object OrderInterceptor {
                                 if (ph.isNotEmpty()) parsedPhone = ph
                             } catch (_: Throwable) {}
                         }
+                        if (orderIdInt != 0) pendingMaxLimitOrders.remove(orderIdInt)
+                        val totalAcc = acceptedSessionOrdersCount.incrementAndGet()
                         if (parsedFood <= 0.0 && parsedCash > 0.0) parsedFood = parsedCash
                         cacheOrderPayment(orderIdNum, parsedFood, parsedCash, parsedPayMethod)
                         if (parsedRef.isNotEmpty()) cacheOrderPayment(parsedRef, parsedFood, parsedCash, parsedPayMethod)
 
-                        lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $winCode)"
+                        val limitTag = if (maxOrdersLimit > 0) " ($totalAcc/$maxOrdersLimit)" else " (#$totalAcc ∞)"
+                        lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum$limitTag (HTTP $winCode)"
                         if (ctx != null) showToast(ctx, "✅ تم قبول الطلب #$orderIdNum")
                         sendOrderToLog(
                             orderId = "#$orderIdNum",
@@ -3527,37 +3627,99 @@ object OrderInterceptor {
                             }
                         }
                     } else {
-                        if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+                        val isMaxOrdersReached = errMsg.contains("maximum number", ignoreCase = true) ||
+                            errMsg.contains("max", ignoreCase = true) ||
+                            lastErrBody.contains("Reached the maximum number of accepted orders", ignoreCase = true)
+
+                        // Always unlock handledOrdersMap on Max-Orders-Reached or transient errors so retries & UI backup are NEVER blocked!
+                        if (orderIdInt != 0 && (isMaxOrdersReached || lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
                             handledOrdersMap.remove(orderIdInt)
                             loggedOrderIds.remove("#$orderIdNum")
                         }
-                        val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
-                        val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
-                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
-                        lastOrderEvent = failToast
-                        if (ctx != null) showToast(ctx, failToast)
-                        sendOrderToLog(
-                            orderId = "#$orderIdNum",
-                            price = price,
-                            dist = dist,
-                            restaurant = restaurant,
-                            status = "فشل القبول ❌",
-                            customerName = custName,
-                            customerPhone = custPhone,
-                            address = custAddr,
-                            cashAmount = cashAmt,
-                            foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
-                            paymentMethod = paymentMethod,
-                            reference = reference,
-                            pickupAddress = pickupAddr,
-                            customerDistanceKm = custDist,
-                            pickupLat = pickupLat,
-                            pickupLng = pickupLng,
-                            destLat = destLat,
-                            destLng = destLng,
-                            decisionReason = failReason,
-                            notifyUser = true
-                        )
+
+                        if (isMaxOrdersReached && (maxOrdersLimit == 0 || countCurrentActiveOrders() < maxOrdersLimit)) {
+                            val limStr = if (maxOrdersLimit <= 0) "∞ غير محدود" else maxOrdersLimit.toString()
+                            val retryStatus = "⏳ جاري القبول التلقائي (تجاوز حد الطلبات · $limStr)"
+                            val retryReason = "Auto-Retrying #$orderIdNum (Limit: $limStr) — $errMsg"
+                            DiagnosticLogger.logStep("DirectApi", "Order #$orderIdNum hit server active cap ($errMsg) -> queued for automatic multi-order retry (target limit: $limStr)")
+                            lastOrderEvent = "⏳ جاري إعادة محاولة قبول #$orderIdNum تلقائياً ($limStr)..."
+                            if (ctx != null) showToast(ctx, "⏳ جاري قبول الطلب الإضافي #$orderIdNum تلقائياً ($limStr)...")
+                            sendOrderToLog(
+                                orderId = "#$orderIdNum",
+                                price = price,
+                                dist = dist,
+                                restaurant = restaurant,
+                                status = retryStatus,
+                                customerName = custName,
+                                customerPhone = custPhone,
+                                address = custAddr,
+                                cashAmount = cashAmt,
+                                foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                                paymentMethod = paymentMethod,
+                                reference = reference,
+                                pickupAddress = pickupAddr,
+                                customerDistanceKm = custDist,
+                                pickupLat = pickupLat,
+                                pickupLng = pickupLng,
+                                destLat = destLat,
+                                destLng = destLng,
+                                decisionReason = retryReason,
+                                notifyUser = false
+                            )
+                            if (orderIdInt != 0) {
+                                enqueueMaxLimitOrderRetry(
+                                    PendingMaxOrderRetry(
+                                        orderIdNum = orderIdNum,
+                                        orderIdInt = orderIdInt,
+                                        price = price,
+                                        dist = dist,
+                                        restaurant = restaurant,
+                                        custDist = custDist,
+                                        pickupAddr = pickupAddr,
+                                        custAddr = custAddr,
+                                        custName = custName,
+                                        custPhone = custPhone,
+                                        cashAmt = cashAmt,
+                                        decisionReason = decisionReason,
+                                        pickupLat = pickupLat,
+                                        pickupLng = pickupLng,
+                                        destLat = destLat,
+                                        destLng = destLng,
+                                        foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                                        paymentMethod = paymentMethod,
+                                        reference = reference
+                                    )
+                                )
+                            }
+                        } else {
+                            val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
+                            val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
+                            DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+                            lastOrderEvent = failToast
+                            if (ctx != null) showToast(ctx, failToast)
+                            sendOrderToLog(
+                                orderId = "#$orderIdNum",
+                                price = price,
+                                dist = dist,
+                                restaurant = restaurant,
+                                status = "فشل القبول ❌",
+                                customerName = custName,
+                                customerPhone = custPhone,
+                                address = custAddr,
+                                cashAmount = cashAmt,
+                                foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                                paymentMethod = paymentMethod,
+                                reference = reference,
+                                pickupAddress = pickupAddr,
+                                customerDistanceKm = custDist,
+                                pickupLat = pickupLat,
+                                pickupLng = pickupLng,
+                                destLat = destLat,
+                                destLng = destLng,
+                                decisionReason = failReason,
+                                notifyUser = true
+                            )
+                        }
                         // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
                         currentActivity?.let { act ->
                             if (!act.isFinishing && !act.isDestroyed) {
@@ -3576,6 +3738,116 @@ object OrderInterceptor {
                 if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
             }
         }
+    }
+
+    private fun enqueueMaxLimitOrderRetry(item: PendingMaxOrderRetry) {
+        pendingMaxLimitOrders[item.orderIdInt] = item
+        if (!isRetryLoopActive.compareAndSet(false, true)) return
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                while (pendingMaxLimitOrders.isNotEmpty() && isMasterRunning && isAutoAccept) {
+                    delay(1400L)
+                    val now = SystemClock.elapsedRealtime()
+                    val entries = pendingMaxLimitOrders.values.toList()
+                    for (pending in entries) {
+                        if ((now - pending.enqueuedAtRealtime) > 55_000L || apiConfirmedAcceptIds.contains(pending.orderIdInt)) {
+                            pendingMaxLimitOrders.remove(pending.orderIdInt)
+                            continue
+                        }
+                        if (maxOrdersLimit > 0 && countCurrentActiveOrders() >= maxOrdersLimit) {
+                            continue
+                        }
+                        attemptQuickRetryAccept(pending)
+                    }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                isRetryLoopActive.set(false)
+            }
+        }
+    }
+
+    fun triggerPendingMaxLimitOrdersRetry(triggerSource: String) {
+        if (pendingMaxLimitOrders.isEmpty()) return
+        DiagnosticLogger.logStep("DirectApi", "Triggering immediate multi-order accept retry ($triggerSource) for ${pendingMaxLimitOrders.size} queued order(s)")
+        CoroutineScope(Dispatchers.IO).launch {
+            for (pending in pendingMaxLimitOrders.values.toList()) {
+                attemptQuickRetryAccept(pending)
+            }
+        }
+    }
+
+    private fun attemptQuickRetryAccept(pending: PendingMaxOrderRetry) {
+        if (apiConfirmedAcceptIds.contains(pending.orderIdInt)) {
+            pendingMaxLimitOrders.remove(pending.orderIdInt)
+            return
+        }
+        val ctx = resolveApplicationContext() ?: currentActivity
+        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
+        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        if (token.isEmpty()) return
+        val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+        val effectiveDesiredMax = if (maxOrdersLimit > 0) maxOrdersLimit else 999
+        val jsonBody = JSONObject().apply {
+            put("requestId", pending.orderIdInt)
+            put("dispatchId", pending.orderIdInt)
+            put("order_id", pending.orderIdNum)
+            put("status", "ACCEPTED")
+            put("force", true)
+            put("forceAccept", true)
+            put("ignoreLimit", true)
+            put("ignoreMaxOrders", true)
+            put("maxAcceptedOrders", effectiveDesiredMax)
+        }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+        val uStr = "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/${pending.orderIdInt}"
+        try {
+            val rb = Request.Builder().url(uStr).put(jsonBody)
+                .header("Authorization", "Bearer $rawTok")
+                .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
+                .header("User-Agent", "okhttp/5.1.0")
+                .header("x-ignore-limit", "true")
+                .header("x-max-orders", effectiveDesiredMax.toString())
+            if (capturedDriverCipherB64.isNotEmpty()) {
+                rb.header("x-unique-Identifier", capturedDriverCipherB64)
+            }
+            val resp = httpClient.newCall(rb.build()).execute()
+            val code = resp.code
+            val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
+            resp.close()
+            if (code in 200..299) {
+                pendingMaxLimitOrders.remove(pending.orderIdInt)
+                apiConfirmedAcceptIds.add(pending.orderIdInt)
+                val totalAcc = acceptedSessionOrdersCount.incrementAndGet()
+                DiagnosticLogger.logStep("DirectApi", "Multi-order retry ACCEPT #${pending.orderIdNum} succeeded (HTTP $code, sessionAccepted=$totalAcc)")
+                if (ctx != null) showToast(ctx, "✅ تم قبول الطلب الإضافي #${pending.orderIdNum}")
+                sendOrderToLog(
+                    orderId = "#${pending.orderIdNum}",
+                    price = pending.price,
+                    dist = pending.dist,
+                    restaurant = pending.restaurant,
+                    status = "Accepted ✅",
+                    customerName = pending.custName,
+                    customerPhone = pending.custPhone,
+                    address = pending.custAddr,
+                    cashAmount = pending.cashAmt,
+                    foodPrice = pending.foodPrice,
+                    paymentMethod = pending.paymentMethod,
+                    reference = pending.reference,
+                    pickupAddress = pending.pickupAddr,
+                    customerDistanceKm = pending.custDist,
+                    pickupLat = pending.pickupLat,
+                    pickupLng = pending.pickupLng,
+                    destLat = pending.destLat,
+                    destLng = pending.destLng,
+                    decisionReason = "Accepted via Multi-Order Retry (HTTP $code)",
+                    notifyUser = true
+                )
+                playAlertSound()
+                fetchOrderCustomerDetailsAsync(pending.orderIdNum, force = true)
+            } else if (bodyStr.contains("already accepted", ignoreCase = true) || bodyStr.contains("not available", ignoreCase = true)) {
+                pendingMaxLimitOrders.remove(pending.orderIdInt)
+            }
+        } catch (_: Throwable) {}
     }
 
     fun sendOrderToLog(
