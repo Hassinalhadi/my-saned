@@ -39,6 +39,8 @@ class SanedReceiver : BroadcastReceiver() {
                 val customerPhone = intent.getStringExtra("customer_phone") ?: ""
                 val address = intent.getStringExtra("address") ?: ""
                 val cashAmount = intent.getDoubleExtra("cash_amount", 0.0)
+                val foodPrice = intent.getDoubleExtra("food_price", cashAmount)
+                val paymentMethod = intent.getStringExtra("payment_method") ?: ""
                 val currency = intent.getStringExtra("currency") ?: "SAR"
                 val notifyUser = intent.getBooleanExtra("notify_user", true)
 
@@ -56,6 +58,8 @@ class SanedReceiver : BroadcastReceiver() {
                     price = price,
                     currency = currency,
                     cashAmount = cashAmount,
+                    foodPrice = if (foodPrice > 0.0) foodPrice else cashAmount,
+                    paymentMethod = paymentMethod,
                     distanceKm = dist,
                     customerDistanceKm = custDist,
                     pickupLat = pickupLat,

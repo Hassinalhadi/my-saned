@@ -97,14 +97,28 @@ object NotificationHelper {
   } else if (isAcceptFailed && order.decisionReason.isNotEmpty()) {
       bigText += "\n❌ ${order.decisionReason}"
   }
+  val effFood = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+  if (effFood > 0.0) {
+      val foodMsg = when (lang) {
+          "ar" -> "\n🍔 سعر الطعام (Price Food): " + String.format(Locale.US, "%.2f", effFood) + " " + order.currency
+          else -> "\n🍔 Price Food: " + String.format(Locale.US, "%.2f", effFood) + " " + order.currency
+      }
+      bigText += foodMsg
+  }
   if (order.cashAmount > 0.0) {
       val cashMsg = when (lang) {
-          "ar" -> "\n💵 استلم نقداً: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-          "ur" -> "\n💵 نقد وصول کریں: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-          "bn" -> "\n💵 নগদ সংগ্রহ করুন: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-          else -> "\n💵 Collect Cash: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
+          "ar" -> "\n💵 استلم نقداً: " + String.format(Locale.US, "%.2f", order.cashAmount) + " " + order.currency
+          "ur" -> "\n💵 نقد وصول کریں: " + String.format(Locale.US, "%.2f", order.cashAmount) + " " + order.currency
+          "bn" -> "\n💵 নগদ সংগ্রহ করুন: " + String.format(Locale.US, "%.2f", order.cashAmount) + " " + order.currency
+          else -> "\n💵 Collect Cash: " + String.format(Locale.US, "%.2f", order.cashAmount) + " " + order.currency
       }
       bigText += cashMsg
+  } else {
+      val prepaidMsg = when (lang) {
+          "ar" -> "\n✔️ الدفع: مدفوع مسبقاً (Prepaid)" + (if (effFood > 0.0) " · سعر الطعام: " + String.format(Locale.US, "%.2f", effFood) + " " + order.currency else "")
+          else -> "\n✔️ Prepaid (Nothing to collect)" + (if (effFood > 0.0) " · Price Food: " + String.format(Locale.US, "%.2f", effFood) + " " + order.currency else "")
+      }
+      bigText += prepaidMsg
   }
   if (order.customerName.isNotEmpty()) {
       bigText += "\n👤 ${order.customerName}"

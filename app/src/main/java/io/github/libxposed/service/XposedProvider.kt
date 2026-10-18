@@ -109,6 +109,26 @@ class XposedProvider : ContentProvider() {
             } catch (_: Throwable) {}
         }
 
+        private fun isSameOrderEntry(normId: String, normRef: String, oldId: String, oldRef: String): Boolean {
+            if (normRef.isNotEmpty() && (oldRef == normRef || oldId == normRef)) return true
+            if (normId.isNotEmpty() && normId != "0" && (oldId == normId || oldRef == normId)) return true
+            return false
+        }
+
+        private fun pickBestReference(idStr: String, refA: String, refB: String): String {
+            val cleanA = refA.replace("#", "").trim()
+            val cleanB = refB.replace("#", "").trim()
+            val cleanId = idStr.replace("#", "").trim()
+            return when {
+                cleanA.length >= 10 && cleanA != cleanId -> cleanA
+                cleanB.length >= 10 && cleanB != cleanId -> cleanB
+                cleanA.isNotEmpty() && cleanA != cleanId -> cleanA
+                cleanB.isNotEmpty() && cleanB != cleanId -> cleanB
+                cleanA.isNotEmpty() -> cleanA
+                else -> cleanB
+            }
+        }
+
         fun saveOrderAndNotify(ctx: Context, order: OrderModel, notifyUser: Boolean = true) {
             try {
                 val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
@@ -118,37 +138,70 @@ class XposedProvider : ContentProvider() {
                 val normRef = order.reference.replace("#", "").trim()
                 val normId = if (order.id != 0) order.id.toString() else ""
 
-                var mergedOrder = order
+                val normalizedStatus = if (order.status.equals("Dispatched", ignoreCase = true) || order.status.equals("DISPATCHED", ignoreCase = true)) {
+                    "Accepted ✅"
+                } else {
+                    order.status
+                }
+                var mergedOrder = order.copy(
+                    status = normalizedStatus,
+                    foodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+                )
+
                 for (i in 0 until array.length()) {
                     val obj = array.optJSONObject(i) ?: continue
                     val oldRef = obj.optString("reference", "").replace("#", "").trim()
                     val oldId = obj.optString("id", "").replace("#", "").trim()
-                    if ((normRef.isNotEmpty() && oldRef == normRef) || (normId.isNotEmpty() && oldId == normId)) {
+                    if (isSameOrderEntry(normId, normRef, oldId, oldRef)) {
                         val oldModel = OrderModel.fromJson(obj)
                         val bestAddr = when {
-                            order.address.isNotEmpty() && order.address != "Location on map" -> order.address
+                            mergedOrder.address.isNotEmpty() && mergedOrder.address != "Location on map" -> mergedOrder.address
                             oldModel.address.isNotEmpty() && oldModel.address != "Location on map" -> oldModel.address
-                            order.address.isNotEmpty() -> order.address
+                            mergedOrder.address.isNotEmpty() -> mergedOrder.address
                             else -> oldModel.address
                         }
-                        mergedOrder = order.copy(
-                            customerPhone = order.customerPhone.ifEmpty { oldModel.customerPhone },
-                            customerName = order.customerName.ifEmpty { oldModel.customerName },
-                            address = bestAddr,
-                            pickupAddress = order.pickupAddress.ifEmpty { oldModel.pickupAddress },
-                            restaurant = order.restaurant.ifEmpty { oldModel.restaurant },
-                            price = if (order.price > 0.0) order.price else oldModel.price,
-                            cashAmount = if (order.cashAmount > 0.0) order.cashAmount else oldModel.cashAmount,
-                            distanceKm = if (order.distanceKm > 0.0) order.distanceKm else oldModel.distanceKm,
-                            customerDistanceKm = if (order.customerDistanceKm > 0.0) order.customerDistanceKm else oldModel.customerDistanceKm,
-                            pickupLat = if (order.pickupLat != 0.0) order.pickupLat else oldModel.pickupLat,
-                            pickupLng = if (order.pickupLng != 0.0) order.pickupLng else oldModel.pickupLng,
-                            destLat = if (order.destLat != 0.0) order.destLat else oldModel.destLat,
-                            destLng = if (order.destLng != 0.0) order.destLng else oldModel.destLng
+                        val bestId = if (mergedOrder.id != 0) mergedOrder.id else oldModel.id
+                        val bestRef = pickBestReference(
+                            if (bestId != 0) bestId.toString() else normId,
+                            mergedOrder.reference,
+                            oldModel.reference
                         )
-                        break
+                        val bestCash = if (mergedOrder.cashAmount > 0.0) mergedOrder.cashAmount else oldModel.cashAmount
+                        val bestFood = when {
+                            mergedOrder.foodPrice > 0.0 -> mergedOrder.foodPrice
+                            oldModel.foodPrice > 0.0 -> oldModel.foodPrice
+                            bestCash > 0.0 -> bestCash
+                            else -> 0.0
+                        }
+                        val bestStatus = when {
+                            mergedOrder.status.equals("Accepted", ignoreCase = true) && oldModel.status.contains("✅") -> oldModel.status
+                            else -> mergedOrder.status.ifEmpty { oldModel.status }
+                        }
+                        mergedOrder = mergedOrder.copy(
+                            id = bestId,
+                            reference = bestRef,
+                            status = bestStatus,
+                            customerPhone = mergedOrder.customerPhone.ifEmpty { oldModel.customerPhone },
+                            customerName = mergedOrder.customerName.ifEmpty { oldModel.customerName },
+                            address = bestAddr,
+                            pickupAddress = mergedOrder.pickupAddress.ifEmpty { oldModel.pickupAddress },
+                            restaurant = mergedOrder.restaurant.ifEmpty { oldModel.restaurant },
+                            price = if (mergedOrder.price > 0.0) mergedOrder.price else oldModel.price,
+                            cashAmount = bestCash,
+                            foodPrice = bestFood,
+                            paymentMethod = mergedOrder.paymentMethod.ifEmpty { oldModel.paymentMethod },
+                            distanceKm = if (mergedOrder.distanceKm > 0.0) mergedOrder.distanceKm else oldModel.distanceKm,
+                            customerDistanceKm = if (mergedOrder.customerDistanceKm > 0.0) mergedOrder.customerDistanceKm else oldModel.customerDistanceKm,
+                            pickupLat = if (mergedOrder.pickupLat != 0.0) mergedOrder.pickupLat else oldModel.pickupLat,
+                            pickupLng = if (mergedOrder.pickupLng != 0.0) mergedOrder.pickupLng else oldModel.pickupLng,
+                            destLat = if (mergedOrder.destLat != 0.0) mergedOrder.destLat else oldModel.destLat,
+                            destLng = if (mergedOrder.destLng != 0.0) mergedOrder.destLng else oldModel.destLng
+                        )
                     }
                 }
+
+                val finalRef = mergedOrder.reference.replace("#", "").trim()
+                val finalId = if (mergedOrder.id != 0) mergedOrder.id.toString() else normId
 
                 val newArray = JSONArray()
                 newArray.put(mergedOrder.toJson())
@@ -157,7 +210,7 @@ class XposedProvider : ContentProvider() {
                     val obj = array.optJSONObject(i) ?: continue
                     val oldRef = obj.optString("reference", "").replace("#", "").trim()
                     val oldId = obj.optString("id", "").replace("#", "").trim()
-                    if ((normRef.isNotEmpty() && oldRef == normRef) || (normId.isNotEmpty() && oldId == normId)) {
+                    if (isSameOrderEntry(finalId, finalRef, oldId, oldRef) || isSameOrderEntry(normId, normRef, oldId, oldRef)) {
                         continue
                     }
                     newArray.put(obj)

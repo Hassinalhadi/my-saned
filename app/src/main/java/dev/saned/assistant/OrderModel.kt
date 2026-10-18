@@ -15,6 +15,8 @@ data class OrderModel(
     val bonus: Double = 0.0,
     val currency: String = "SAR",
     val cashAmount: Double = 0.0,
+    val foodPrice: Double = 0.0,
+    val paymentMethod: String = "",
     val distanceKm: Double = 0.0,
     val customerDistanceKm: Double = 0.0,
     val pickupLat: Double = 0.0,
@@ -33,6 +35,7 @@ data class OrderModel(
     val timestamp: Long = System.currentTimeMillis()
 ) {
     fun toJson(): JSONObject {
+        val effFoodPrice = if (foodPrice > 0.0) foodPrice else cashAmount
         return JSONObject().apply {
             put("id", if (id != 0) id else reference)
             put("reference", reference)
@@ -46,6 +49,8 @@ data class OrderModel(
             put("bonus", bonus)
             put("currency", currency)
             put("cashAmount", cashAmount)
+            put("foodPrice", effFoodPrice)
+            put("paymentMethod", paymentMethod)
             put("distanceKm", distanceKm)
             put("customerDistanceKm", customerDistanceKm)
             put("pickupLat", pickupLat)
@@ -67,7 +72,12 @@ data class OrderModel(
                 is String -> rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
                 else -> 0
             }
-            val parsedStatus = json.optString("status", json.optString("state", "ACCEPTED"))
+            val rawStatus = json.optString("status", json.optString("state", "Accepted ✅"))
+            val parsedStatus = if (rawStatus.equals("Dispatched", ignoreCase = true) || rawStatus.equals("DISPATCHED", ignoreCase = true)) {
+                "Accepted ✅"
+            } else {
+                rawStatus
+            }
             val defaultMissed = parsedStatus.uppercase().let { s ->
                 s.contains("REJECT") || s.contains("MISSED") || s.contains("FAIL") ||
                 s.contains("SKIP") || s.contains("MANUAL") || s.contains("DRY") ||
@@ -76,9 +86,66 @@ data class OrderModel(
                 s.contains("فشل") || s.contains("تعذر") || s.contains("سائق آخر")
             }
             fun cleanCoord(v: Double): Double = if (v.isNaN() || v.isInfinite()) 0.0 else v
+            val payObj = json.optJSONObject("payment")
+            val parsedCash = cleanCoord(
+                json.optDouble(
+                    "cashAmount",
+                    json.optDouble(
+                        "cash_amount",
+                        json.optDouble(
+                            "cod_amount",
+                            json.optDouble(
+                                "collectionAmount",
+                                payObj?.optDouble("collectionAmount", payObj.optDouble("cashAmount", 0.0)) ?: 0.0
+                            )
+                        )
+                    )
+                )
+            )
+            val rawFoodPrice = cleanCoord(
+                json.optDouble(
+                    "foodPrice",
+                    json.optDouble(
+                        "food_price",
+                        json.optDouble(
+                            "orderAmount",
+                            json.optDouble(
+                                "totalAmount",
+                                json.optDouble(
+                                    "invoiceAmount",
+                                    json.optDouble(
+                                        "subTotal",
+                                        payObj?.optDouble(
+                                            "foodPrice",
+                                            payObj.optDouble(
+                                                "orderAmount",
+                                                payObj.optDouble(
+                                                    "totalAmount",
+                                                    payObj.optDouble("invoiceAmount", payObj.optDouble("collectionAmount", 0.0))
+                                                )
+                                            )
+                                        ) ?: 0.0
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            val effFoodPrice = if (rawFoodPrice > 0.0) rawFoodPrice else parsedCash
+            val parsedPayMethod = json.optString(
+                "paymentMethod",
+                json.optString(
+                    "payment_method",
+                    json.optString(
+                        "paymentType",
+                        payObj?.optString("paymentMethod", payObj.optString("type", "")) ?: ""
+                    )
+                )
+            )
             return OrderModel(
                 id = intId,
-                reference = json.optString("reference", json.optString("order_number", json.optString("order_id", json.optString("id", "")))),
+                reference = json.optString("reference", json.optString("referenceId", json.optString("order_number", json.optString("order_id", json.optString("id", ""))))),
                 status = parsedStatus,
                 restaurant = json.optString("restaurant", json.optString("store_name", json.optString("restaurant_name", ""))),
                 pickupAddress = json.optString("pickupAddress", json.optString("pickup_address", "")),
@@ -88,7 +155,9 @@ data class OrderModel(
                 price = json.optDouble("price", json.optDouble("delivery_cost", json.optDouble("delivery_fee", 0.0))),
                 bonus = json.optDouble("bonus", json.optDouble("tip", 0.0)),
                 currency = json.optString("currency", "SAR").ifEmpty { "SAR" },
-                cashAmount = json.optDouble("cashAmount", json.optDouble("cash_amount", json.optDouble("cod_amount", 0.0))),
+                cashAmount = parsedCash,
+                foodPrice = effFoodPrice,
+                paymentMethod = parsedPayMethod,
                 distanceKm = json.optDouble("distanceKm", json.optDouble("distance", json.optDouble("km", 0.0))),
                 customerDistanceKm = json.optDouble("customerDistanceKm", json.optDouble("customer_distance", 0.0)),
                 pickupLat = cleanCoord(json.optDouble("pickupLat", json.optDouble("pickup_lat", 0.0))),

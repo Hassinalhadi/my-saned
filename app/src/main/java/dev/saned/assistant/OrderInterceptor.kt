@@ -549,6 +549,18 @@ object OrderInterceptor {
                 "dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {
                     clearPersistedToken()
                 }
+                "dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS" -> {
+                    val oid = intent.getStringExtra("order_id") ?: ""
+                    val oref = intent.getStringExtra("reference") ?: ""
+                    val app = resolveApplicationContext() ?: currentActivity
+                    CoroutineScope(Dispatchers.IO).launch {
+                        if (app != null) {
+                            try { scanJahezDatabases(app) } catch (_: Throwable) {}
+                        }
+                        if (oid.isNotEmpty()) fetchOrderCustomerDetailsAsync(oid, force = true)
+                        if (oref.isNotEmpty() && oref != oid) fetchOrderCustomerDetailsAsync(oref, force = true)
+                    }
+                }
             }
         }
     }
@@ -557,8 +569,16 @@ object OrderInterceptor {
 
     fun getSyncedOrdersBatchJson(): String {
         val arr = JSONArray()
+        val seenKeys = HashSet<String>()
         synchronized(syncedOrdersCache) {
             for (obj in syncedOrdersCache.values) {
+                val r = obj.optString("reference", "").replace("#", "").trim()
+                val id = obj.optString("id", "").replace("#", "").trim()
+                if ((r.isNotEmpty() && seenKeys.contains(r)) || (id.isNotEmpty() && id != "0" && seenKeys.contains(id))) {
+                    continue
+                }
+                if (r.isNotEmpty()) seenKeys.add(r)
+                if (id.isNotEmpty() && id != "0") seenKeys.add(id)
                 arr.put(obj)
             }
         }
@@ -718,6 +738,8 @@ object OrderInterceptor {
             customerPhone = testPhone,
             address = testAddress,
             cashAmount = testCash,
+            foodPrice = 65.00,
+            paymentMethod = "CASH",
             currency = "SAR",
             reference = testRef,
             customerDistanceKm = simCustDist,
@@ -755,9 +777,26 @@ object OrderInterceptor {
     private val isLifecycleCallbacksRegistered = AtomicBoolean(false)
     // Matches Ljw.a in SanedAssistant-98: caches (customerName, customerPhone, cashAmount) per orderId
     private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()
+    // Caches Price Food (سعر الطعام / قيمة الطلب) for all orders (both Prepaid and Cash on Delivery)
+    private val foodPriceCache = ConcurrentHashMap<String, Double>()
+    private val paymentMethodCache = ConcurrentHashMap<String, String>()
     private val fetchedDetailIds = ConcurrentHashMap.newKeySet<String>()
+    private val lastDetailFetchTimeMap = ConcurrentHashMap<String, Long>()
     // Caches [pickupLat, pickupLng, destLat, destLng] per orderId / referenceId (matching Luf1 h,i,j,k)
     private val coordsCache = ConcurrentHashMap<String, DoubleArray>()
+
+    fun cacheOrderPayment(idOrRef: String, foodPrice: Double, cashAmt: Double = 0.0, payMethod: String = "") {
+        val key = idOrRef.replace("#", "").trim()
+        if (key.isEmpty() || key == "0") return
+        val effFood = if (!foodPrice.isNaN() && foodPrice > 0.0) foodPrice else if (!cashAmt.isNaN() && cashAmt > 0.0) cashAmt else 0.0
+        if (effFood > 0.0) {
+            val prev = foodPriceCache[key] ?: 0.0
+            if (effFood >= prev) foodPriceCache[key] = effFood
+        }
+        if (payMethod.isNotEmpty() && payMethod != "null") {
+            paymentMethodCache[key] = payMethod
+        }
+    }
     private val loggedNavOrderKeys = ConcurrentHashMap.newKeySet<String>()
     private val loggedLocationSchema = AtomicBoolean(false)
 
@@ -952,6 +991,7 @@ object OrderInterceptor {
       addAction("dev.saned.assistant.ACTION_TEST_API")
       addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
       addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
+      addAction("dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS")
   }
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       app.registerReceiver(settingsReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -1846,6 +1886,12 @@ object OrderInterceptor {
         val delivPrice = mapDouble(keys[5]); val distVal = mapDouble(keys[7])
         val restName = mapFirstStr(keys[9], keys[10], keys[11], keys[12])
         val bonusAmt = mapFirstStr(keys[13], keys[14], keys[15]).toDoubleOrNull() ?: 0.0
+        val fcmCashAmt = mapFirstStr("collectionAmount", "cashAmount", "cash_amount", "cod_amount").toDoubleOrNull() ?: 0.0
+        val fcmFoodPrice = mapFirstStr("foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount").toDoubleOrNull() ?: fcmCashAmt
+        val fcmPayMethod = mapFirstStr("paymentMethod", "payment_method", "paymentType", "type")
+        if (fcmFoodPrice > 0.0 || fcmPayMethod.isNotEmpty()) {
+            cacheOrderPayment(reqId.toString(), fcmFoodPrice, fcmCashAmt, fcmPayMethod)
+        }
         val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
         val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
         val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distVal
@@ -1864,6 +1910,9 @@ object OrderInterceptor {
             dist = calcRestDist,
             restaurant = restName,
             custDist = calcCustDist,
+            cashAmt = fcmCashAmt,
+            foodPrice = fcmFoodPrice,
+            paymentMethod = fcmPayMethod,
             pickupLat = pLat,
             pickupLng = pLng,
             destLat = dLat,
@@ -1930,12 +1979,12 @@ object OrderInterceptor {
             u.contains("PICKED") || u.contains("COLLECTED") -> "Picked Up"
             u.contains("ARRIVED") -> "Arrived"
             u.contains("WAY") || u.contains("PROGRESS") -> "In Progress"
-            u.contains("ACCEPT") || u.contains("قبول") -> "Accepted"
+            u.contains("ACCEPT") || u.contains("قبول") || u == "DISPATCHED" || u == "ASSIGNED" || u == "AUTO_DISPATCH" || u == "NEW_DISPATCH" -> "Accepted ✅"
             u.contains("CANCEL") -> "Cancelled"
             u.contains("REJECT") || u.contains("رفض") -> rawStatus
             u.contains("FAIL") || u.contains("MISSED") || u.contains("MANUAL") || u.contains("DRY") -> rawStatus
             rawStatus.isNotEmpty() -> rawStatus.lowercase(Locale.US).replaceFirstChar { it.uppercase() }
-            else -> "Accepted"
+            else -> "Accepted ✅"
         }
     }
 
@@ -2009,6 +2058,7 @@ object OrderInterceptor {
             syncedOrdersCache[refStr] ?: syncedOrdersCache[idStr]
         }
         val prevSyncedCash = syncedPrev?.optDouble("cashAmount", 0.0)?.takeIf { !it.isNaN() && it > 0.0 } ?: 0.0
+        val prevSyncedFood = syncedPrev?.optDouble("foodPrice", 0.0)?.takeIf { !it.isNaN() && it > 0.0 } ?: 0.0
         val finalCustName = posCustName ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""
         val finalCustPhone = posCustPhone ?: cachedDetail?.second?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerPhone", "") ?: ""
         val finalCash = when {
@@ -2017,11 +2067,33 @@ object OrderInterceptor {
             prevSyncedCash > 0.0 -> prevSyncedCash
             else -> 0.0
         }
-        val effectiveCash = finalCash
-        if (effectiveCash > 0.0 || finalCustPhone.isNotEmpty() || finalCustName.isNotEmpty()) {
-            customerDetailsCache[idStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
-            if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveCash)
+        val cachedFood = foodPriceCache[idStr] ?: foodPriceCache[refStr] ?: 0.0
+        val effectiveFoodPrice = when {
+            posCash > 0.0 -> posCash
+            cachedFood > 0.0 -> cachedFood
+            prevSyncedFood > 0.0 -> prevSyncedFood
+            finalCash > 0.0 -> finalCash
+            else -> 0.0
         }
+        val effectivePayMethod = posPayMethod.ifEmpty {
+            paymentMethodCache[idStr] ?: paymentMethodCache[refStr] ?: syncedPrev?.optString("paymentMethod", "") ?: ""
+        }
+        // Only treat as Cash on Delivery if paymentMethod indicates CASH/COD or if posCash > 0 and paymentMethod is not explicitly PREPAID/ONLINE
+        val isExplicitlyPrepaid = effectivePayMethod.contains("PREPAID", ignoreCase = true) ||
+            effectivePayMethod.contains("ONLINE", ignoreCase = true) ||
+            effectivePayMethod.contains("CARD", ignoreCase = true) ||
+            effectivePayMethod.contains("APPLE", ignoreCase = true) ||
+            effectivePayMethod.contains("MADA", ignoreCase = true) ||
+            effectivePayMethod.contains("WALLET", ignoreCase = true) ||
+            effectivePayMethod.contains("STC", ignoreCase = true)
+        val effectiveCash = if (isExplicitlyPrepaid && posCash <= 0.0) 0.0 else finalCash
+
+        if (effectiveFoodPrice > 0.0 || finalCustPhone.isNotEmpty() || finalCustName.isNotEmpty()) {
+            customerDetailsCache[idStr] = Triple(finalCustName, finalCustPhone, effectiveFoodPrice)
+            if (refStr.isNotEmpty()) customerDetailsCache[refStr] = Triple(finalCustName, finalCustPhone, effectiveFoodPrice)
+        }
+        cacheOrderPayment(idStr, effectiveFoodPrice, effectiveCash, effectivePayMethod)
+        if (refStr.isNotEmpty()) cacheOrderPayment(refStr, effectiveFoodPrice, effectiveCash, effectivePayMethod)
 
         cacheOrderCoords(idStr, posPickupLat, posPickupLng, posDestLat, posDestLng)
         if (refStr.isNotEmpty()) cacheOrderCoords(refStr, posPickupLat, posPickupLng, posDestLat, posDestLng)
@@ -2048,7 +2120,7 @@ object OrderInterceptor {
         if (loggedNavOrderKeys.add(navSig)) {
             DiagnosticLogger.logStep(
                 "NavLog",
-                "SQLite dispatches_db #$idStr (ref=$refStr) status=[$rawStatus]: pickup=($effPickupLat,$effPickupLng) -> customer=($effDestLat,$effDestLng) custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km addr='${posAddr.ifEmpty { "Location on map" }}'"
+                "SQLite dispatches_db #$idStr (ref=$refStr) status=[$rawStatus] foodPrice=$effectiveFoodPrice payMethod=$effectivePayMethod: pickup=($effPickupLat,$effPickupLng) -> customer=($effDestLat,$effDestLng) custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km addr='${posAddr.ifEmpty { "Location on map" }}'"
             )
         }
 
@@ -2056,9 +2128,9 @@ object OrderInterceptor {
         if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
         loggedOrderIds.add("#$idStr")
         val hasCoordFlag = (effDestLat != 0.0 && effDestLng != 0.0)
-        val syncSignature = "$idStr:$rawStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:$hasCoordFlag"
+        val normStatus = normalizeOrderStatusDisplay(rawStatus)
+        val syncSignature = "$idStr:$refStr:$normStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:${effectiveFoodPrice.toInt()}:$effectivePayMethod:$hasCoordFlag"
         if (loggedOrderIds.add(syncSignature)) {
-            val normStatus = normalizeOrderStatusDisplay(rawStatus)
             sendOrderToLog(
                 orderId = "#$idStr",
                 price = posPrice,
@@ -2069,6 +2141,8 @@ object OrderInterceptor {
                 customerPhone = finalCustPhone,
                 address = posAddr.ifEmpty { if (effDestLat != 0.0) "Location on map" else "" },
                 cashAmount = effectiveCash,
+                foodPrice = effectiveFoodPrice,
+                paymentMethod = effectivePayMethod,
                 currency = posCurrency,
                 reference = refStr,
                 customerDistanceKm = calcCustDist,
@@ -2082,7 +2156,7 @@ object OrderInterceptor {
 
         val uSt = rawStatus.uppercase(Locale.US)
         val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-        if ((finalCustPhone.isEmpty() || effectiveCash <= 0.0) && !isCompleteOrOld) {
+        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
     }
@@ -2105,202 +2179,297 @@ object OrderInterceptor {
 
     fun scanJahezDatabases(context: Context) {
         try {
-  val exactDbName = Native.safeF()
-  val exactSql = Native.safeG()
-  if (exactDbName.isEmpty() || exactSql.isEmpty()) return
-  val dbFile = context.getDatabasePath(exactDbName)
-  if (!dbFile.exists()) return
-  var exactDb: SQLiteDatabase? = null
-  var exactCursor: Cursor? = null
-  try {
-      val flags = SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
-      val openedDb = SQLiteDatabase.openDatabase(dbFile.path, null, flags)
-      exactDb = openedDb
-      // Pre-scan payment table for any food/order/collection amount columns so Picked Up orders never lose food price
-      var payCursor: Cursor? = null
-      try {
-          payCursor = openedDb.rawQuery("SELECT * FROM payment", null)
-          val colNames = payCursor.columnNames ?: emptyArray()
-          val idColIdx = colNames.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
-          if (idColIdx >= 0) {
-              while (payCursor.moveToNext()) {
-                  val dId = cursorStringOrNull(payCursor, idColIdx) ?: cursorDoubleOrNull(payCursor, idColIdx)?.toLong()?.toString() ?: continue
-                  var bestFoodAmt = 0.0
-                  for (ci in colNames.indices) {
-                      if (ci == idColIdx) continue
-                      val cn = colNames[ci].lowercase(Locale.US)
-                      if (cn.contains("delivery") || cn.contains("driver") || cn.contains("bonus") || cn.contains("tip") || cn.contains("id")) continue
-                      val dv = cursorDoubleOrNull(payCursor, ci) ?: 0.0
-                      if (dv > bestFoodAmt) bestFoodAmt = dv
-                  }
-                  if (bestFoodAmt > 0.0) {
-                      val prev = customerDetailsCache[dId]
-                      customerDetailsCache[dId] = Triple(prev?.first ?: "", prev?.second ?: "", bestFoodAmt)
-                  }
-              }
-          }
-      } catch (_: Throwable) {
-      } finally {
-          try { payCursor?.close() } catch (_: Throwable) {}
-      }
-      // Pre-scan location table in dispatches_db so pickup & customer coordinates are always cached & logged in [NavLog]
-      var locCursor: Cursor? = null
-      try {
-          locCursor = openedDb.rawQuery("SELECT * FROM location", null)
-          val lCols = locCursor.columnNames ?: emptyArray()
-          if (loggedLocationSchema.compareAndSet(false, true)) {
-              DiagnosticLogger.logStep("NavLog", "dispatches_db.location columns: [${lCols.joinToString(", ")}]")
-          }
-          val dispIdIdx = lCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
-          val pLatIdx = lCols.indexOfFirst { it.contains("pickupLat", ignoreCase = true) }
-          val pLngIdx = lCols.indexOfFirst { it.contains("pickupLong", ignoreCase = true) || it.contains("pickupLng", ignoreCase = true) }
-          val dLatIdx = lCols.indexOfFirst { it.contains("destLat", ignoreCase = true) || it.contains("destinationLat", ignoreCase = true) || it.contains("dropoffLat", ignoreCase = true) }
-          val dLngIdx = lCols.indexOfFirst { it.contains("destLong", ignoreCase = true) || it.contains("destinationLong", ignoreCase = true) || it.contains("destLng", ignoreCase = true) || it.contains("dropoffLong", ignoreCase = true) }
-          if (dispIdIdx >= 0) {
-              while (locCursor.moveToNext()) {
-                  val dId = cursorStringOrNull(locCursor, dispIdIdx) ?: cursorDoubleOrNull(locCursor, dispIdIdx)?.toLong()?.toString() ?: continue
-                  val pl = if (pLatIdx >= 0) (cursorDoubleOrNull(locCursor, pLatIdx) ?: 0.0) else 0.0
-                  val pg = if (pLngIdx >= 0) (cursorDoubleOrNull(locCursor, pLngIdx) ?: 0.0) else 0.0
-                  val dl = if (dLatIdx >= 0) (cursorDoubleOrNull(locCursor, dLatIdx) ?: 0.0) else 0.0
-                  val dg = if (dLngIdx >= 0) (cursorDoubleOrNull(locCursor, dLngIdx) ?: 0.0) else 0.0
-                  cacheOrderCoords(dId, pl, pg, dl, dg)
-              }
-          }
-      } catch (_: Throwable) {
-      } finally {
-          try { locCursor?.close() } catch (_: Throwable) {}
-      }
-      val c = openedDb.rawQuery(exactSql, null)
-      exactCursor = c
-      while (c.moveToNext()) {
-          parseCursorRowWithLnzW(c)
-      }
-  } catch (_: Throwable) {
-  } finally {
-      try { exactCursor?.close() } catch (_: Throwable) {}
-      try { exactDb?.close() } catch (_: Throwable) {}
-  }
+            val exactDbName = Native.safeF()
+            val exactSql = Native.safeG()
+            if (exactDbName.isEmpty() || exactSql.isEmpty()) return
+            val dbFile = context.getDatabasePath(exactDbName)
+            if (!dbFile.exists()) return
+            var exactDb: SQLiteDatabase? = null
+            var exactCursor: Cursor? = null
+            try {
+                val flags = SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+                val openedDb = SQLiteDatabase.openDatabase(dbFile.path, null, flags)
+                exactDb = openedDb
+                // Pre-scan payment table for any food/order/collection amount & payment method columns so Accepted & Picked Up orders always show Price Food
+                var payCursor: Cursor? = null
+                try {
+                    payCursor = openedDb.rawQuery("SELECT * FROM payment", null)
+                    val colNames = payCursor.columnNames ?: emptyArray()
+                    val idColIdx = colNames.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
+                    val payMethodIdx = colNames.indexOfFirst {
+                        it.contains("method", ignoreCase = true) || it.contains("type", ignoreCase = true) || it.contains("mode", ignoreCase = true)
+                    }
+                    if (idColIdx >= 0) {
+                        while (payCursor.moveToNext()) {
+                            val dId = cursorStringOrNull(payCursor, idColIdx) ?: cursorDoubleOrNull(payCursor, idColIdx)?.toLong()?.toString() ?: continue
+                            var bestFoodAmt = 0.0
+                            val pMethod = if (payMethodIdx >= 0) (cursorStringOrNull(payCursor, payMethodIdx) ?: "") else ""
+                            for (ci in colNames.indices) {
+                                if (ci == idColIdx || ci == payMethodIdx) continue
+                                val cn = colNames[ci].lowercase(Locale.US)
+                                if (cn.contains("delivery") || cn.contains("driver") || cn.contains("bonus") || cn.contains("tip") || cn.contains("id")) continue
+                                val dv = cursorDoubleOrNull(payCursor, ci) ?: cursorStringOrNull(payCursor, ci)?.toDoubleOrNull() ?: 0.0
+                                if (dv > bestFoodAmt) bestFoodAmt = dv
+                            }
+                            if (bestFoodAmt > 0.0 || pMethod.isNotEmpty()) {
+                                cacheOrderPayment(dId, bestFoodAmt, bestFoodAmt, pMethod)
+                                if (bestFoodAmt > 0.0) {
+                                    val prev = customerDetailsCache[dId]
+                                    customerDetailsCache[dId] = Triple(prev?.first ?: "", prev?.second ?: "", bestFoodAmt)
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    try { payCursor?.close() } catch (_: Throwable) {}
+                }
+                // Pre-scan location table in dispatches_db so pickup & customer coordinates are always cached & logged in [NavLog]
+                var locCursor: Cursor? = null
+                try {
+                    locCursor = openedDb.rawQuery("SELECT * FROM location", null)
+                    val lCols = locCursor.columnNames ?: emptyArray()
+                    if (loggedLocationSchema.compareAndSet(false, true)) {
+                        DiagnosticLogger.logStep("NavLog", "dispatches_db.location columns: [${lCols.joinToString(", ")}]")
+                    }
+                    val dispIdIdx = lCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
+                    val pLatIdx = lCols.indexOfFirst { it.contains("pickupLat", ignoreCase = true) }
+                    val pLngIdx = lCols.indexOfFirst { it.contains("pickupLong", ignoreCase = true) || it.contains("pickupLng", ignoreCase = true) }
+                    val dLatIdx = lCols.indexOfFirst { it.contains("destLat", ignoreCase = true) || it.contains("destinationLat", ignoreCase = true) || it.contains("dropoffLat", ignoreCase = true) }
+                    val dLngIdx = lCols.indexOfFirst { it.contains("destLong", ignoreCase = true) || it.contains("destinationLong", ignoreCase = true) || it.contains("destLng", ignoreCase = true) || it.contains("dropoffLong", ignoreCase = true) }
+                    if (dispIdIdx >= 0) {
+                        while (locCursor.moveToNext()) {
+                            val dId = cursorStringOrNull(locCursor, dispIdIdx) ?: cursorDoubleOrNull(locCursor, dispIdIdx)?.toLong()?.toString() ?: continue
+                            val pl = if (pLatIdx >= 0) (cursorDoubleOrNull(locCursor, pLatIdx) ?: 0.0) else 0.0
+                            val pg = if (pLngIdx >= 0) (cursorDoubleOrNull(locCursor, pLngIdx) ?: 0.0) else 0.0
+                            val dl = if (dLatIdx >= 0) (cursorDoubleOrNull(locCursor, dLatIdx) ?: 0.0) else 0.0
+                            val dg = if (dLngIdx >= 0) (cursorDoubleOrNull(locCursor, dLngIdx) ?: 0.0) else 0.0
+                            cacheOrderCoords(dId, pl, pg, dl, dg)
+                        }
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    try { locCursor?.close() } catch (_: Throwable) {}
+                }
+                val c = openedDb.rawQuery(exactSql, null)
+                exactCursor = c
+                while (c.moveToNext()) {
+                    parseCursorRowWithLnzW(c)
+                }
+            } catch (_: Throwable) {
+            } finally {
+                try { exactCursor?.close() } catch (_: Throwable) {}
+                try { exactDb?.close() } catch (_: Throwable) {}
+            }
         } catch (_: Throwable) {}
     }
 
-    private fun fetchOrderCustomerDetailsAsync(orderId: String) {
+    private fun fetchOrderCustomerDetailsAsync(orderId: String, force: Boolean = false) {
         val cleanId = orderId.replace("#", "").trim()
         val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
-        if (cleanId.isEmpty() || !fetchedDetailIds.add(cleanId)) return
+        if (cleanId.isEmpty()) return
+        val now = SystemClock.elapsedRealtime()
+        val lastFetch = lastDetailFetchTimeMap[cleanId] ?: 0L
+        val hasCachedFood = (foodPriceCache[cleanId] ?: 0.0) > 0.0
+        if (!force && fetchedDetailIds.contains(cleanId) && (hasCachedFood || (now - lastFetch) < 6000L)) return
+        if (!force && (now - lastFetch) < 2000L) return
+        lastDetailFetchTimeMap[cleanId] = now
+        fetchedDetailIds.add(cleanId)
+
         val ctx = resolveApplicationContext() ?: currentActivity
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         if (token.isEmpty()) return
 
         CoroutineScope(Dispatchers.IO).launch {
-  val client = capturedAppHttpClient ?: httpClient
-  val serverKeys = Native.safeM()
-  val kClientPhone = serverKeys.getOrNull(5) ?: "clientPhone"
-  val kContactNum = serverKeys.getOrNull(6) ?: "contactNumber"
+            val client = capturedAppHttpClient ?: httpClient
+            val serverKeys = Native.safeM()
+            val kClientPhone = serverKeys.getOrNull(5) ?: "clientPhone"
+            val kContactNum = serverKeys.getOrNull(6) ?: "contactNumber"
+            val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
 
-  if (orderIdInt > 0) {
-      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-      var cPhone = customerDetailsCache[cleanId]?.second ?: ""
-      var cName = customerDetailsCache[cleanId]?.first ?: ""
-      var cCash = customerDetailsCache[cleanId]?.third ?: 0.0
+            var cPhone = customerDetailsCache[cleanId]?.second ?: ""
+            var cName = customerDetailsCache[cleanId]?.first ?: ""
+            var cCash = customerDetailsCache[cleanId]?.third ?: 0.0
+            var cFoodPrice = foodPriceCache[cleanId] ?: cCash
+            var cPayMethod = paymentMethodCache[cleanId] ?: ""
+            var cRef = ""
 
-      // 1. Exact Ljw.a endpoint via Native.safeB(3, orderIdInt, ...): GET https://gateway.saned.io/api/v1/dispatch-location/contact-number/{id}
-      try {
-          val spec = Native.safeB(3, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
-          if (spec.size >= 2 && spec[1].startsWith("http")) {
-              val rb = Request.Builder().url(spec[1]).get()
-              var idx = 2
-              while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
-              val resp = client.newCall(rb.build()).execute()
-              val code = resp.code
-              val body = resp.body?.string() ?: ""
-              resp.close()
-              if (code in 200..299 && body.trim().startsWith("{")) {
-                  val json = JSONObject(body)
-                  val dataObj = json.optJSONObject("data") ?: json
-                  val p = extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
-                  val n = extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
-                  val ca = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal")
-                  if (p.isNotEmpty()) cPhone = p
-                  if (n.isNotEmpty()) cName = n
-                  if (ca > 0.0) cCash = ca
-              }
-          }
-      } catch (_: Throwable) {}
+            if (orderIdInt > 0) {
+                // 1. Exact Ljw.a endpoint via Native.safeB(3, orderIdInt, ...): GET https://gateway.saned.io/api/v1/dispatch-location/contact-number/{id}
+                try {
+                    val spec = Native.safeB(3, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+                    if (spec.size >= 2 && spec[1].startsWith("http")) {
+                        val rb = Request.Builder().url(spec[1]).get()
+                        var idx = 2
+                        while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+                        val resp = client.newCall(rb.build()).execute()
+                        val code = resp.code
+                        val body = resp.body?.string() ?: ""
+                        resp.close()
+                        if (code in 200..299 && body.trim().startsWith("{")) {
+                            val json = JSONObject(body)
+                            val dataObj = json.optJSONObject("data") ?: json
+                            val p = extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
+                            val n = extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
+                            val ca = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount")
+                            val fp = extractFirstDouble(dataObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount")
+                            val pm = extractFirstString(dataObj, "paymentMethod", "payment_method", "paymentType", "type")
+                            if (p.isNotEmpty()) cPhone = p
+                            if (n.isNotEmpty()) cName = n
+                            if (ca > 0.0) cCash = ca
+                            if (fp > 0.0) cFoodPrice = fp
+                            if (pm.isNotEmpty()) cPayMethod = pm
+                        }
+                    }
+                } catch (_: Throwable) {}
 
-      // 2. If food/cash amount or customer coordinates are missing on an assigned order, fetch read-only dispatch details GET /api/v1/dispatch/{id}
-      val existingCoords = getCachedCoords(cleanId)
-      val needCoords = existingCoords == null || existingCoords.getOrNull(2) == 0.0
-      if ((cCash <= 0.0 || needCoords) && knownDbOrderIds.contains(cleanId)) {
-          try {
-              val rb = Request.Builder().url("https://gateway.saned.io/api/v1/dispatch/$orderIdInt").get()
-                  .header("Authorization", "Bearer $rawTok")
-                  .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
-                  .header("User-Agent", "okhttp/5.1.0")
-              if (capturedDriverCipherB64.isNotEmpty()) rb.header("x-unique-Identifier", capturedDriverCipherB64)
-              val resp = client.newCall(rb.build()).execute()
-              val code = resp.code
-              val body = resp.body?.string() ?: ""
-              resp.close()
-              if (code in 200..299 && body.trim().startsWith("{")) {
-                  val json = JSONObject(body)
-                  val dataObj = json.optJSONObject("data") ?: json
-                  val payObj = dataObj.optJSONObject("payment") ?: json.optJSONObject("payment")
-                  var ca = if (payObj != null) extractFirstDouble(payObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal", "amount") else 0.0
-                  if (ca <= 0.0) ca = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount", "orderAmount", "totalAmount", "invoiceAmount", "foodPrice", "subTotal")
-                  if (ca > 0.0) cCash = ca
-                  val clObj = dataObj.optJSONObject("client") ?: dataObj.optJSONObject("customer")
-                  if (cPhone.isEmpty()) {
-                      cPhone = (if (clObj != null) extractFirstString(clObj, kClientPhone, kContactNum, "phone", "mobile") else "").ifEmpty {
-                          extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
-                      }
-                  }
-                  if (cName.isEmpty()) {
-                      cName = (if (clObj != null) extractFirstString(clObj, "subscriberName", "name", "customer_name") else "").ifEmpty {
-                          extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
-                      }
-                  }
-                  val locObj = dataObj.optJSONObject("location") ?: json.optJSONObject("location")
-                  val pickObj = dataObj.optJSONObject("pickup") ?: locObj?.optJSONObject("pickup")
-                  val dstObj = dataObj.optJSONObject("destination") ?: dataObj.optJSONObject("dropoff") ?: locObj?.optJSONObject("destination")
-                  var apiPLat = extractFirstDouble(locObj ?: dataObj, "pickupLatitude", "pickupLat", "dispatchPickupLat")
-                  var apiPLng = extractFirstDouble(locObj ?: dataObj, "pickupLongitude", "pickupLng", "dispatchPickupLng")
-                  var apiDLat = extractFirstDouble(locObj ?: dataObj, "destinationLatitude", "destLat", "dispatchDestLat")
-                  var apiDLng = extractFirstDouble(locObj ?: dataObj, "destinationLongitude", "destLng", "dispatchDestLng")
-                  if (apiPLat == 0.0 && pickObj != null) {
-                      apiPLat = extractFirstDouble(pickObj, "lat", "latitude")
-                      apiPLng = extractFirstDouble(pickObj, "lng", "lon", "longitude")
-                      val pc = pickObj.optJSONArray("coordinates")
-                      if (pc != null && pc.length() >= 2) {
-                          val c0 = pc.optDouble(0, 0.0); val c1 = pc.optDouble(1, 0.0)
-                          if (c1 in 15.0..35.0) { apiPLng = c0; apiPLat = c1 } else { apiPLat = c0; apiPLng = c1 }
-                      }
-                  }
-                  if (apiDLat == 0.0 && dstObj != null) {
-                      apiDLat = extractFirstDouble(dstObj, "lat", "latitude")
-                      apiDLng = extractFirstDouble(dstObj, "lng", "lon", "longitude")
-                      val dc = dstObj.optJSONArray("coordinates")
-                      if (dc != null && dc.length() >= 2) {
-                          val c0 = dc.optDouble(0, 0.0); val c1 = dc.optDouble(1, 0.0)
-                          if (c1 in 15.0..35.0) { apiDLng = c0; apiDLat = c1 } else { apiDLat = c0; apiDLng = c1 }
-                      }
-                  }
-                  if (apiPLat != 0.0 || apiDLat != 0.0) {
-                      cacheOrderCoords(cleanId, apiPLat, apiPLng, apiDLat, apiDLng)
-                      DiagnosticLogger.logStep("NavLog", "API /dispatch/$orderIdInt coords: pickup=($apiPLat,$apiPLng) -> customer=($apiDLat,$apiDLng)")
-                  }
-              }
-          } catch (_: Throwable) {}
-      }
+                // 2. Fetch read-only dispatch details GET https://gateway.saned.io/api/v1/dispatch/{id} (works immediately on Accepted orders!)
+                try {
+                    val rb = Request.Builder().url("https://gateway.saned.io/api/v1/dispatch/$orderIdInt").get()
+                        .header("Authorization", "Bearer $rawTok")
+                        .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
+                        .header("User-Agent", "okhttp/5.1.0")
+                    if (capturedDriverCipherB64.isNotEmpty()) rb.header("x-unique-Identifier", capturedDriverCipherB64)
+                    val resp = client.newCall(rb.build()).execute()
+                    val code = resp.code
+                    val body = resp.body?.string() ?: ""
+                    resp.close()
+                    if (code in 200..299 && body.trim().startsWith("{")) {
+                        val json = JSONObject(body)
+                        val dataObj = json.optJSONObject("data") ?: json
+                        val refVal = extractFirstString(dataObj, "referenceId", "reference", "order_number", "orderNumber")
+                        if (refVal.isNotEmpty()) cRef = refVal
+                        val payObj = dataObj.optJSONObject("payment") ?: json.optJSONObject("payment")
+                        if (payObj != null) {
+                            val ca = extractFirstDouble(payObj, "collectionAmount", "cash_amount", "cashAmount", "cod_amount")
+                            val fp = extractFirstDouble(payObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "subTotal", "sub_total", "itemsAmount", "collectionAmount", "amount")
+                            val pm = extractFirstString(payObj, "paymentMethod", "payment_method", "paymentType", "type", "mode")
+                            if (ca > 0.0) cCash = ca
+                            if (fp > 0.0) cFoodPrice = fp
+                            if (pm.isNotEmpty()) cPayMethod = pm
+                        }
+                        if (cFoodPrice <= 0.0) {
+                            cFoodPrice = extractFirstDouble(dataObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount", "cashAmount")
+                        }
+                        if (cCash <= 0.0) {
+                            cCash = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount")
+                        }
+                        if (cPayMethod.isEmpty()) {
+                            cPayMethod = extractFirstString(dataObj, "paymentMethod", "payment_method", "paymentType")
+                        }
+                        val clObj = dataObj.optJSONObject("client") ?: dataObj.optJSONObject("customer")
+                        if (cPhone.isEmpty()) {
+                            cPhone = (if (clObj != null) extractFirstString(clObj, kClientPhone, kContactNum, "phone", "mobile") else "").ifEmpty {
+                                extractFirstString(dataObj, kClientPhone, kContactNum, "phone", "mobile", "customer_phone")
+                            }
+                        }
+                        if (cName.isEmpty()) {
+                            cName = (if (clObj != null) extractFirstString(clObj, "subscriberName", "name", "customer_name") else "").ifEmpty {
+                                extractFirstString(dataObj, "subscriberName", "customer_name", "client_name", "name")
+                            }
+                        }
+                        val locObj = dataObj.optJSONObject("location") ?: json.optJSONObject("location")
+                        val pickObj = dataObj.optJSONObject("pickup") ?: locObj?.optJSONObject("pickup")
+                        val dstObj = dataObj.optJSONObject("destination") ?: dataObj.optJSONObject("dropoff") ?: locObj?.optJSONObject("destination")
+                        var apiPLat = extractFirstDouble(locObj ?: dataObj, "pickupLatitude", "pickupLat", "dispatchPickupLat")
+                        var apiPLng = extractFirstDouble(locObj ?: dataObj, "pickupLongitude", "pickupLng", "dispatchPickupLng")
+                        var apiDLat = extractFirstDouble(locObj ?: dataObj, "destinationLatitude", "destLat", "dispatchDestLat")
+                        var apiDLng = extractFirstDouble(locObj ?: dataObj, "destinationLongitude", "destLng", "dispatchDestLng")
+                        if (apiPLat == 0.0 && pickObj != null) {
+                            apiPLat = extractFirstDouble(pickObj, "lat", "latitude")
+                            apiPLng = extractFirstDouble(pickObj, "lng", "lon", "longitude")
+                            val pc = pickObj.optJSONArray("coordinates")
+                            if (pc != null && pc.length() >= 2) {
+                                val c0 = pc.optDouble(0, 0.0); val c1 = pc.optDouble(1, 0.0)
+                                if (c1 in 15.0..35.0) { apiPLng = c0; apiPLat = c1 } else { apiPLat = c0; apiPLng = c1 }
+                            }
+                        }
+                        if (apiDLat == 0.0 && dstObj != null) {
+                            apiDLat = extractFirstDouble(dstObj, "lat", "latitude")
+                            apiDLng = extractFirstDouble(dstObj, "lng", "lon", "longitude")
+                            val dc = dstObj.optJSONArray("coordinates")
+                            if (dc != null && dc.length() >= 2) {
+                                val c0 = dc.optDouble(0, 0.0); val c1 = dc.optDouble(1, 0.0)
+                                if (c1 in 15.0..35.0) { apiDLng = c0; apiDLat = c1 } else { apiDLat = c0; apiDLng = c1 }
+                            }
+                        }
+                        if (apiPLat != 0.0 || apiDLat != 0.0) {
+                            cacheOrderCoords(cleanId, apiPLat, apiPLng, apiDLat, apiDLng)
+                            if (cRef.isNotEmpty()) cacheOrderCoords(cRef, apiPLat, apiPLng, apiDLat, apiDLng)
+                            DiagnosticLogger.logStep("NavLog", "API /dispatch/$orderIdInt coords: pickup=($apiPLat,$apiPLng) -> customer=($apiDLat,$apiDLng)")
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
 
-      if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0 || getCachedCoords(cleanId) != null) {
-          if (cPhone.isNotEmpty() || cName.isNotEmpty() || cCash > 0.0) {
-              customerDetailsCache[cleanId] = Triple(cName, cPhone, cCash)
-          }
-          DiagnosticLogger.logStep("ContactFetch", "Fetched details for #$cleanId (phone=${cPhone.isNotEmpty()}, cash=$cCash)")
-          if (ctx != null) scanJahezDatabases(ctx)
-      }
-  }
+            // 3. Also check active dispatches endpoint (/api/v1/dispatch/active) if foodPrice or referenceId is still missing
+            if (cFoodPrice <= 0.0 || cRef.isEmpty()) {
+                try {
+                    val spec2 = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+                    val activeUrl = if (spec2.size >= 2 && spec2[1].startsWith("http")) spec2[1] else "https://gateway.saned.io/api/v1/dispatch/active"
+                    val rb2 = Request.Builder().url(activeUrl).get()
+                    if (spec2.size >= 4) {
+                        var idx = 2
+                        while (idx + 1 < spec2.size) { rb2.header(spec2[idx], spec2[idx + 1]); idx += 2 }
+                    } else {
+                        rb2.header("Authorization", "Bearer $rawTok")
+                           .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
+                           .header("User-Agent", "okhttp/5.1.0")
+                        if (capturedDriverCipherB64.isNotEmpty()) rb2.header("x-unique-Identifier", capturedDriverCipherB64)
+                    }
+                    val resp2 = client.newCall(rb2.build()).execute()
+                    val code2 = resp2.code
+                    val body2 = resp2.body?.string() ?: ""
+                    resp2.close()
+                    if (code2 in 200..299 && body2.isNotEmpty()) {
+                        findAndParseEmbeddedJson(body2, "Active Dispatches Sync 🔄")
+                    }
+                } catch (_: Throwable) {}
+            }
+
+            if (cFoodPrice <= 0.0 && cCash > 0.0) cFoodPrice = cCash
+            if (cPhone.isNotEmpty() || cName.isNotEmpty() || cFoodPrice > 0.0 || cCash > 0.0 || cPayMethod.isNotEmpty() || cRef.isNotEmpty() || getCachedCoords(cleanId) != null) {
+                if (cPhone.isNotEmpty() || cName.isNotEmpty() || cFoodPrice > 0.0) {
+                    customerDetailsCache[cleanId] = Triple(cName, cPhone, if (cFoodPrice > 0.0) cFoodPrice else cCash)
+                    if (cRef.isNotEmpty()) customerDetailsCache[cRef] = Triple(cName, cPhone, if (cFoodPrice > 0.0) cFoodPrice else cCash)
+                }
+                cacheOrderPayment(cleanId, cFoodPrice, cCash, cPayMethod)
+                if (cRef.isNotEmpty()) cacheOrderPayment(cRef, cFoodPrice, cCash, cPayMethod)
+                DiagnosticLogger.logStep("ContactFetch", "Fetched details for #$cleanId (ref=$cRef, phone=${cPhone.isNotEmpty()}, foodPrice=$cFoodPrice, cash=$cCash, method=$cPayMethod)")
+
+                // Immediately push updated order to Orders tab so Accepted card shows Price Food without waiting!
+                val existingJson = synchronized(syncedOrdersCache) {
+                    syncedOrdersCache[cRef] ?: syncedOrdersCache[cleanId] ?: syncedOrdersCache[orderIdInt.toString()]
+                }
+                if (existingJson != null) {
+                    val prevModel = OrderModel.fromJson(existingJson)
+                    sendOrderToLog(
+                        orderId = "#${if (prevModel.id != 0) prevModel.id else cleanId}",
+                        price = prevModel.price,
+                        dist = prevModel.distanceKm,
+                        restaurant = prevModel.restaurant,
+                        status = prevModel.status,
+                        customerName = cName.ifEmpty { prevModel.customerName },
+                        customerPhone = cPhone.ifEmpty { prevModel.customerPhone },
+                        address = prevModel.address,
+                        cashAmount = if (cCash > 0.0) cCash else prevModel.cashAmount,
+                        foodPrice = if (cFoodPrice > 0.0) cFoodPrice else prevModel.foodPrice,
+                        paymentMethod = cPayMethod.ifEmpty { prevModel.paymentMethod },
+                        currency = prevModel.currency,
+                        reference = cRef.ifEmpty { prevModel.reference },
+                        pickupAddress = prevModel.pickupAddress,
+                        customerDistanceKm = prevModel.customerDistanceKm,
+                        pickupLat = prevModel.pickupLat,
+                        pickupLng = prevModel.pickupLng,
+                        destLat = prevModel.destLat,
+                        destLng = prevModel.destLng,
+                        decisionReason = prevModel.decisionReason,
+                        notifyUser = false
+                    )
+                }
+                if (ctx != null) scanJahezDatabases(ctx)
+            }
         }
     }
 
@@ -2699,31 +2868,35 @@ object OrderInterceptor {
             var dist = extractFirstDouble(json, "distance", "km", "distance_to_pickup", "distance_in_km", "distanceInKm", "distanceKm")
             var restaurant = extractFirstString(json, "subscriberName", "vendorName", "restaurantName", "storeName", "store_name", "restaurant_name", "store_name_ar", "store_name_en", "restaurant_name_ar", "restaurant_name_en", "branch_name", "branchName", "vendor_name", "merchant_name", "merchantName", "shop_name", "shopName", "pickup_name", "pickupName", "restaurant", "store")
             var customerName = extractFirstString(json, "customer_name", "client_name", "customerName", "clientName", "recipient_name", "user_name", "customer")
-            var customerPhone = extractFirstString(json, "clientPhone", "contactNumber", "customer_phone", "client_phone", "customerPhone", " phone", "mobile", "contact_number")
+            var customerPhone = extractFirstString(json, "clientPhone", "contactNumber", "customer_phone", "client_phone", "customerPhone", "phone", "mobile", "contact_number")
             var address = extractFirstString(json, "customer_address", "delivery_address", "dropoff_address", "address", "dropoffLocation", "destination_address", "location_address")
             var cashAmount = extractFirstDouble(json, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+            var foodPrice = extractFirstDouble(json, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "subTotal", "sub_total", "itemsAmount", "items_amount", "collectionAmount", "cashAmount")
+            var paymentMethod = extractFirstString(json, "paymentMethod", "payment_method", "paymentType", "payment_type", "paymentMode")
             var currency = extractFirstString(json, "currency", "currencyCode", "curr").ifEmpty { "SAR" }
             var status = extractFirstString(json, "dispatchType", "status", "order_status", "state").ifEmpty { "Accepted ✅" }
 
             val dataObj = json.optJSONObject("data") ?: json.optJSONObject("order") ?: json.optJSONObject("trip") ?: json.optJSONObject("payload")
             if (dataObj != null) {
-                if (orderId.isEmpty()) orderId = extractFirstString(dataObj, "order_number", "order_id", "orderNumber", "orderId", "id", "code", "trip_id", "tripId")
-                if (reference.isEmpty()) reference = extractFirstString(dataObj, "reference", "order_number", "orderNumber", "order_code", "code", "id")
-                if (price == 0.0) price = extractFirstDouble(dataObj, "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee", "earning", "amount", "total")
+                if (orderId.isEmpty()) orderId = extractFirstString(dataObj, "requestId", "dispatchId", "order_number", "order_id", "orderNumber", "orderId", "id", "code", "trip_id", "tripId")
+                if (reference.isEmpty()) reference = extractFirstString(dataObj, "referenceId", "reference", "order_number", "orderNumber", "order_code", "code", "id")
+                if (price == 0.0) price = extractFirstDouble(dataObj, "deliveryPrice", "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee", "earning", "amount", "total")
                 if (dist == 0.0) dist = extractFirstDouble(dataObj, "distance", "km", "distance_to_pickup", "distance_in_km", "distanceInKm", "distanceKm")
-                if (restaurant.isEmpty()) restaurant = extractFirstString(dataObj, "store_name", "restaurant_name", "storeName", "restaurantName", "vendor_name", "vendorName", "shop_name", "shopName", "name", "restaurant")
+                if (restaurant.isEmpty()) restaurant = extractFirstString(dataObj, "subscriberName", "store_name", "restaurant_name", "storeName", "restaurantName", "vendor_name", "vendorName", "shop_name", "shopName", "name", "restaurant")
                 if (customerName.isEmpty()) customerName = extractFirstString(dataObj, "customer_name", "client_name", "customerName", "clientName", "recipient_name", "user_name", "customer")
-                if (customerPhone.isEmpty()) customerPhone = extractFirstString(dataObj, "customer_phone", "client_phone", "customerPhone", "clientPhone", "phone", "mobile", "contact_number")
+                if (customerPhone.isEmpty()) customerPhone = extractFirstString(dataObj, "clientPhone", "contactNumber", "customer_phone", "client_phone", "customerPhone", "phone", "mobile", "contact_number")
                 if (address.isEmpty()) address = extractFirstString(dataObj, "customer_address", "delivery_address", "dropoff_address", "address", "dropoffLocation", "destination_address", "location_address")
-                if (cashAmount == 0.0) cashAmount = extractFirstDouble(dataObj, "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+                if (cashAmount == 0.0) cashAmount = extractFirstDouble(dataObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+                if (foodPrice == 0.0) foodPrice = extractFirstDouble(dataObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "subTotal", "sub_total", "itemsAmount", "items_amount", "collectionAmount")
+                if (paymentMethod.isEmpty()) paymentMethod = extractFirstString(dataObj, "paymentMethod", "payment_method", "paymentType", "payment_type")
                 val s = extractFirstString(dataObj, "status", "order_status", "state")
                 if (s.isNotEmpty()) status = s
             }
 
             val custObj = json.optJSONObject("customer") ?: dataObj?.optJSONObject("customer") ?: json.optJSONObject("client") ?: dataObj?.optJSONObject("client")
             if (custObj != null) {
-                if (customerName.isEmpty()) customerName = extractFirstString(custObj, "name", "full_name", "customer_name")
-                if (customerPhone.isEmpty()) customerPhone = extractFirstString(custObj, "phone", "mobile", "phone_number")
+                if (customerName.isEmpty()) customerName = extractFirstString(custObj, "subscriberName", "name", "full_name", "customer_name")
+                if (customerPhone.isEmpty()) customerPhone = extractFirstString(custObj, "clientPhone", "contactNumber", "phone", "mobile", "phone_number")
             }
 
             val dropoffObj = json.optJSONObject("dropoff") ?: dataObj?.optJSONObject("dropoff") ?: json.optJSONObject("delivery") ?: dataObj?.optJSONObject("delivery")
@@ -2739,15 +2912,14 @@ object OrderInterceptor {
             val paymentObj = json.optJSONObject("payment") ?: dataObj?.optJSONObject("payment")
             if (paymentObj != null) {
                 if (price == 0.0) price = extractFirstDouble(paymentObj, "deliveryPrice", "price", "delivery_cost", "delivery_fee", "deliveryFee", "deliveryCost", "driver_fee", "driverFee")
-                if (cashAmount == 0.0) cashAmount = extractFirstDouble(paymentObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount", "amount")
+                if (cashAmount == 0.0) cashAmount = extractFirstDouble(paymentObj, "collectionAmount", "cash_amount", "cashAmount", "collect_cash", "cod_amount", "cod", "cash", "cash_to_collect")
+                if (foodPrice == 0.0) foodPrice = extractFirstDouble(paymentObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "subTotal", "sub_total", "itemsAmount", "items_amount", "collectionAmount", "cashAmount", "amount")
+                if (paymentMethod.isEmpty()) paymentMethod = extractFirstString(paymentObj, "paymentMethod", "payment_method", "paymentType", "type", "mode")
                 val pCurr = extractFirstString(paymentObj, "currencyCode", "currency", "curr")
                 if (pCurr.isNotEmpty()) currency = pCurr
             }
-            if (cashAmount == 0.0) {
-                cashAmount = extractFirstDouble(json, "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
-                if (cashAmount == 0.0 && dataObj != null) {
-                    cashAmount = extractFirstDouble(dataObj, "collectionAmount", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "invoice_amount", "foodPrice", "food_price", "subTotal", "sub_total", "itemsAmount", "items_amount")
-                }
+            if (foodPrice == 0.0 && cashAmount > 0.0) {
+                foodPrice = cashAmount
             }
 
             // Coordinate-based Haversine distance calculation matching Lb11.e, Ls90.g, and Lqz.a
@@ -2757,13 +2929,11 @@ object OrderInterceptor {
             var dLat = extractFirstDouble(json, "dispatchDestLat", "destinationLatitude", "dest_lat", "destLat", "dropoff_lat", "customer_lat")
             var dLng = extractFirstDouble(json, "dispatchDestLng", "destinationLongitude", "dest_lng", "destLng", "dropoff_lng", "customer_lng")
             run {
-
                 if (pLat == 0.0 && pickupObj != null) {
                     pLat = extractFirstDouble(pickupObj, "lat", "latitude")
                     pLng = extractFirstDouble(pickupObj, "lng", "lon", "longitude")
                     val coords = pickupObj.optJSONArray("coordinates") ?: pickupObj.optJSONArray("location")
                     if (coords != null && coords.length() >= 2) {
-                        // In Lb11.e (008f..0096), GeoJSON coordinates are [lng, lat]
                         val c0 = coords.optDouble(0, 0.0)
                         val c1 = coords.optDouble(1, 0.0)
                         if (c1 in 15.0..35.0 && c0 in 34.0..56.0) { pLng = c0; pLat = c1 }
@@ -2798,8 +2968,8 @@ object OrderInterceptor {
             val rawStatusFromJson = extractFirstString(json, "status", "order_status", "state", "orderStatus")
                 .ifEmpty { if (dataObj != null) extractFirstString(dataObj, "status", "order_status", "state", "orderStatus") else "" }
 
-            val hasExplicitOrderIdKey = extractFirstString(json, "order_number", "order_id", "orderNumber", "orderId", "trip_id", "tripId", "reference").isNotEmpty() ||
-                (dataObj != null && extractFirstString(dataObj, "order_number", "order_id", "orderNumber", "orderId", "trip_id", "tripId", "reference").isNotEmpty())
+            val hasExplicitOrderIdKey = extractFirstString(json, "requestId", "dispatchId", "order_number", "order_id", "orderNumber", "orderId", "trip_id", "tripId", "reference", "referenceId").isNotEmpty() ||
+                (dataObj != null && extractFirstString(dataObj, "requestId", "dispatchId", "order_number", "order_id", "orderNumber", "orderId", "trip_id", "tripId", "reference", "referenceId").isNotEmpty())
             val hasOrderAttributes = restaurant.isNotEmpty() || price > 0.0 || dist > 0.0 || isHistoricalOrActiveStatus(rawStatusFromJson)
 
             if ((hasExplicitOrderIdKey && (hasOrderAttributes || !isFromLocalDb)) || (orderId.isNotEmpty() && hasOrderAttributes) || (price > 0.0 && restaurant.isNotEmpty())) {
@@ -2809,11 +2979,12 @@ object OrderInterceptor {
                 if (reference.isEmpty()) reference = orderId.replace("#", "")
                 val cleanPrice = String.format(Locale.US, "%.2f", price).toDoubleOrNull() ?: price
 
-                // If order is from SQLite DB or already has a historical/active status (Delivered, Completed, Accepted, Picked Up, Cancelled),
-                // sync it directly to the Orders tab with its real status without running new-offer Auto-Accept/Reject gates!
                 val rawOrderIdClean = orderId.replace("#", "").trim()
                 cacheOrderCoords(rawOrderIdClean, pLat, pLng, dLat, dLng)
                 if (reference.isNotEmpty()) cacheOrderCoords(reference, pLat, pLng, dLat, dLng)
+                cacheOrderPayment(rawOrderIdClean, foodPrice, cashAmount, paymentMethod)
+                if (reference.isNotEmpty()) cacheOrderPayment(reference, foodPrice, cashAmount, paymentMethod)
+
                 val cachedCoords = getCachedCoords(rawOrderIdClean) ?: getCachedCoords(reference)
                 if (pLat == 0.0) pLat = cachedCoords?.getOrNull(0) ?: 0.0
                 if (pLng == 0.0) pLng = cachedCoords?.getOrNull(1) ?: 0.0
@@ -2822,7 +2993,7 @@ object OrderInterceptor {
                 if ((pLat != 0.0 || dLat != 0.0) && loggedNavOrderKeys.add("json:$rawOrderIdClean:$pLat:$dLat")) {
                     DiagnosticLogger.logStep(
                         "NavLog",
-                        "JSON [$channelSource] #$rawOrderIdClean: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) custDist=${String.format(Locale.US, "%.2f", custDist)}km"
+                        "JSON [$channelSource] #$rawOrderIdClean (ref=$reference) foodPrice=$foodPrice: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) custDist=${String.format(Locale.US, "%.2f", custDist)}km"
                     )
                 }
                 if (cashAmount <= 0.0) {
@@ -2832,10 +3003,22 @@ object OrderInterceptor {
                     }
                     cashAmount = if (cachedC > 0.0) cachedC else if (!syncedC.isNaN() && syncedC > 0.0) syncedC else 0.0
                 }
-                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean)) {
+                if (foodPrice <= 0.0) {
+                    val cachedF = foodPriceCache[rawOrderIdClean] ?: foodPriceCache[reference] ?: 0.0
+                    val syncedF = synchronized(syncedOrdersCache) {
+                        (syncedOrdersCache[reference] ?: syncedOrdersCache[rawOrderIdClean])?.optDouble("foodPrice", 0.0) ?: 0.0
+                    }
+                    foodPrice = when {
+                        cachedF > 0.0 -> cachedF
+                        !syncedF.isNaN() && syncedF > 0.0 -> syncedF
+                        cashAmount > 0.0 -> cashAmount
+                        else -> 0.0
+                    }
+                }
+                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean) || channelSource.contains("Active Dispatches", ignoreCase = true)) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
                     val hasCoords = (dLat != 0.0 && dLng != 0.0)
-                    val dedupKey = "${orderId.replace("#", "")}:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}:$hasCoords"
+                    val dedupKey = "${orderId.replace("#", "")}:$reference:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}:${foodPrice.toInt()}:$hasCoords"
                     if (loggedOrderIds.add(dedupKey)) {
                         lastOrderEvent = "Order $orderId synced ($normStatus) via $channelSource"
                         sendOrderToLog(
@@ -2848,6 +3031,8 @@ object OrderInterceptor {
                             customerPhone = customerPhone,
                             address = address,
                             cashAmount = cashAmount,
+                            foodPrice = foodPrice,
+                            paymentMethod = paymentMethod,
                             currency = currency,
                             reference = reference,
                             customerDistanceKm = custDist,
@@ -2875,6 +3060,9 @@ object OrderInterceptor {
                         custName = customerName,
                         custPhone = customerPhone,
                         cashAmt = cashAmount,
+                        foodPrice = foodPrice,
+                        paymentMethod = paymentMethod,
+                        reference = reference,
                         pickupLat = pLat,
                         pickupLng = pLng,
                         destLat = dLat,
@@ -2893,57 +3081,57 @@ object OrderInterceptor {
      */
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
         if (!isMasterRunning) {
-  return "MANUAL" to "Master switch off"
+            return "MANUAL" to "Master switch off"
         }
 
         val failedReasons = mutableListOf<String>()
         if (minOrderPrice > 0.0) {
-  if (price <= 0.0) {
-      failedReasons.add("price unknown")
-  } else if (price < minOrderPrice) {
-      val fmtP = String.format(Locale.US, "%.2f", price)
-      failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
-  }
+            if (price <= 0.0) {
+                failedReasons.add("price unknown")
+            } else if (price < minOrderPrice) {
+                val fmtP = String.format(Locale.US, "%.2f", price)
+                failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
+            }
         }
         if (maxDistToRestaurant > 0.0) {
-  if (distRest <= 0.0) {
-      if (!LocationEngine.isFixLocationUnknownEnabled) {
-          failedReasons.add("location unknown")
-      }
-  } else if (distRest > maxDistToRestaurant) {
-      val fmtD = String.format(Locale.US, "%.2f", distRest)
-      failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
-  }
+            if (distRest <= 0.0) {
+                if (!LocationEngine.isFixLocationUnknownEnabled) {
+                    failedReasons.add("location unknown")
+                }
+            } else if (distRest > maxDistToRestaurant) {
+                val fmtD = String.format(Locale.US, "%.2f", distRest)
+                failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
+            }
         }
         if (maxDistCustomer > 0.0) {
-  if (distCust <= 0.0) {
-      if (!LocationEngine.isFixLocationUnknownEnabled) {
-          if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
-      }
-  } else if (distCust > maxDistCustomer) {
-      val fmtC = String.format(Locale.US, "%.2f", distCust)
-      failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
-  }
+            if (distCust <= 0.0) {
+                if (!LocationEngine.isFixLocationUnknownEnabled) {
+                    if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
+                }
+            } else if (distCust > maxDistCustomer) {
+                val fmtC = String.format(Locale.US, "%.2f", distCust)
+                failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
+            }
         }
 
         if (failedReasons.isNotEmpty()) {
-  val reasonStr = failedReasons.joinToString(", ")
-  return if (isAutoReject) {
-      if (isDryRun) "DRY_RUN" to "Dry-Run (Would Reject: $reasonStr)"
-      else "REJECT" to reasonStr
-  } else {
-      "MANUAL" to reasonStr
-  }
+            val reasonStr = failedReasons.joinToString(", ")
+            return if (isAutoReject) {
+                if (isDryRun) "DRY_RUN" to "Dry-Run (Would Reject: $reasonStr)"
+                else "REJECT" to reasonStr
+            } else {
+                "MANUAL" to reasonStr
+            }
         }
 
         if (isDryRun) {
-  return "DRY_RUN" to "All gates passed (Dry-Run)"
+            return "DRY_RUN" to "All gates passed (Dry-Run)"
         }
 
         return if (isAutoAccept) {
-  "ACCEPT" to "All gates passed"
+            "ACCEPT" to "All gates passed"
         } else {
-  "MANUAL" to "All gates passed; auto-accept off"
+            "MANUAL" to "All gates passed; auto-accept off"
         }
     }
 
@@ -2962,6 +3150,9 @@ object OrderInterceptor {
         custName: String = "",
         custPhone: String = "",
         cashAmt: Double = 0.0,
+        foodPrice: Double = 0.0,
+        paymentMethod: String = "",
+        reference: String = "",
         pickupLat: Double = 0.0,
         pickupLng: Double = 0.0,
         destLat: Double = 0.0,
@@ -2971,6 +3162,11 @@ object OrderInterceptor {
         val rawId = orderId.replace("#", "").trim()
         if (rawId.isEmpty()) return ""
         cacheOrderCoords(rawId, pickupLat, pickupLng, destLat, destLng)
+        if (reference.isNotEmpty()) cacheOrderCoords(reference, pickupLat, pickupLng, destLat, destLng)
+        val effFoodPrice = if (foodPrice > 0.0) foodPrice else cashAmt
+        cacheOrderPayment(rawId, effFoodPrice, cashAmt, paymentMethod)
+        if (reference.isNotEmpty()) cacheOrderPayment(reference, effFoodPrice, cashAmt, paymentMethod)
+
         val normOrderId = "#$rawId"
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
         val nowRealtime = SystemClock.elapsedRealtime()
@@ -3001,22 +3197,22 @@ object OrderInterceptor {
             "REJECT" -> {
                 lastOrderEvent = "Order $normOrderId auto-rejected ($reason)"
                 currentActivity?.let { act -> showToast(act, "❌ Auto-Rejected $normOrderId: $reason") }
-                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
-                executeDirectApiCall(rawId, "REJECT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng)
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Rejected ❌ · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+                executeDirectApiCall(rawId, "REJECT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
             }
             "DRY_RUN" -> {
                 lastOrderEvent = "Order $normOrderId dry-run ($reason)"
                 currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $normOrderId ($reason)") }
-                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
             }
             "ACCEPT" -> {
                 lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId..."
-                executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng)
+                executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
             }
             else -> {
                 lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
                 currentActivity?.let { act -> showToast(act, "↩️ تُرك $normOrderId لك: $reason") }
-                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Missed / Manual · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
             }
         }
         return action
@@ -3051,7 +3247,7 @@ object OrderInterceptor {
      * Matches Ljx.h, Ljx$c.s, Ljh.a, and Ly0 in SanedAssistant-98-7bac1ec.apk:
      * - Boosts thread priority to -8 (THREAD_PRIORITY_URGENT_DISPLAY) on ACCEPT
      * - Queries Native.b(kind, orderIdInt, token, lang, driverCipher) if available
-     * - Executes parallelRequests (1..8) concurrent HTTP calls synchronized with CountDownLatch(1)
+     * - Immediately parses accept response & triggers fetchOrderCustomerDetailsAsync so Accepted orders always display Price Food
      */
     @Volatile var verifiedAcceptMethod: String = ""
     @Volatile var verifiedAcceptUrlTemplate: String = ""
@@ -3072,7 +3268,10 @@ object OrderInterceptor {
         pickupLat: Double = 0.0,
         pickupLng: Double = 0.0,
         destLat: Double = 0.0,
-        destLng: Double = 0.0
+        destLng: Double = 0.0,
+        foodPrice: Double = 0.0,
+        paymentMethod: String = "",
+        reference: String = ""
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
@@ -3081,246 +3280,301 @@ object OrderInterceptor {
         val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
         if (token.isEmpty()) {
-  DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
-  if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
-  return
+            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
+            if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
+            return
         }
 
         val clientToUse = httpClient
         CoroutineScope(Dispatchers.IO).launch {
-  val tid = Process.myTid()
-  val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
-  if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
-  try {
-      fun buildHeaders(tok: String): LinkedHashMap<String, String> {
-          val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
-          val map = LinkedHashMap<String, String>()
-          if (orderIdInt > 0) {
-              try {
-                  if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
-                  val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
-                  var idx = 2
-                  while (idx + 1 < spec.size) { map[spec[idx]] = spec[idx + 1]; idx += 2 }
-              } catch (_: Throwable) {}
-          }
-          if (map.isEmpty()) {
-              map["Authorization"] = "Bearer $rawTok"
-              map["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
-              map["User-Agent"] = "okhttp/5.1.0"
-              if (capturedDriverCipherB64.isNotEmpty()) {
-                  map["x-unique-Identifier"] = capturedDriverCipherB64
-              }
-          }
-          return map
-      }
+            val tid = Process.myTid()
+            val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
+            if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
+            try {
+                fun buildHeaders(tok: String): LinkedHashMap<String, String> {
+                    val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
+                    val map = LinkedHashMap<String, String>()
+                    if (orderIdInt > 0) {
+                        try {
+                            if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+                            val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
+                            var idx = 2
+                            while (idx + 1 < spec.size) { map[spec[idx]] = spec[idx + 1]; idx += 2 }
+                        } catch (_: Throwable) {}
+                    }
+                    if (map.isEmpty()) {
+                        map["Authorization"] = "Bearer $rawTok"
+                        map["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
+                        map["User-Agent"] = "okhttp/5.1.0"
+                        if (capturedDriverCipherB64.isNotEmpty()) {
+                            map["x-unique-Identifier"] = capturedDriverCipherB64
+                        }
+                    }
+                    return map
+                }
 
-      var nativeHeaders = buildHeaders(token)
-      val emptyBody = "".toRequestBody(null)
-      val jsonAcceptBody = JSONObject().apply {
-          if (orderIdInt > 0) put("requestId", orderIdInt)
-          put("order_id", orderIdNum)
-          put("status", "ACCEPTED")
-      }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                var nativeHeaders = buildHeaders(token)
+                val emptyBody = "".toRequestBody(null)
+                val jsonAcceptBody = JSONObject().apply {
+                    if (orderIdInt > 0) put("requestId", orderIdInt)
+                    put("order_id", orderIdNum)
+                    put("status", "ACCEPTED")
+                }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-      val candidateSpecs = mutableListOf<Pair<String, String>>()
-      if (!isAccept) {
-          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
-      } else {
-          candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
-      }
+                val candidateSpecs = mutableListOf<Pair<String, String>>()
+                if (!isAccept) {
+                    candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
+                } else {
+                    candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
+                }
 
-      var winCode: Int? = null
-      var lastErrCode = 0
-      var lastErrBody = ""
+                var winCode: Int? = null
+                var winBodyStr = ""
+                var lastErrCode = 0
+                var lastErrBody = ""
 
-      // Execute sequentially on a single high-priority coroutine to NEVER trigger Cloudflare 429 (error code: 1015)!
-      var specIdx = 0
-      val distinctSpecs = candidateSpecs.distinct().toMutableList()
-      var retried401 = false
+                // Execute sequentially on a single high-priority coroutine to NEVER trigger Cloudflare 429 (error code: 1015)!
+                var specIdx = 0
+                val distinctSpecs = candidateSpecs.distinct().toMutableList()
+                var retried401 = false
 
-      while (specIdx < distinctSpecs.size) {
-          val (mName, uStr) = distinctSpecs[specIdx]
-          specIdx++
-          try {
-              httpRequestsCount.incrementAndGet()
-              lastInterceptedUrl = uStr
-              val rb = Request.Builder().url(uStr)
-              when (mName.uppercase(Locale.US)) {
-                  "PUT" -> rb.put(emptyBody)
-                  "POST" -> rb.post(if (uStr.endsWith("/$orderIdInt")) jsonAcceptBody else emptyBody)
-                  "PATCH" -> rb.patch(jsonAcceptBody)
-                  else -> rb.get()
-              }
-              for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-              val resp = clientToUse.newCall(rb.build()).execute()
-              val code = resp.code
-              val allowHdr = resp.header("Allow") ?: resp.header("allow") ?: ""
-              val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
-              resp.close()
-              lastHttpResponseCode = code
+                while (specIdx < distinctSpecs.size) {
+                    val (mName, uStr) = distinctSpecs[specIdx]
+                    specIdx++
+                    try {
+                        httpRequestsCount.incrementAndGet()
+                        lastInterceptedUrl = uStr
+                        val rb = Request.Builder().url(uStr)
+                        when (mName.uppercase(Locale.US)) {
+                            "PUT" -> rb.put(emptyBody)
+                            "POST" -> rb.post(if (uStr.endsWith("/$orderIdInt")) jsonAcceptBody else emptyBody)
+                            "PATCH" -> rb.patch(jsonAcceptBody)
+                            else -> rb.get()
+                        }
+                        for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+                        val resp = clientToUse.newCall(rb.build()).execute()
+                        val code = resp.code
+                        val allowHdr = resp.header("Allow") ?: resp.header("allow") ?: ""
+                        val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
+                        resp.close()
+                        lastHttpResponseCode = code
 
-              if (code in 200..299) {
-                  cachedApiHost = "https://gateway.saned.io"
-                  winCode = code
-                  if (isAccept && orderIdInt != 0) {
-                      apiConfirmedAcceptIds.add(orderIdInt)
-                      verifiedAcceptMethod = mName
-                      verifiedAcceptUrlTemplate = uStr.replace(orderIdInt.toString(), "{id}")
-                  }
-                  DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via $mName $uStr (HTTP $code)")
-                  break
-              }
+                        if (code in 200..299) {
+                            cachedApiHost = "https://gateway.saned.io"
+                            winCode = code
+                            winBodyStr = bodyStr
+                            if (isAccept && orderIdInt != 0) {
+                                apiConfirmedAcceptIds.add(orderIdInt)
+                                verifiedAcceptMethod = mName
+                                verifiedAcceptUrlTemplate = uStr.replace(orderIdInt.toString(), "{id}")
+                            }
+                            DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via $mName $uStr (HTTP $code)")
+                            break
+                        }
 
-              lastErrCode = code
-              lastErrBody = bodyStr
-              DiagnosticLogger.logWarn("DirectApi", "Attempt $mName $uStr -> HTTP $code allow=[$allowHdr] body=(${bodyStr.replace("\n", " ").take(100)})")
+                        lastErrCode = code
+                        lastErrBody = bodyStr
+                        val cleanBody = bodyStr.replace("\n", " ").replace("\r", " ").take(100)
+                        DiagnosticLogger.logWarn("DirectApi", "Attempt $mName $uStr -> HTTP $code allow=[$allowHdr] body=($cleanBody)")
 
-              // Handle 401 TokenExpired automatically by reloading ENCRYPTED_SANED_PREFERENCES and retrying once
-              if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
-                  retried401 = true
-                  cachedAuthToken = ""
-                  cachedEncPrefs = null
-                  readExactJahezEncryptedPrefs(ctx)
-                  if (cachedAuthToken.isNotEmpty()) {
-                      token = cachedAuthToken
-                      nativeHeaders = buildHeaders(token)
-                      DiagnosticLogger.logStep("DirectApi", "Refreshed expired token from EncryptedPrefs, retrying $mName $uStr")
-                      specIdx--
-                      continue
-                  }
-              }
+                        // Handle 401 TokenExpired automatically by reloading ENCRYPTED_SANED_PREFERENCES and retrying once
+                        if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
+                            retried401 = true
+                            cachedAuthToken = ""
+                            cachedEncPrefs = null
+                            readExactJahezEncryptedPrefs(ctx)
+                            if (cachedAuthToken.isNotEmpty()) {
+                                token = cachedAuthToken
+                                nativeHeaders = buildHeaders(token)
+                                DiagnosticLogger.logStep("DirectApi", "Refreshed expired token from EncryptedPrefs, retrying $mName $uStr")
+                                specIdx--
+                                continue
+                            }
+                        }
 
-              if (code != 404 && code != 405) {
-                  break
-              }
-          } catch (t: Throwable) {
-              lastErrCode = -1
-              lastErrBody = t.message ?: t.javaClass.simpleName
-          }
-      }
+                        if (code != 404 && code != 405) {
+                            break
+                        }
+                    } catch (t: Throwable) {
+                        lastErrCode = -1
+                        lastErrBody = t.message ?: t.javaClass.simpleName
+                    }
+                }
 
-      if (winCode != null) {
-          if (isAccept) {
-              lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $winCode)"
-              if (ctx != null) showToast(ctx, "✅ تم قبول الطلب #$orderIdNum")
-              sendOrderToLog(
-                  orderId = "#$orderIdNum",
-                  price = price,
-                  dist = dist,
-                  restaurant = restaurant,
-                  status = "Accepted ✅",
-                  customerName = custName,
-                  customerPhone = custPhone,
-                  address = custAddr,
-                  cashAmount = cashAmt,
-                  pickupAddress = pickupAddr,
-                  customerDistanceKm = custDist,
-                  pickupLat = pickupLat,
-                  pickupLng = pickupLng,
-                  destLat = destLat,
-                  destLng = destLng,
-                  decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $winCode)" },
-                  notifyUser = true
-              )
-              playAlertSound()
-              currentActivity?.let { act ->
-                  if (act.javaClass.name == Native.safeE()) {
-                      handlePostOrderActivityCreate(act, orderIdInt)
-                  }
-              }
-          }
-      } else if (isAccept) {
-          var errMsg = ""
-          if (lastErrBody.trim().startsWith("{")) {
-              try {
-                  val j = JSONObject(lastErrBody)
-                  errMsg = extractFirstString(j, "message", "error", "title").trim()
-              } catch (_: Throwable) {}
-          }
-          if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
-          val isTakenByOtherDriver = errMsg.contains("already accepted", ignoreCase = true) ||
-              errMsg.contains("already assigned", ignoreCase = true) ||
-              errMsg.contains("not available", ignoreCase = true)
+                if (winCode != null) {
+                    if (isAccept) {
+                        var parsedFood = if (foodPrice > 0.0) foodPrice else cashAmt
+                        var parsedCash = cashAmt
+                        var parsedPayMethod = paymentMethod
+                        var parsedRef = reference
+                        var parsedPhone = custPhone
+                        var parsedName = custName
+                        var parsedAddr = custAddr
+                        if (winBodyStr.trim().startsWith("{")) {
+                            try {
+                                val j = JSONObject(winBodyStr)
+                                val dObj = j.optJSONObject("data") ?: j
+                                val pObj = dObj.optJSONObject("payment") ?: j.optJSONObject("payment")
+                                val r = extractFirstString(dObj, "referenceId", "reference", "order_number", "orderNumber")
+                                if (r.isNotEmpty()) parsedRef = r
+                                val ca = if (pObj != null) extractFirstDouble(pObj, "collectionAmount", "cash_amount", "cashAmount") else extractFirstDouble(dObj, "collectionAmount", "cash_amount", "cashAmount")
+                                val fp = if (pObj != null) {
+                                    extractFirstDouble(pObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount", "amount")
+                                } else {
+                                    extractFirstDouble(dObj, "foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount")
+                                }
+                                val pm = if (pObj != null) extractFirstString(pObj, "paymentMethod", "payment_method", "paymentType", "type") else extractFirstString(dObj, "paymentMethod", "payment_method", "paymentType")
+                                if (ca > 0.0) parsedCash = ca
+                                if (fp > 0.0) parsedFood = fp
+                                if (pm.isNotEmpty()) parsedPayMethod = pm
+                                val ph = extractFirstString(dObj, "clientPhone", "contactNumber", "customer_phone", "phone")
+                                if (ph.isNotEmpty()) parsedPhone = ph
+                            } catch (_: Throwable) {}
+                        }
+                        if (parsedFood <= 0.0 && parsedCash > 0.0) parsedFood = parsedCash
+                        cacheOrderPayment(orderIdNum, parsedFood, parsedCash, parsedPayMethod)
+                        if (parsedRef.isNotEmpty()) cacheOrderPayment(parsedRef, parsedFood, parsedCash, parsedPayMethod)
 
-          if (isTakenByOtherDriver) {
-              val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
-              val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg)"
-              lastOrderEvent = takenToast
-              DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode)")
-              if (ctx != null) showToast(ctx, takenToast)
-              sendOrderToLog(
-                  orderId = "#$orderIdNum",
-                  price = price,
-                  dist = dist,
-                  restaurant = restaurant,
-                  status = "تم قبوله من سائق آخر ⚠️",
-                  customerName = custName,
-                  customerPhone = custPhone,
-                  address = custAddr,
-                  cashAmount = cashAmt,
-                  pickupAddress = pickupAddr,
-                  customerDistanceKm = custDist,
-                  pickupLat = pickupLat,
-                  pickupLng = pickupLng,
-                  destLat = destLat,
-                  destLng = destLng,
-                  decisionReason = takenReason,
-                  notifyUser = true
-              )
-              if (orderIdInt != 0) {
-                  apiConfirmedAcceptIds.add(orderIdInt)
-                  currentActivity?.let { act ->
-                      if (act.javaClass.name == Native.safeE()) {
-                          handlePostOrderActivityCreate(act, orderIdInt)
-                      }
-                  }
-              }
-          } else {
-              if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
-                  handledOrdersMap.remove(orderIdInt)
-                  loggedOrderIds.remove("#$orderIdNum")
-              }
-              val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
-              val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
-              DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
-              lastOrderEvent = failToast
-              if (ctx != null) showToast(ctx, failToast)
-              sendOrderToLog(
-                  orderId = "#$orderIdNum",
-                  price = price,
-                  dist = dist,
-                  restaurant = restaurant,
-                  status = "فشل القبول ❌",
-                  customerName = custName,
-                  customerPhone = custPhone,
-                  address = custAddr,
-                  cashAmount = cashAmt,
-                  pickupAddress = pickupAddr,
-                  customerDistanceKm = custDist,
-                  pickupLat = pickupLat,
-                  pickupLng = pickupLng,
-                  destLat = destLat,
-                  destLng = destLng,
-                  decisionReason = failReason,
-                  notifyUser = true
-              )
-              // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
-              currentActivity?.let { act ->
-                  if (!act.isFinishing && !act.isDestroyed) {
-                      act.runOnUiThread {
-                          try {
-                              val decor = act.window?.decorView
-                              if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
-                          } catch (_: Throwable) {}
-                      }
-                  }
-              }
-          }
-      }
-  } catch (_: Throwable) {
-  } finally {
-      if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
-  }
+                        lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $winCode)"
+                        if (ctx != null) showToast(ctx, "✅ تم قبول الطلب #$orderIdNum")
+                        sendOrderToLog(
+                            orderId = "#$orderIdNum",
+                            price = price,
+                            dist = dist,
+                            restaurant = restaurant,
+                            status = "Accepted ✅",
+                            customerName = parsedName,
+                            customerPhone = parsedPhone,
+                            address = parsedAddr,
+                            cashAmount = parsedCash,
+                            foodPrice = parsedFood,
+                            paymentMethod = parsedPayMethod,
+                            reference = parsedRef,
+                            pickupAddress = pickupAddr,
+                            customerDistanceKm = custDist,
+                            pickupLat = pickupLat,
+                            pickupLng = pickupLng,
+                            destLat = destLat,
+                            destLng = destLng,
+                            decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $winCode)" },
+                            notifyUser = true
+                        )
+                        playAlertSound()
+                        // Immediately fetch Price Food & customer details from Saned API + SQLite DB so Accepted card always displays Price Food!
+                        fetchOrderCustomerDetailsAsync(orderIdNum, force = true)
+                        for (delayMs in listOf(450L, 1300L, 2800L, 5500L)) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                delay(delayMs)
+                                if (ctx != null) {
+                                    try { scanJahezDatabases(ctx) } catch (_: Throwable) {}
+                                }
+                                fetchOrderCustomerDetailsAsync(orderIdNum, force = (delayMs <= 1500L))
+                            }
+                        }
+                        currentActivity?.let { act ->
+                            if (act.javaClass.name == Native.safeE()) {
+                                handlePostOrderActivityCreate(act, orderIdInt)
+                            }
+                        }
+                    }
+                } else if (isAccept) {
+                    var errMsg = ""
+                    if (lastErrBody.trim().startsWith("{")) {
+                        try {
+                            val j = JSONObject(lastErrBody)
+                            errMsg = extractFirstString(j, "message", "error", "title").trim()
+                        } catch (_: Throwable) {}
+                    }
+                    if (errMsg.isEmpty()) errMsg = if (lastErrCode > 0) "HTTP $lastErrCode" else "Network timeout"
+                    val isTakenByOtherDriver = errMsg.contains("already accepted", ignoreCase = true) ||
+                        errMsg.contains("already assigned", ignoreCase = true) ||
+                        errMsg.contains("not available", ignoreCase = true)
+
+                    if (isTakenByOtherDriver) {
+                        val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
+                        val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg)"
+                        lastOrderEvent = takenToast
+                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode)")
+                        if (ctx != null) showToast(ctx, takenToast)
+                        sendOrderToLog(
+                            orderId = "#$orderIdNum",
+                            price = price,
+                            dist = dist,
+                            restaurant = restaurant,
+                            status = "تم قبوله من سائق آخر ⚠️",
+                            customerName = custName,
+                            customerPhone = custPhone,
+                            address = custAddr,
+                            cashAmount = cashAmt,
+                            foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                            paymentMethod = paymentMethod,
+                            reference = reference,
+                            pickupAddress = pickupAddr,
+                            customerDistanceKm = custDist,
+                            pickupLat = pickupLat,
+                            pickupLng = pickupLng,
+                            destLat = destLat,
+                            destLng = destLng,
+                            decisionReason = takenReason,
+                            notifyUser = true
+                        )
+                        if (orderIdInt != 0) {
+                            apiConfirmedAcceptIds.add(orderIdInt)
+                            currentActivity?.let { act ->
+                                if (act.javaClass.name == Native.safeE()) {
+                                    handlePostOrderActivityCreate(act, orderIdInt)
+                                }
+                            }
+                        }
+                    } else {
+                        if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+                            handledOrdersMap.remove(orderIdInt)
+                            loggedOrderIds.remove("#$orderIdNum")
+                        }
+                        val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
+                        val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
+                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+                        lastOrderEvent = failToast
+                        if (ctx != null) showToast(ctx, failToast)
+                        sendOrderToLog(
+                            orderId = "#$orderIdNum",
+                            price = price,
+                            dist = dist,
+                            restaurant = restaurant,
+                            status = "فشل القبول ❌",
+                            customerName = custName,
+                            customerPhone = custPhone,
+                            address = custAddr,
+                            cashAmount = cashAmt,
+                            foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                            paymentMethod = paymentMethod,
+                            reference = reference,
+                            pickupAddress = pickupAddr,
+                            customerDistanceKm = custDist,
+                            pickupLat = pickupLat,
+                            pickupLng = pickupLng,
+                            destLat = destLat,
+                            destLng = destLng,
+                            decisionReason = failReason,
+                            notifyUser = true
+                        )
+                        // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
+                        currentActivity?.let { act ->
+                            if (!act.isFinishing && !act.isDestroyed) {
+                                act.runOnUiThread {
+                                    try {
+                                        val decor = act.window?.decorView
+                                        if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
+                                    } catch (_: Throwable) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -3334,6 +3588,8 @@ object OrderInterceptor {
         customerPhone: String = "",
         address: String = "",
         cashAmount: Double = 0.0,
+        foodPrice: Double = 0.0,
+        paymentMethod: String = "",
         currency: String = "SAR",
         reference: String = "",
         pickupAddress: String = "",
@@ -3347,18 +3603,43 @@ object OrderInterceptor {
     ) {
         val ctx = resolveApplicationContext() ?: currentActivity
         val cleanOrderId = orderId.replace("#", "").trim()
-        val ref = if (reference.isNotEmpty()) reference else cleanOrderId
+        val rawRef = if (reference.isNotEmpty()) reference.replace("#", "").trim() else cleanOrderId
         val intId = cleanOrderId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
         val idKey = if (intId != 0) intId.toString() else cleanOrderId
-        val cacheKey = ref.ifEmpty { cleanOrderId }
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+        val prevJson = synchronized(syncedOrdersCache) {
+            var found = syncedOrdersCache[rawRef] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
+            if (found == null) {
+                for (entry in syncedOrdersCache.values) {
+                    val eId = entry.optString("id", "").replace("#", "").trim()
+                    val eRef = entry.optString("reference", "").replace("#", "").trim()
+                    if ((idKey.isNotEmpty() && (eId == idKey || eRef == idKey)) ||
+                        (rawRef.isNotEmpty() && (eRef == rawRef || eId == rawRef))) {
+                        found = entry
+                        break
+                    }
+                }
+            }
+            found
+        }
+
+        val prevRef = prevJson?.optString("reference", "")?.replace("#", "")?.trim() ?: ""
+        // Prefer 10-digit referenceId (e.g. 6088542571) over 9-digit dispatchId (e.g. 518628148) when merging
+        val ref = when {
+            rawRef.length >= 10 && rawRef != idKey -> rawRef
+            prevRef.length >= 10 && prevRef != idKey -> prevRef
+            rawRef.isNotEmpty() && rawRef != idKey -> rawRef
+            prevRef.isNotEmpty() && prevRef != idKey -> prevRef
+            rawRef.isNotEmpty() -> rawRef
+            prevRef.isNotEmpty() -> prevRef
+            else -> cleanOrderId
+        }
+        val cacheKey = ref.ifEmpty { cleanOrderId }
 
         cacheOrderCoords(idKey, pickupLat, pickupLng, destLat, destLng)
         if (cacheKey != idKey) cacheOrderCoords(cacheKey, pickupLat, pickupLng, destLat, destLng)
 
-        val prevJson = synchronized(syncedOrdersCache) {
-            syncedOrdersCache[cacheKey] ?: syncedOrdersCache[idKey] ?: syncedOrdersCache[cleanOrderId]
-        }
         val cachedTriple = customerDetailsCache[idKey] ?: customerDetailsCache[cacheKey] ?: customerDetailsCache[cleanOrderId]
         val cachedCoords = getCachedCoords(idKey) ?: getCachedCoords(cacheKey) ?: getCachedCoords(cleanOrderId)
 
@@ -3383,6 +3664,21 @@ object OrderInterceptor {
             prevCash > 0.0 -> prevCash
             else -> 0.0
         }
+        val prevFoodPrice = prevJson?.optDouble("foodPrice", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+        val cachedFoodPrice = foodPriceCache[idKey] ?: foodPriceCache[cacheKey] ?: foodPriceCache[cleanOrderId] ?: 0.0
+        val mergedFoodPrice = when {
+            foodPrice > 0.0 -> foodPrice
+            cachedFoodPrice > 0.0 -> cachedFoodPrice
+            prevFoodPrice > 0.0 -> prevFoodPrice
+            mergedCash > 0.0 -> mergedCash
+            else -> 0.0
+        }
+        val mergedPaymentMethod = paymentMethod.ifEmpty {
+            paymentMethodCache[idKey] ?: paymentMethodCache[cacheKey] ?: prevJson?.optString("paymentMethod", "") ?: ""
+        }
+        cacheOrderPayment(idKey, mergedFoodPrice, mergedCash, mergedPaymentMethod)
+        if (cacheKey != idKey) cacheOrderPayment(cacheKey, mergedFoodPrice, mergedCash, mergedPaymentMethod)
+
         val prevDist = prevJson?.optDouble("distanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
         val mergedDist = if (dist > 0.0) dist else prevDist
         val prevCustDist = prevJson?.optDouble("customerDistanceKm", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
@@ -3422,10 +3718,16 @@ object OrderInterceptor {
             else -> calcFromMergedCoords
         }
 
+        val normalizedStatus = if (status.equals("Dispatched", ignoreCase = true) || status.equals("DISPATCHED", ignoreCase = true) || status.equals("Accepted", ignoreCase = true)) {
+            "Accepted ✅"
+        } else {
+            status
+        }
+
         val order = OrderModel(
             id = intId,
             reference = ref,
-            status = status,
+            status = normalizedStatus,
             restaurant = mergedRestaurant,
             pickupAddress = mergedPickupAddr,
             customerName = mergedCustName,
@@ -3434,6 +3736,8 @@ object OrderInterceptor {
             price = mergedPrice,
             currency = currency,
             cashAmount = mergedCash,
+            foodPrice = mergedFoodPrice,
+            paymentMethod = mergedPaymentMethod,
             distanceKm = mergedDist,
             customerDistanceKm = mergedCustDist,
             pickupLat = mergedPLat,
@@ -3444,16 +3748,25 @@ object OrderInterceptor {
             time = timeStr
         )
 
-        if (cacheKey.isNotEmpty()) {
-            syncedOrdersCache[cacheKey] = order.toJson()
-        }
-        if (idKey.isNotEmpty() && idKey != cacheKey) {
-            syncedOrdersCache[idKey] = order.toJson()
+        synchronized(syncedOrdersCache) {
+            val keysToRemove = mutableListOf<String>()
+            for ((k, v) in syncedOrdersCache) {
+                val eId = v.optString("id", "").replace("#", "").trim()
+                val eRef = v.optString("reference", "").replace("#", "").trim()
+                if ((idKey.isNotEmpty() && (k == idKey || eId == idKey || eRef == idKey)) ||
+                    (cacheKey.isNotEmpty() && (k == cacheKey || eRef == cacheKey || eId == cacheKey))) {
+                    keysToRemove.add(k)
+                }
+            }
+            for (k in keysToRemove) syncedOrdersCache.remove(k)
+            val primaryKey = cacheKey.ifEmpty { idKey }
+            if (primaryKey.isNotEmpty()) {
+                syncedOrdersCache[primaryKey] = order.toJson()
+            }
         }
 
         if (ctx != null) {
-
-    // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
+            // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
             try {
                 val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
                 val extras = android.os.Bundle().apply {
@@ -3485,6 +3798,8 @@ object OrderInterceptor {
                     putExtra("customer_phone", order.customerPhone)
                     putExtra("address", order.address)
                     putExtra("cash_amount", order.cashAmount)
+                    putExtra("food_price", order.foodPrice)
+                    putExtra("payment_method", order.paymentMethod)
                     putExtra("currency", currency)
                     putExtra("notify_user", notifyUser)
                 }
@@ -3507,7 +3822,7 @@ object OrderInterceptor {
             if (notifyUser) {
                 try {
                     val isAccepted = !order.isMissedOrRejected &&
-                        (status.contains("Accept", ignoreCase = true) || status.contains("قبول"))
+                        (order.status.contains("Accept", ignoreCase = true) || order.status.contains("قبول"))
                     NotificationHelper.showOrderNotification(ctx, order, isAccepted = isAccepted)
                 } catch (_: Throwable) {}
             }
@@ -3521,11 +3836,16 @@ object OrderInterceptor {
             val newArray = JSONArray()
             newArray.put(order.toJson())
             val normRef = ref.replace("#", "").trim()
+            val normId = idKey.replace("#", "").trim()
             for (i in 0 until array.length()) {
                 if (newArray.length() >= 50) break
                 val obj = array.optJSONObject(i) ?: continue
                 val oldRef = obj.optString("reference", "").replace("#", "").trim()
-                if (normRef.isNotEmpty() && oldRef == normRef) continue
+                val oldId = obj.optString("id", "").replace("#", "").trim()
+                if ((normRef.isNotEmpty() && (oldRef == normRef || oldId == normRef)) ||
+                    (normId.isNotEmpty() && normId != "0" && (oldId == normId || oldRef == normId))) {
+                    continue
+                }
                 newArray.put(obj)
             }
             f.writeText(newArray.toString())

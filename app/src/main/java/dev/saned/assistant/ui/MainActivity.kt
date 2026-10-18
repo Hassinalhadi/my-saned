@@ -102,6 +102,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chkSilenceAlertTone: CheckBox
     private lateinit var chkSoundAlert: CheckBox
     private lateinit var chkStrictVersionCheck: CheckBox
+    private lateinit var chkShowFoodPrice: CheckBox
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
@@ -739,6 +740,90 @@ class MainActivity : AppCompatActivity() {
     // =========================================================================
     // RENDER ORDERS IN ORDERS TAB (Matching 34.jpg)
     // =========================================================================
+    private fun isSameOrderUi(a: OrderModel, b: OrderModel): Boolean {
+        val idA = if (a.id != 0) a.id.toString() else ""
+        val idB = if (b.id != 0) b.id.toString() else ""
+        val refA = a.reference.replace("#", "").trim()
+        val refB = b.reference.replace("#", "").trim()
+        if (refA.isNotEmpty() && (refA == refB || refA == idB)) return true
+        if (idA.isNotEmpty() && (idA == idB || idA == refB)) return true
+        return false
+    }
+
+    private fun mergeOrderModelsUi(primary: OrderModel, secondary: OrderModel): OrderModel {
+        val idStr = if (primary.id != 0) primary.id.toString() else if (secondary.id != 0) secondary.id.toString() else ""
+        val refA = primary.reference.replace("#", "").trim()
+        val refB = secondary.reference.replace("#", "").trim()
+        val bestRef = when {
+            refA.length >= 10 && refA != idStr -> refA
+            refB.length >= 10 && refB != idStr -> refB
+            refA.isNotEmpty() && refA != idStr -> refA
+            refB.isNotEmpty() && refB != idStr -> refB
+            refA.isNotEmpty() -> refA
+            else -> refB
+        }
+        val bestAddr = when {
+            primary.address.isNotEmpty() && primary.address != "Location on map" -> primary.address
+            secondary.address.isNotEmpty() && secondary.address != "Location on map" -> secondary.address
+            primary.address.isNotEmpty() -> primary.address
+            else -> secondary.address
+        }
+        val bestCash = if (primary.cashAmount > 0.0) primary.cashAmount else secondary.cashAmount
+        val bestFood = when {
+            primary.foodPrice > 0.0 -> primary.foodPrice
+            secondary.foodPrice > 0.0 -> secondary.foodPrice
+            bestCash > 0.0 -> bestCash
+            else -> 0.0
+        }
+        val bestStatus = when {
+            primary.status.equals("Dispatched", ignoreCase = true) -> "Accepted ✅"
+            secondary.status.equals("Dispatched", ignoreCase = true) && primary.status.isEmpty() -> "Accepted ✅"
+            primary.status.equals("Accepted", ignoreCase = true) && secondary.status.contains("✅") -> secondary.status
+            else -> primary.status.ifEmpty { secondary.status }
+        }
+        return primary.copy(
+            id = if (primary.id != 0) primary.id else secondary.id,
+            reference = bestRef,
+            status = bestStatus,
+            restaurant = primary.restaurant.ifEmpty { secondary.restaurant },
+            pickupAddress = primary.pickupAddress.ifEmpty { secondary.pickupAddress },
+            customerName = primary.customerName.ifEmpty { secondary.customerName },
+            customerPhone = primary.customerPhone.ifEmpty { secondary.customerPhone },
+            address = bestAddr,
+            price = if (primary.price > 0.0) primary.price else secondary.price,
+            cashAmount = bestCash,
+            foodPrice = bestFood,
+            paymentMethod = primary.paymentMethod.ifEmpty { secondary.paymentMethod },
+            distanceKm = if (primary.distanceKm > 0.0) primary.distanceKm else secondary.distanceKm,
+            customerDistanceKm = if (primary.customerDistanceKm > 0.0) primary.customerDistanceKm else secondary.customerDistanceKm,
+            pickupLat = if (primary.pickupLat != 0.0) primary.pickupLat else secondary.pickupLat,
+            pickupLng = if (primary.pickupLng != 0.0) primary.pickupLng else secondary.pickupLng,
+            destLat = if (primary.destLat != 0.0) primary.destLat else secondary.destLat,
+            destLng = if (primary.destLng != 0.0) primary.destLng else secondary.destLng
+        )
+    }
+
+    private fun requestOrderDetailsRefresh(order: OrderModel) {
+        val rawId = if (order.id != 0) order.id.toString() else order.reference.replace("#", "").trim()
+        val rawRef = order.reference.replace("#", "").trim()
+        try {
+            val intent = Intent("dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS").apply {
+                setPackage("net.jahez.fleets")
+                putExtra("order_id", rawId)
+                putExtra("reference", rawRef)
+            }
+            sendBroadcast(intent)
+        } catch (_: Throwable) {}
+        try {
+            val gIntent = Intent("dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS").apply {
+                putExtra("order_id", rawId)
+                putExtra("reference", rawRef)
+            }
+            sendBroadcast(gIntent)
+        } catch (_: Throwable) {}
+        sendPing()
+    }
+
     private fun refreshOrdersLogUI() {
         if (!::activeOrdersContainer.isInitialized) return
 
@@ -750,8 +835,9 @@ class MainActivity : AppCompatActivity() {
             val maxRest = SettingsStore.getMaxDistRest(this)
             val maxCust = SettingsStore.getMaxDistCust(this)
             val minP = SettingsStore.getMinPrice(this)
+            val showFood = SettingsStore.isShowFoodPrice(this)
             tvOrdersSubStatus.text = if (isRun) {
-                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP}"
+                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
             } else {
                 "🔴 Master Switch OFF (Incoming orders are still captured & shown below)"
             }
@@ -764,27 +850,15 @@ class MainActivity : AppCompatActivity() {
         val jsonStr = SettingsStore.getOrdersLog(this)
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
 
-        // Merge with fallback file if any orders were written directly from hook process
+        // Merge with fallback file if any orders were written directly from hook process (cross-matching both id and reference!)
         try {
             val f = File("/data/local/tmp/saned_orders.json")
             if (f.exists()) {
                 val fArray = JSONArray(f.readText())
-                val seenIds = mutableSetOf<String>()
-                for (idx in 0 until array.length()) {
-                    val itm = array.optJSONObject(idx)
-                    if (itm != null) {
-                        val ref = itm.optString("reference").ifEmpty { itm.optString("id") }
-                        seenIds.add(ref)
-                    }
-                }
                 for (jdx in 0 until fArray.length()) {
                     val fItm = fArray.optJSONObject(jdx)
                     if (fItm != null) {
-                        val fRef = fItm.optString("reference").ifEmpty { fItm.optString("id") }
-                        if (fRef.isNotEmpty() && !seenIds.contains(fRef)) {
-                            array.put(fItm)
-                            seenIds.add(fRef)
-                        }
+                        array.put(fItm)
                     }
                 }
             }
@@ -796,14 +870,30 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val deduplicatedOrders = mutableListOf<OrderModel>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val order = OrderModel.fromJson(item)
+            val existingIdx = deduplicatedOrders.indexOfFirst { isSameOrderUi(it, order) }
+            if (existingIdx >= 0) {
+                deduplicatedOrders[existingIdx] = mergeOrderModelsUi(deduplicatedOrders[existingIdx], order)
+            } else {
+                deduplicatedOrders.add(order)
+            }
+        }
+
+        if (deduplicatedOrders.isEmpty()) {
+            tvOrdersEmptyState.visibility = View.VISIBLE
+            missedSectionHeader.visibility = View.GONE
+            return
+        }
+
         tvOrdersEmptyState.visibility = View.GONE
 
         val activeList = mutableListOf<OrderModel>()
         val missedList = mutableListOf<OrderModel>()
 
-        for (i in 0 until array.length()) {
-            val item = array.optJSONObject(i) ?: continue
-            val order = OrderModel.fromJson(item)
+        for (order in deduplicatedOrders) {
             val st = order.status.lowercase(Locale.US)
             val isMissed = order.isMissedOrRejected ||
                 st.contains("reject") ||
@@ -821,7 +911,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // If all orders are in missedList or activeList, render both sections cleanly
         for (order in activeList) {
             activeOrdersContainer.addView(buildActiveOrderCard(order))
         }
@@ -831,21 +920,12 @@ class MainActivity : AppCompatActivity() {
             tvMissedCountBadge.text = missedList.size.toString()
             for (order in missedList) {
                 missedOrdersContainer.addView(buildMissedOrderCard(order))
-                // Also allow expanding full details of a missed/manual order on tap
             }
         } else {
             missedSectionHeader.visibility = View.GONE
         }
     }
 
-    /**
-     * Builds the detailed Order Card matching the top card in 34.jpg:
-     * - Status badge ("Accepted" / "Delivered") + "#8692894559 📋"
-     * - Pickup box (🏪 Pickup: Restaurant + pickup address + distance to restaurant)
-     * - Drop-off box (📍 Drop-off NEXT: Customer Name / Address / Location on map + distance to customer)
-     * - Prepaid / Cash collection box (✔️ Prepaid - Nothing to collect OR 💵 Collect cash)
-     * - Call & WhatsApp buttons row (📞 Call  |  💬 WhatsApp)
-     */
     /**
      * Exact implementation of Lg8.U & Lg8.W in SanedAssistant-98-7bac1ec.apk:
      * Opens Google Maps navigation to (targetLat, targetLng), optionally starting from (originLat, originLng),
@@ -904,6 +984,8 @@ class MainActivity : AppCompatActivity() {
     private fun buildActiveOrderCard(order: OrderModel): CardView {
         val rawId = if (order.reference.isNotEmpty()) order.reference else order.id.toString()
         val displayId = if (rawId.startsWith("#")) rawId else "#$rawId"
+        val showFoodPriceOpt = SettingsStore.isShowFoodPrice(this)
+        val effectiveFoodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
 
         val card = CardView(this).apply {
             radius = 28f
@@ -922,7 +1004,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 28, 28, 28)
         }
 
-        // 1. Header Row: Status Pill ("Accepted" / "Delivered") + Order ID with Copy button
+        // 1. Header Row: Status Pill ("Accepted ✅" / "Picked Up" / "Delivered") + Order ID with Copy button
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -930,7 +1012,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val statusBadge = TextView(this).apply {
-            text = order.status.ifEmpty { "Accepted" }
+            val stText = if (order.status.equals("Dispatched", ignoreCase = true)) "Accepted ✅" else order.status.ifEmpty { "Accepted ✅" }
+            text = stText
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
@@ -1134,7 +1217,7 @@ class MainActivity : AppCompatActivity() {
         dropoffBox.addView(dropoffNavBtn)
         inner.addView(dropoffBox)
 
-        // 4. Payment & Price Box (Matches 34.jpg "Prepaid / Nothing to collect" + Delivery Fee)
+        // 4. Dedicated Price Food (سعر الطعام) + Payment Box (Shown on ALL orders in Accepted / Picked Up / Delivered — whether Prepaid or Cash on Delivery!)
         val isCash = order.cashAmount > 0.0
         val paymentBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1146,6 +1229,10 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(0, 0, 0, 18)
+            }
+            setOnClickListener {
+                requestOrderDetailsRefresh(order)
+                Toast.makeText(this@MainActivity, "🔄 جاري تحديث سعر الطعام وتفاصيل الطلب $displayId...", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -1161,10 +1248,11 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val payTitle = TextView(this).apply {
+            val methodSuffix = if (order.paymentMethod.isNotEmpty()) " (${order.paymentMethod})" else ""
             text = if (isCash) {
-                String.format(Locale.US, "Collect Cash: %.2f %s", order.cashAmount, order.currency)
+                String.format(Locale.US, "Cash on Delivery: %.2f %s", order.cashAmount, order.currency)
             } else {
-                "Prepaid"
+                "Prepaid$methodSuffix"
             }
             textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
@@ -1172,26 +1260,69 @@ class MainActivity : AppCompatActivity() {
         }
         val paySub = TextView(this).apply {
             text = if (isCash) {
-                "Customer pays cash on delivery"
+                String.format(Locale.US, "Collect %.2f %s from customer", order.cashAmount, order.currency)
             } else {
-                "Nothing to collect"
+                "Nothing to collect (مدفوع مسبقاً)"
             }
             textSize = 12f
             setTextColor(Color.parseColor("#475569"))
         }
         payCol.addView(payTitle)
         payCol.addView(paySub)
+
+        if (showFoodPriceOpt) {
+            val foodPriceTv = TextView(this).apply {
+                text = if (effectiveFoodPrice > 0.0) {
+                    String.format(Locale.US, "🍔 Price Food (سعر الطعام): %.2f %s", effectiveFoodPrice, order.currency)
+                } else {
+                    String.format(Locale.US, "🍔 Price Food (سعر الطعام): 0.00 %s (Prepaid)", order.currency)
+                }
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (effectiveFoodPrice > 0.0) Color.parseColor("#B45309") else Color.parseColor("#0F766E"))
+                setPadding(0, 6, 0, 0)
+            }
+            payCol.addView(foodPriceTv)
+        }
+
         paymentBox.addView(payCol)
+
+        val rightPricesCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+        }
 
         if (order.price > 0.0) {
             val priceBadge = TextView(this).apply {
-                text = String.format(Locale.US, "%.2f %s", order.price, order.currency)
-                textSize = 14.5f
+                text = String.format(Locale.US, "🚗 %.2f %s", order.price, order.currency)
+                textSize = 13.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#059669"))
+                background = roundedBg("#ECFDF5", 10f)
+                setPadding(16, 6, 16, 6)
             }
-            paymentBox.addView(priceBadge)
+            rightPricesCol.addView(priceBadge)
         }
+
+        if (showFoodPriceOpt) {
+            val foodBadge = TextView(this).apply {
+                text = String.format(Locale.US, "🍔 %.2f %s", effectiveFoodPrice, order.currency)
+                textSize = 12.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (effectiveFoodPrice > 0.0) Color.parseColor("#B45309") else Color.parseColor("#475569"))
+                background = roundedBg(if (effectiveFoodPrice > 0.0) "#FEF3C7" else "#E2E8F0", 10f)
+                setPadding(16, 6, 16, 6)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 8, 0, 0)
+                }
+            }
+            rightPricesCol.addView(foodBadge)
+        }
+
+        paymentBox.addView(rightPricesCol)
         inner.addView(paymentBox)
 
         // 5. Call & WhatsApp Buttons Row (Matches Lg8.a in SanedAssistant: shown when customerPhone is present, hidden for old SQLite orders without customer phone)
@@ -1253,9 +1384,12 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Builds a Missed / Rejected / Manual Order Card matching the "MISSED" card at the bottom of 34.jpg,
-     * plus shows full pickup/dropoff details when tapped.
+     * plus shows Price Food & full pickup/dropoff details when tapped.
      */
     private fun buildMissedOrderCard(order: OrderModel): CardView {
+        val showFoodPriceOpt = SettingsStore.isShowFoodPrice(this)
+        val effectiveFoodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+
         val card = CardView(this).apply {
             radius = 22f
             cardElevation = 2f
@@ -1337,7 +1471,8 @@ class MainActivity : AppCompatActivity() {
                 String.format(Locale.US, "Delivery ≈ %.2f km", distToUse)
             }
             val rateStr = if (ratePerKm > 0.0) String.format(Locale.US, "  •  %.2f SAR/km", ratePerKm) else ""
-            text = "$distStr$rateStr"
+            val foodStr = if (showFoodPriceOpt) String.format(Locale.US, "  •  🍔 Food: %.2f %s", effectiveFoodPrice, order.currency) else ""
+            text = "$distStr$rateStr$foodStr"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#334155"))
@@ -1579,15 +1714,17 @@ class MainActivity : AppCompatActivity() {
             val simOrder = OrderModel(
                 id = testNum,
                 reference = "#$testNum",
-                status = "Accepted",
-                restaurant = "JAHEZ - PLENTY SALADS بلينتي سلدز",
+                status = "Accepted ✅",
+                restaurant = "McDonald's KSA 🇸🇦 - ماكدونالدز وجبة_فيلم_سبايدرمان",
                 pickupAddress = "Pick-up from RJ43+H42, Al Malqa, Riyadh 13524",
                 customerName = "عبدالله الشمري (Abdullah)",
                 customerPhone = "0551234567",
-                address = "Drop off at RRMA4117, 4117 Prince Yazid Ibn Abdullah Ibn",
-                price = 10.002,
+                address = "Location on map",
+                price = 7.00,
                 currency = "SAR",
                 cashAmount = 0.0,
+                foodPrice = 65.00,
+                paymentMethod = "Prepaid",
                 distanceKm = 0.5,
                 customerDistanceKm = 2.8,
                 pickupLat = 24.7685,
@@ -1977,6 +2114,18 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkStrictVersionCheck)
 
+        chkShowFoodPrice = CheckBox(this).apply {
+            text = "🍔 Price Food (إظهار سعر الطعام في جميع الطلبات المقبولة والمسبقة الدفع والكاش)"
+            isChecked = SettingsStore.isShowFoodPrice(this@MainActivity)
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#B45309"))
+            setOnCheckedChangeListener { _, isChecked ->
+                SettingsStore.setShowFoodPrice(this@MainActivity, isChecked)
+                refreshOrdersLogUI()
+            }
+        }
+        layout.addView(chkShowFoodPrice)
+
         layout.addView(createLabel("Minimum Order Price (SAR) - Set 0 to disable limit:"))
         edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
         layout.addView(edtMinPrice)
@@ -2115,6 +2264,9 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
         SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
         SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)
+        if (::chkShowFoodPrice.isInitialized) {
+            SettingsStore.setShowFoodPrice(this, chkShowFoodPrice.isChecked)
+        }
         SettingsStore.setMinPrice(this, minPrice)
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)

@@ -234,6 +234,12 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
+    fun isShowFoodPrice(context: Context): Boolean = getPrefs(context).getBoolean("show_food_price", true)
+    fun setShowFoodPrice(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("show_food_price", value).apply()
+        broadcastSettings(context)
+    }
+
     // Orders Log
     fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
     fun clearOrdersLog(context: Context) {
@@ -290,6 +296,7 @@ object SettingsStore {
       putExtra("fake_lng", getFakeLng(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
+      putExtra("show_food_price", isShowFoodPrice(context))
       putExtra("hook_early_cloaker", hEarly)
       putExtra("hook_sec_cloaker", hSec)
       putExtra("hook_location", hLoc)
@@ -321,6 +328,7 @@ object SettingsStore {
       putExtra("fake_lng", getFakeLng(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
+      putExtra("show_food_price", isShowFoodPrice(context))
       putExtra("hook_early_cloaker", hEarly)
       putExtra("hook_sec_cloaker", hSec)
       putExtra("hook_location", hLoc)
@@ -359,6 +367,7 @@ object SettingsStore {
       put("hook_device_spoofer", hDev)
       put("hook_orders", hOrd)
       put("hook_bootstrap_loop", hBoot)
+      put("show_food_price", isShowFoodPrice(context))
   }
   val file = File("/data/local/tmp/saned_config.json")
   file.writeText(json.toString())
