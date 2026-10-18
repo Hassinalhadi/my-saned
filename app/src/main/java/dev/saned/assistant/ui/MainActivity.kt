@@ -2180,7 +2180,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkActivePolling)
 
-        layout.addView(createLabel("Poll Interval in seconds (e.g. 0.8s):"))
+        layout.addView(createLabel("Poll Interval in seconds (Set 0 for 0.0ms Instant Pre-Warmed Mode):"))
         edtPollInterval = createInput(SettingsStore.getPollInterval(this).toString())
         layout.addView(edtPollInterval)
 
@@ -2253,8 +2253,8 @@ class MainActivity : AppCompatActivity() {
         val maxOrders = if (::edtMaxOrders.isInitialized) (edtMaxOrders.text.toString().trim().toIntOrNull() ?: 0) else 0
 
         val activePolling = chkActivePolling.isChecked
-        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
-        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 3
+        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.0f
+        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 4
 
         SettingsStore.setMasterRunning(this, master)
         SettingsStore.setSpoofAndroidId(this, spoofId)

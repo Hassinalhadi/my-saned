@@ -135,13 +135,13 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.8f)
+    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.0f)
     fun setPollInterval(context: Context, value: Float) {
         getPrefs(context).edit().putFloat("poll_interval_sec", value).apply()
         broadcastSettings(context)
     }
 
-    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 3)
+    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 4)
     fun setParallelRequests(context: Context, value: Int) {
         getPrefs(context).edit().putInt("parallel_requests", value).apply()
         broadcastSettings(context)
