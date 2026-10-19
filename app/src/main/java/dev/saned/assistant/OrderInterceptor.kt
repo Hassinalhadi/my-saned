@@ -238,6 +238,7 @@ object OrderInterceptor {
     }
 
     @Volatile private var lastPrewarmRealtime: Long = 0L
+    val orderArrivalNanoMap = ConcurrentHashMap<Int, Long>()
 
     fun prewarmGatewayConnection(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
@@ -248,6 +249,7 @@ object OrderInterceptor {
         if (rawTok.isEmpty()) return
         fastAcceptExecutor.execute {
             try {
+                val t0 = System.nanoTime()
                 val rb = Request.Builder()
                     .url("https://gateway.saned.io/api/v1/dispatch/active")
                     .get()
@@ -258,7 +260,18 @@ object OrderInterceptor {
                     rb.header("x-unique-Identifier", capturedDriverCipherB64)
                 }
                 val resp = singleWarmHttpClient.newCall(rb.build()).execute()
+                val rttMs = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+                val proto = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
+                val code = resp.code
                 resp.close()
+                if (force) {
+                    val idle = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
+                    val total = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
+                    DiagnosticLogger.logStep(
+                        "SpeedLog",
+                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total cipher=${capturedDriverCipherB64.isNotEmpty()}"
+                    )
+                }
             } catch (_: Throwable) {}
         }
     }
@@ -319,7 +332,10 @@ object OrderInterceptor {
         // If decision is ACCEPT, only finish IncomingDispatchActivity if API accept already succeeded (200..299).
         // Otherwise, trigger UI auto-accept on IncomingDispatchActivity as backup so the order is never lost!
         if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
+  val fcmArrNs = orderArrivalNanoMap[orderIdInt] ?: 0L
+  val deltaFcmMs = if (fcmArrNs > 0L) ((System.nanoTime() - fcmArrNs) / 1_000_000L) else -1L
   DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending/failed -> triggering UI auto-accept backup")
+  DiagnosticLogger.logStep("SpeedLog", "📱 [UI BACKUP] IncomingDispatchActivity #$orderIdInt opened (deltaFromFcm=${deltaFcmMs}ms) -> scheduling UI swipe backup at 25ms, 100ms, 250ms")
   for (delayMs in listOf(25L, 100L, 250L)) {
       mainHandler.postDelayed({
           try {
@@ -2118,6 +2134,7 @@ object OrderInterceptor {
         if (keys.size < 18) return ""
         val reqId = (dataMap[keys[0]] as? String)?.trim()?.toIntOrNull() ?: return ""
         if (reqId == 0) return ""
+        orderArrivalNanoMap.putIfAbsent(reqId, System.nanoTime())
         // Fast 0.0ms deduplication: if EarlyFCM (onReceive) already fired for this reqId, return immediately without duplicate logs/IPC!
         val existingEntry = handledOrdersMap[reqId]
         if (existingEntry != null && (SystemClock.elapsedRealtime() - existingEntry.timestampRealtime) < 60_000L) {
@@ -3592,6 +3609,9 @@ object OrderInterceptor {
 
         val normOrderId = "#$rawId"
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+        if (orderIdInt != 0) {
+            orderArrivalNanoMap.putIfAbsent(orderIdInt, System.nanoTime())
+        }
         val nowRealtime = SystemClock.elapsedRealtime()
 
         if (orderIdInt != 0) {
@@ -3604,7 +3624,9 @@ object OrderInterceptor {
             }
         }
 
+        val evalStartNs = System.nanoTime()
         val (action, reason) = evaluateOrderDecision(price, dist, custDist)
+        val evalDurationUs = ((System.nanoTime() - evalStartNs) / 1000L).coerceAtLeast(1L)
 
         if (orderIdInt != 0) {
             val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
@@ -3623,11 +3645,19 @@ object OrderInterceptor {
             executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
             CoroutineScope(Dispatchers.IO).launch {
                 DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason) [0.0ms Instant Fire]")
+                DiagnosticLogger.logStep(
+                    "SpeedLog",
+                    "⚡ [1/4 ARRIVAL & GATES] $normOrderId ch=$sourceChannel -> ACCEPT ($reason) gateEval=${evalDurationUs}us | price=$price(min=$minOrderPrice) restDist=${String.format(Locale.US, "%.2f", dist)}km(max=$maxDistToRestaurant) custDist=${String.format(Locale.US, "%.2f", custDist)}km(max=$maxDistCustomer) active=${countCurrentActiveOrders()}/${if (maxOrdersLimit == 0) "∞" else maxOrdersLimit}"
+                )
             }
             return action
         }
 
         DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason)")
+        DiagnosticLogger.logStep(
+            "SpeedLog",
+            "🛑 [1/1 FILTERED -> $action] $normOrderId ch=$sourceChannel reason=[$reason] gateEval=${evalDurationUs}us | price=$price(min=$minOrderPrice) restDist=${String.format(Locale.US, "%.2f", dist)}km(max=$maxDistToRestaurant) custDist=${String.format(Locale.US, "%.2f", custDist)}km(max=$maxDistCustomer)"
+        )
 
         when (action) {
             "REJECT" -> {
@@ -3734,18 +3764,26 @@ object OrderInterceptor {
 
         // Launch IMMEDIATELY at 0.0ms on pre-started real-time thread pool (-19 priority)
         fastAcceptExecutor.execute {
+            val threadStartNs = System.nanoTime()
+            val queueDelayUs = ((threadStartNs - dispatchStartNs) / 1000L).coerceAtLeast(0L)
             try { Process.setThreadPriority(-19) } catch (_: Throwable) {
                 try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
             }
             val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
             // Fast in-memory token lookup (0.0ms); only read EncryptedPrefs if memory cache is empty
+            val tokenWasInRam = cachedAuthToken.isNotEmpty()
             var token = cachedAuthToken
             if (token.isEmpty()) {
                 if (ctx != null) readExactJahezEncryptedPrefs(ctx)
                 token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
             }
+            val tokenPrepUs = ((System.nanoTime() - threadStartNs) / 1000L).coerceAtLeast(0L)
+            val cipherWasReady = capturedDriverCipherB64.isNotEmpty()
+            val poolIdleBefore = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
+            val poolTotalBefore = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
             if (token.isEmpty()) {
                 DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
+                DiagnosticLogger.logWarn("SpeedLog", "❌ [ABORT] #$orderIdNum cannot $action: Auth token is empty in RAM and EncryptedPrefs!")
                 if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
                 return@execute
             }
@@ -3809,6 +3847,9 @@ object OrderInterceptor {
                     val doneLatch = java.util.concurrent.CountDownLatch(1)
                     val finishedWorkers = AtomicInteger(0)
 
+                    val winningStreamAtom = AtomicInteger(-1)
+                    val winningProtoRef = java.util.concurrent.atomic.AtomicReference<String>("?")
+
                     fun executeSingleStream(streamIdx: Int) {
                         try {
                             if (winCodeAtom.get() in 200..299 || apiConfirmedAcceptIds.contains(orderIdInt)) return
@@ -3818,17 +3859,30 @@ object OrderInterceptor {
                             for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
                             val reqStartNs = System.nanoTime()
                             val resp = singleWarmHttpClient.newCall(rb.build()).execute()
-                            val reqRttMs = ((System.nanoTime() - reqStartNs) / 1_000_000L).coerceAtLeast(1L)
+                            val reqEndNs = System.nanoTime()
+                            val reqRttMs = ((reqEndNs - reqStartNs) / 1_000_000L).coerceAtLeast(1L)
+                            val arrivalNs = orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs
+                            val sinceFcmMs = ((reqEndNs - arrivalNs) / 1_000_000L).coerceAtLeast(1L)
+                            val protoStr = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
                             bestRttMsAtom.compareAndSet(0L, reqRttMs)
+                            winningProtoRef.compareAndSet("?", protoStr)
                             val code = resp.code
                             val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
                             resp.close()
                             lastHttpResponseCode = code
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val cleanSnippet = bodyStr.replace("\n", " ").replace("\r", " ").trim().take(120)
+                                DiagnosticLogger.logStep(
+                                    "SpeedLog",
+                                    "🌐 [3/4 STREAM #$streamIdx] #$orderIdNum -> HTTP $code proto=$protoStr rtt=${reqRttMs}ms totalFromFcm=${sinceFcmMs}ms body=${cleanSnippet.ifEmpty { "<empty>" }}"
+                                )
+                            }
 
                             if (code in 200..299) {
                                 cachedApiHost = "https://gateway.saned.io"
                                 apiConfirmedAcceptIds.add(orderIdInt)
                                 if (winCodeAtom.compareAndSet(0, code)) {
+                                    winningStreamAtom.set(streamIdx)
                                     winBodyRef.set(bodyStr)
                                     doneLatch.countDown()
                                 }
@@ -3875,6 +3929,12 @@ object OrderInterceptor {
                         }
                     }
 
+                    CoroutineScope(Dispatchers.IO).launch {
+                        DiagnosticLogger.logStep(
+                            "SpeedLog",
+                            "🚀 [2/4 PRE-FLIGHT] #$orderIdNum firing $burstCount PUT streams -> queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_HIT" else "DISK_READ"}(${tokenPrepUs}us,len=${token.length}) driverCipher=${if (cipherWasReady) "READY(${capturedDriverCipherB64.take(8)}..)" else "EMPTY⚠️"} connPool=$poolIdleBefore/$poolTotalBefore"
+                        )
+                    }
                     // Spawn Streams #1..(burstCount-1) at 0.0ms with ZERO sleep across pre-warmed threads & sockets
                     for (extraIdx in 1 until burstCount) {
                         val capturedIdx = extraIdx
@@ -3935,9 +3995,15 @@ object OrderInterceptor {
 
                 if (winCode != null) {
                     if (isAccept) {
-                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((System.nanoTime() - dispatchStartNs) / 1_000_000L) }
+                        val endNs = System.nanoTime()
+                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
+                        val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
                         val speedLabel = "0.0 ms (RTT ${rttVal}ms)"
                         DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via PUT $primaryUrl (HTTP $winCode, $speedLabel)")
+                        DiagnosticLogger.logStep(
+                            "SpeedLog",
+                            "🏁 [4/4 RESULT: ACCEPTED ✅] #$orderIdNum HTTP $winCode bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
+                        )
                         var parsedFood = if (foodPrice > 0.0) foodPrice else cashAmt
                         var parsedCash = cashAmt
                         var parsedPayMethod = paymentMethod
@@ -4032,12 +4098,18 @@ object OrderInterceptor {
                         errMsg.contains("not available", ignoreCase = true)
 
                     if (isTakenByOtherDriver) {
-                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((System.nanoTime() - dispatchStartNs) / 1_000_000L) }
+                        val endNs = System.nanoTime()
+                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
+                        val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
                         val rttStr = "${rttVal}ms"
                         val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
                         val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg · RTT $rttStr)"
                         lastOrderEvent = takenToast
                         DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode, rtt=$rttStr)")
+                        DiagnosticLogger.logWarn(
+                            "SpeedLog",
+                            "🏁 [4/4 RESULT: TAKEN_BY_OTHER ⚠️] #$orderIdNum HTTP $lastErrCode msg=[$errMsg] bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
+                        )
                         if (ctx != null) showToast(ctx, takenToast)
                         sendOrderToLog(
                             orderId = "#$orderIdNum",
@@ -4138,9 +4210,16 @@ object OrderInterceptor {
                                 )
                             }
                         } else {
+                            val endNs = System.nanoTime()
+                            val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
+                            val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
                             val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
                             val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
                             DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+                            DiagnosticLogger.logWarn(
+                                "SpeedLog",
+                                "🏁 [4/4 RESULT: FAILED ❌] #$orderIdNum HTTP $lastErrCode msg=[$errMsg] bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
+                            )
                             lastOrderEvent = failToast
                             if (ctx != null) showToast(ctx, failToast)
                             sendOrderToLog(

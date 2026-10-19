@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDiagLogSummary: TextView
     private var filterErrorsOnly: Boolean = false
     private var filterNavLogsOnly: Boolean = false
+    private var filterSpeedLogsOnly: Boolean = false
     private lateinit var chkHookEarlyCloaker: CheckBox
     private lateinit var chkHookSecCloaker: CheckBox
     private lateinit var chkHookLocation: CheckBox
@@ -375,51 +376,74 @@ class MainActivity : AppCompatActivity() {
 
         val btnFilterToggle = Button(this).apply {
   text = "🔎 الكل / الأخطاء"
-  textSize = 11f
+  textSize = 10.5f
   layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-      setMargins(0, 0, 6, 0)
+      setMargins(0, 0, 4, 0)
   }
   setBackgroundColor(Color.parseColor("#4F46E5"))
   setTextColor(Color.WHITE)
   setOnClickListener {
       filterNavLogsOnly = false
+      filterSpeedLogsOnly = false
       filterErrorsOnly = !filterErrorsOnly
-      text = if (filterErrorsOnly) "🚨 الأخطاء فقط" else "🔎 الكل / الأخطاء"
+      text = if (filterErrorsOnly) "🚨 الأخطاء ✓" else "🔎 الكل / الأخطاء"
       refreshDiagLogsUI()
   }
         }
         btnRow1.addView(btnFilterToggle)
 
+        val btnSpeedLogFilter = Button(this).apply {
+  text = "⚡ سجل السرعة"
+  textSize = 10.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
+      setMargins(3, 0, 4, 0)
+  }
+  setBackgroundColor(Color.parseColor("#7C3AED"))
+  setTextColor(Color.WHITE)
+  setOnClickListener {
+      filterErrorsOnly = false
+      filterNavLogsOnly = false
+      filterSpeedLogsOnly = !filterSpeedLogsOnly
+      text = if (filterSpeedLogsOnly) "⚡ السرعة فقط ✓" else "⚡ سجل السرعة"
+      refreshDiagLogsUI()
+  }
+        }
+        btnRow1.addView(btnSpeedLogFilter)
+
         val btnNavLogFilter = Button(this).apply {
-  text = "🧭 سجل الملاحة"
-  textSize = 11f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-      setMargins(4, 0, 6, 0)
+  text = "🧭 الملاحة"
+  textSize = 10.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply {
+      setMargins(3, 0, 4, 0)
   }
   setBackgroundColor(Color.parseColor("#0284C7"))
   setTextColor(Color.WHITE)
   setOnClickListener {
       filterErrorsOnly = false
+      filterSpeedLogsOnly = false
       filterNavLogsOnly = !filterNavLogsOnly
-      text = if (filterNavLogsOnly) "🧭 الملاحة فقط ✓" else "🧭 سجل الملاحة"
+      text = if (filterNavLogsOnly) "🧭 الملاحة ✓" else "🧭 الملاحة"
       refreshDiagLogsUI()
   }
         }
         btnRow1.addView(btnNavLogFilter)
 
         val btnCopyLogs = Button(this).apply {
-  text = "📋 نسخ السجل"
-  textSize = 11.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-      setMargins(4, 0, 4, 0)
+  text = "📋 نسخ"
+  textSize = 11f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.85f).apply {
+      setMargins(3, 0, 4, 0)
   }
   setBackgroundColor(Color.parseColor("#059669"))
   setTextColor(Color.WHITE)
   setOnClickListener {
+      val shownText = tvDiagLogConsole.text?.toString() ?: ""
       val fullLogs = SettingsStore.getDiagLogs(this@MainActivity)
+      val toCopy = if ((filterSpeedLogsOnly || filterNavLogsOnly || filterErrorsOnly) && shownText.isNotBlank()) shownText else fullLogs
       val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", fullLogs.ifEmpty { "No logs yet" }))
-      Toast.makeText(this@MainActivity, "✅ تم نسخ السجل التشخيصي بالكامل للحافظة", Toast.LENGTH_SHORT).show()
+      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", toCopy.ifEmpty { "No logs yet" }))
+      val modeMsg = if (filterSpeedLogsOnly) "✅ تم نسخ سجل سرعة ومعالجة الطلبات [SpeedLog] للحافظة" else "✅ تم نسخ السجل التشخيصي للحافظة"
+      Toast.makeText(this@MainActivity, modeMsg, Toast.LENGTH_SHORT).show()
   }
         }
         btnRow1.addView(btnCopyLogs)
@@ -560,16 +584,30 @@ class MainActivity : AppCompatActivity() {
         val errCount = lines.count { it.contains("[ERR]") }
         val warnCount = lines.count { it.contains("[WARN]") }
         val navCount = lines.count { it.contains("[NavLog]") }
+        val speedCount = lines.count { it.contains("[SpeedLog]") }
 
         if (crashCount > 0 || errCount > 0) {
-  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ | 🧭 $navCount سجل ملاحة (إجمالي ${lines.size} سطر)"
+  tvDiagLogSummary.text = "🚨 $crashCount كراش و $errCount خطأ | ⚡ $speedCount سرعة قبول | 🧭 $navCount ملاحة (${lines.size} سطر)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
         } else {
-  tvDiagLogSummary.text = "✅ السجل يعمل (${lines.size} سطر | 🧭 $navCount ملاحة | $warnCount تنبيه | 0 كراش)"
+  tvDiagLogSummary.text = "✅ السجل يعمل (${lines.size} سطر | ⚡ $speedCount سرعة قبول | 🧭 $navCount ملاحة | $warnCount تنبيه)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
         }
 
         val displayText = when {
+  filterSpeedLogsOnly -> {
+      val speedLines = lines.filter {
+          it.contains("[SpeedLog]") ||
+          it.contains("[OrderDecision]") ||
+          it.contains("[EarlyFCM]") ||
+          it.contains("[FCM]") ||
+          it.contains("[DirectApi]") ||
+          it.contains("[IncomingDispatchActivity]") ||
+          it.contains("[CipherHook]") ||
+          it.contains("[EncryptedPrefs]")
+      }
+      if (speedLines.isEmpty()) "لا توجد سجلات سرعة ومعالجة طلبات [SpeedLog] بعد — انتظر وصول طلب أو اضغط محاكاة طلب في الإعدادات" else speedLines.joinToString("\n")
+  }
   filterNavLogsOnly -> {
       val navLines = lines.filter { it.contains("[NavLog]") }
       if (navLines.isEmpty()) "لا توجد سجلات ملاحة [NavLog] بعد — افتح طلب في تطبيق سند أو اضغط ⚡ لتجربة التوجيه للعميل" else navLines.joinToString("\n")
