@@ -961,12 +961,26 @@ object OrderInterceptor {
       DiagnosticLogger.logWarn("BootstrapLoop", "Timed out waiting for currentApplication()")
   }
 
-  // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
-  try { Thread.sleep(3000) } catch (_: Throwable) {}
+  // Immediately load persisted token & driverId cipher at 0ms and prewarm HTTP/2 socket BEFORE sleeping!
+  try {
+      readPersistedToken()
+      readPersistedDriverCipher()
+      fastAcceptExecutor.execute {}
+      val earlyCtx = resolvedApp ?: resolveApplicationContext()
+      if (earlyCtx != null) {
+          readExactJahezEncryptedPrefs(earlyCtx)
+      }
+      if (cachedAuthToken.isNotEmpty()) {
+          prewarmGatewayConnection(force = true)
+      }
+  } catch (_: Throwable) {}
+
+  try { Thread.sleep(1200) } catch (_: Throwable) {}
   try {
       val initCtx = resolveApplicationContext()
       if (initCtx != null) {
           readExactJahezEncryptedPrefs(initCtx)
+          prewarmGatewayConnection(force = true)
           scanJahezDatabases(initCtx)
       }
   } catch (_: Throwable) {}
@@ -974,13 +988,7 @@ object OrderInterceptor {
       startActiveServerPolling()
   }
 
-  // Pre-initialize fastAcceptExecutor and warm up HTTP/2 socket to gateway.saned.io immediately
-  try {
-      fastAcceptExecutor.execute {}
-      prewarmGatewayConnection(force = true)
-  } catch (_: Throwable) {}
-
-  // Continuous background SQLite + EncryptedSharedPreferences token sync + HTTP/2 connection keep-warm loop
+  // Calm background token & SQLite sync loop (every 6 seconds so it never congests HTTP/2 socket)
   while (true) {
       try {
           val ctx = resolveApplicationContext()
@@ -989,13 +997,12 @@ object OrderInterceptor {
                   try { initAppContext(ctx) } catch (_: Throwable) {}
               }
               readExactJahezEncryptedPrefs(ctx)
-              prewarmGatewayConnection(force = false)
               scanJahezDatabases(ctx)
           }
       } catch (t: Throwable) {
           DiagnosticLogger.logError("BootstrapLoop", "Error in background loop iteration", t)
       }
-      try { Thread.sleep(2000) } catch (_: Throwable) { break }
+      try { Thread.sleep(6000) } catch (_: Throwable) { break }
   }
         }.apply {
   isDaemon = true
@@ -1095,6 +1102,8 @@ object OrderInterceptor {
   DiagnosticLogger.logError("initAppContext", "Failed registering settingsReceiver", t)
         }
 
+        readPersistedToken()
+        readPersistedDriverCipher()
         loadFallbackConfigFile()
         LocationEngine.syncLocationSettings()
         DeviceSpoofer.syncSettings()
@@ -1252,6 +1261,30 @@ object OrderInterceptor {
                     cachedHeaders["Authorization"] = t
                     extractHostFromJwt(t)
                     return t
+                }
+            }
+        } catch (_: Throwable) {}
+        return ""
+    }
+
+    fun persistDriverCipher(cipherB64: String) {
+        if (cipherB64.isEmpty()) return
+        try {
+            val f = File("/data/local/tmp/saned_driver_cipher.txt")
+            f.writeText(cipherB64.trim())
+            f.setReadable(true, false)
+            f.setWritable(true, false)
+        } catch (_: Throwable) {}
+    }
+
+    fun readPersistedDriverCipher(): String {
+        try {
+            val f = File("/data/local/tmp/saned_driver_cipher.txt")
+            if (f.exists()) {
+                val c = f.readText().trim()
+                if (c.isNotEmpty()) {
+                    capturedDriverCipherB64 = c
+                    return c
                 }
             }
         } catch (_: Throwable) {}
@@ -2085,6 +2118,11 @@ object OrderInterceptor {
         if (keys.size < 18) return ""
         val reqId = (dataMap[keys[0]] as? String)?.trim()?.toIntOrNull() ?: return ""
         if (reqId == 0) return ""
+        // Fast 0.0ms deduplication: if EarlyFCM (onReceive) already fired for this reqId, return immediately without duplicate logs/IPC!
+        val existingEntry = handledOrdersMap[reqId]
+        if (existingEntry != null && (SystemClock.elapsedRealtime() - existingEntry.timestampRealtime) < 60_000L) {
+            return existingEntry.decision
+        }
         fun mapDouble(k: String): Double = (dataMap[k] as? String)?.trim()?.toDoubleOrNull() ?: 0.0
         fun mapFirstStr(vararg ks: String): String {
   for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
@@ -2484,6 +2522,8 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
+    private val detailFetchAttemptsMap = ConcurrentHashMap<String, Int>()
+
     private fun fetchOrderCustomerDetailsAsync(orderId: String, force: Boolean = false) {
         val cleanId = orderId.replace("#", "").trim()
         val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
@@ -2491,9 +2531,13 @@ object OrderInterceptor {
         val now = SystemClock.elapsedRealtime()
         val lastFetch = lastDetailFetchTimeMap[cleanId] ?: 0L
         val hasCachedFood = (foodPriceCache[cleanId] ?: 0.0) > 0.0
-        if (!force && fetchedDetailIds.contains(cleanId) && (hasCachedFood || (now - lastFetch) < 6000L)) return
-        if (!force && (now - lastFetch) < 2000L) return
+        val hasCachedPhone = (customerDetailsCache[cleanId]?.second ?: "").isNotEmpty()
+        val attempts = detailFetchAttemptsMap[cleanId] ?: 0
+        if (!force && hasCachedFood && hasCachedPhone) return
+        if (!force && attempts >= 2 && (now - lastFetch) < 120_000L) return
+        if (!force && (now - lastFetch) < 30_000L) return
         lastDetailFetchTimeMap[cleanId] = now
+        detailFetchAttemptsMap[cleanId] = attempts + 1
         fetchedDetailIds.add(cleanId)
 
         val ctx = resolveApplicationContext() ?: currentActivity
@@ -2718,6 +2762,7 @@ object OrderInterceptor {
                       if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
                           val wasEmpty = capturedDriverCipherB64.isEmpty()
                           capturedDriverCipherB64 = newB64
+                          persistDriverCipher(newB64)
                           if (wasEmpty) {
                               DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
                           }
@@ -3055,7 +3100,6 @@ object OrderInterceptor {
           val body = resp.body?.string() ?: ""
           resp.close()
           if (code == 401 || code == 403) {
-              cachedAuthToken = ""
               cachedEncPrefs = null
               if (ctx != null) readExactJahezEncryptedPrefs(ctx)
           } else if (code in 200..299 && body.isNotEmpty()) {
@@ -3757,7 +3801,7 @@ object OrderInterceptor {
                 val lastErrCodeAtom = AtomicInteger(0)
                 val lastErrBodyRef = java.util.concurrent.atomic.AtomicReference<String>("")
 
-                val bestRttMsAtom = java.util.concurrent.atomic.AtomicReference<Double>(0.0)
+                val bestRttMsAtom = java.util.concurrent.atomic.AtomicLong(0L)
 
                 if (isAccept && orderIdInt > 0) {
                     // Clean HTTP/2 Multiplexed Burst over Single Shared Pre-Warmed Socket (Matching Ljx$c.s + Ly0.a in SanedAssistant-98):
@@ -3772,15 +3816,10 @@ object OrderInterceptor {
                             lastInterceptedUrl = primaryUrl
                             val rb = Request.Builder().url(primaryUrl).put(emptyBody)
                             for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                            val clientForStream = if (streamIdx == 1 && capturedAppHttpClient != null) {
-                                capturedAppHttpClient!!
-                            } else {
-                                singleWarmHttpClient
-                            }
                             val reqStartNs = System.nanoTime()
-                            val resp = clientForStream.newCall(rb.build()).execute()
-                            val reqRttMs = (System.nanoTime() - reqStartNs) / 1_000_000.0
-                            bestRttMsAtom.compareAndSet(0.0, reqRttMs)
+                            val resp = singleWarmHttpClient.newCall(rb.build()).execute()
+                            val reqRttMs = ((System.nanoTime() - reqStartNs) / 1_000_000L).coerceAtLeast(1L)
+                            bestRttMsAtom.compareAndSet(0L, reqRttMs)
                             val code = resp.code
                             val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
                             resp.close()
@@ -3798,7 +3837,6 @@ object OrderInterceptor {
 
                             // Handle 401 TokenExpired immediately on Stream 0
                             if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && streamIdx == 0 && ctx != null) {
-                                cachedAuthToken = ""
                                 cachedEncPrefs = null
                                 readExactJahezEncryptedPrefs(ctx)
                                 if (cachedAuthToken.isNotEmpty()) {
@@ -3806,7 +3844,7 @@ object OrderInterceptor {
                                     nativeHeaders = buildHeaders(token)
                                     val retryRb = Request.Builder().url(primaryUrl).put(emptyBody)
                                     for ((hk, hv) in nativeHeaders) retryRb.header(hk, hv)
-                                    val retryResp = httpClientPool[0].newCall(retryRb.build()).execute()
+                                    val retryResp = singleWarmHttpClient.newCall(retryRb.build()).execute()
                                     val rCode = retryResp.code
                                     val rBody = try { retryResp.body?.string() ?: "" } catch (_: Throwable) { "" }
                                     retryResp.close()
@@ -3823,6 +3861,10 @@ object OrderInterceptor {
 
                             lastErrCodeAtom.compareAndSet(0, code)
                             if (bodyStr.isNotEmpty()) lastErrBodyRef.compareAndSet("", bodyStr)
+                            // If server definitively says order is already accepted by another driver (HTTP 400), unblock latch immediately!
+                            if (code == 400 && (bodyStr.contains("already accepted", ignoreCase = true) || bodyStr.contains("already assigned", ignoreCase = true) || bodyStr.contains("not available", ignoreCase = true))) {
+                                doneLatch.countDown()
+                            }
                         } catch (t: Throwable) {
                             lastErrCodeAtom.compareAndSet(0, -1)
                             if (lastErrBodyRef.get().isEmpty()) lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
@@ -3893,9 +3935,9 @@ object OrderInterceptor {
 
                 if (winCode != null) {
                     if (isAccept) {
-                        val dispatchMs = 0.0
-                        val speedLabel = String.format(Locale.US, "%.1f ms", dispatchMs)
-                        DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via PUT $primaryUrl (HTTP $winCode, dispatch=$speedLabel)")
+                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((System.nanoTime() - dispatchStartNs) / 1_000_000L) }
+                        val speedLabel = "0.0 ms (RTT ${rttVal}ms)"
+                        DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via PUT $primaryUrl (HTTP $winCode, $speedLabel)")
                         var parsedFood = if (foodPrice > 0.0) foodPrice else cashAmt
                         var parsedCash = cashAmt
                         var parsedPayMethod = paymentMethod
@@ -3990,7 +4032,8 @@ object OrderInterceptor {
                         errMsg.contains("not available", ignoreCase = true)
 
                     if (isTakenByOtherDriver) {
-                        val rttStr = String.format(Locale.US, "%.0fms", bestRttMsAtom.get())
+                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((System.nanoTime() - dispatchStartNs) / 1_000_000L) }
+                        val rttStr = "${rttVal}ms"
                         val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
                         val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg · RTT $rttStr)"
                         lastOrderEvent = takenToast
@@ -5173,41 +5216,22 @@ object OrderInterceptor {
     }
 
     private fun createUnsafeOkHttpClient(): OkHttpClient {
-        return try {
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            })
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, SecureRandom())
-            val sslSocketFactory = sslContext.socketFactory
-
-            val fastDispatcher = okhttp3.Dispatcher().apply {
-                maxRequests = 64
-                maxRequestsPerHost = 32
-            }
-            val keepAlivePool = okhttp3.ConnectionPool(16, 10, TimeUnit.MINUTES)
-            OkHttpClient.Builder()
-                .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
-                .dispatcher(fastDispatcher)
-                .connectionPool(keepAlivePool)
-                .pingInterval(10, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
-                .connectTimeout(2500, TimeUnit.MILLISECONDS)
-                .readTimeout(2500, TimeUnit.MILLISECONDS)
-                .writeTimeout(2500, TimeUnit.MILLISECONDS)
-                .build()
-        } catch (_: Throwable) {
-            OkHttpClient.Builder()
-                .connectionPool(okhttp3.ConnectionPool(16, 10, TimeUnit.MINUTES))
-                .pingInterval(10, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
-                .connectTimeout(2500, TimeUnit.MILLISECONDS)
-                .readTimeout(2500, TimeUnit.MILLISECONDS)
-                .writeTimeout(2500, TimeUnit.MILLISECONDS)
-                .build()
+        // Matches Lr0.a() in SanedAssistant-98-7bac1ec.apk:
+        // Uses standard Android Conscrypt TLS 1.3 + ALPN HTTP/2 (h2) without custom SSLContext("SSL") or pingInterval
+        // so Cloudflare keeps the single multiplexed HTTP/2 socket open continuously with 0ms handshake!
+        val fastDispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 32
         }
+        val keepAlivePool = okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES)
+        return OkHttpClient.Builder()
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            .dispatcher(fastDispatcher)
+            .connectionPool(keepAlivePool)
+            .retryOnConnectionFailure(true)
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .writeTimeout(8, TimeUnit.SECONDS)
+            .build()
     }
 }
