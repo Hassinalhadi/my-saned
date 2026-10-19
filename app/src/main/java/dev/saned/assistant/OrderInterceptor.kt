@@ -1258,16 +1258,38 @@ object OrderInterceptor {
     }
 
     fun persistToken(token: String) {
-        if (token.isEmpty()) return
+        val clean = token.trim()
+        if (clean.isEmpty()) return
+        try {
+            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
+            if (ctx != null) {
+                File(ctx.filesDir, "saned_auth_token.txt").writeText(clean)
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
-            f.writeText(token.trim())
+            f.writeText(clean)
             f.setReadable(true, false)
             f.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 
     fun readPersistedToken(): String {
+        try {
+            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
+            if (ctx != null) {
+                val pf = File(ctx.filesDir, "saned_auth_token.txt")
+                if (pf.exists()) {
+                    val t = pf.readText().trim()
+                    if (t.isNotEmpty()) {
+                        cachedAuthToken = t
+                        cachedHeaders["Authorization"] = t
+                        extractHostFromJwt(t)
+                        return t
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
             if (f.exists()) {
@@ -1284,16 +1306,36 @@ object OrderInterceptor {
     }
 
     fun persistDriverCipher(cipherB64: String) {
-        if (cipherB64.isEmpty()) return
+        val clean = cipherB64.trim()
+        if (clean.isEmpty()) return
+        try {
+            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
+            if (ctx != null) {
+                File(ctx.filesDir, "saned_driver_cipher.txt").writeText(clean)
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_driver_cipher.txt")
-            f.writeText(cipherB64.trim())
+            f.writeText(clean)
             f.setReadable(true, false)
             f.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 
     fun readPersistedDriverCipher(): String {
+        try {
+            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
+            if (ctx != null) {
+                val pf = File(ctx.filesDir, "saned_driver_cipher.txt")
+                if (pf.exists()) {
+                    val c = pf.readText().trim()
+                    if (c.isNotEmpty()) {
+                        capturedDriverCipherB64 = c
+                        return c
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_driver_cipher.txt")
             if (f.exists()) {
@@ -3096,6 +3138,9 @@ object OrderInterceptor {
     private fun pollServerForAvailableOrders() {
         if (!DiagnosticLogger.hookBootstrapLoop) return
         val ctx = resolveApplicationContext() ?: currentActivity
+        if (knownDbOrderIds.isEmpty() && ctx != null) {
+            try { scanJahezDatabases(ctx) } catch (_: Throwable) {}
+        }
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
         if (token.isEmpty()) return
@@ -3840,15 +3885,14 @@ object OrderInterceptor {
                 val lastErrBodyRef = java.util.concurrent.atomic.AtomicReference<String>("")
 
                 val bestRttMsAtom = java.util.concurrent.atomic.AtomicLong(0L)
+                val winningStreamAtom = AtomicInteger(-1)
+                val winningProtoRef = java.util.concurrent.atomic.AtomicReference<String>("?")
 
                 if (isAccept && orderIdInt > 0) {
                     // Clean HTTP/2 Multiplexed Burst over Single Shared Pre-Warmed Socket (Matching Ljx$c.s + Ly0.a in SanedAssistant-98):
                     val burstCount = parallelRequests.coerceIn(1, 3)
                     val doneLatch = java.util.concurrent.CountDownLatch(1)
                     val finishedWorkers = AtomicInteger(0)
-
-                    val winningStreamAtom = AtomicInteger(-1)
-                    val winningProtoRef = java.util.concurrent.atomic.AtomicReference<String>("?")
 
                     fun executeSingleStream(streamIdx: Int) {
                         try {
@@ -3915,10 +3959,10 @@ object OrderInterceptor {
 
                             lastErrCodeAtom.compareAndSet(0, code)
                             if (bodyStr.isNotEmpty()) lastErrBodyRef.compareAndSet("", bodyStr)
-                            // If server definitively says order is already accepted by another driver (HTTP 400), unblock latch immediately!
-                            if (code == 400 && (bodyStr.contains("already accepted", ignoreCase = true) || bodyStr.contains("already assigned", ignoreCase = true) || bodyStr.contains("not available", ignoreCase = true))) {
-                                doneLatch.countDown()
-                            }
+                            // IMPORTANT: Do NOT call doneLatch.countDown() on HTTP 400!
+                            // When firing 3 parallel PUT streams, our winning stream (HTTP 200) takes ~15-25ms longer on the server
+                            // to commit the order than our other 2 streams which immediately get HTTP 400 ("Order is already accepted")!
+                            // Waiting for all 3 streams (or the first HTTP 200) ensures we never miss our own winning stream's HTTP 200!
                         } catch (t: Throwable) {
                             lastErrCodeAtom.compareAndSet(0, -1)
                             if (lastErrBodyRef.get().isEmpty()) lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
@@ -4002,7 +4046,7 @@ object OrderInterceptor {
                         DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via PUT $primaryUrl (HTTP $winCode, $speedLabel)")
                         DiagnosticLogger.logStep(
                             "SpeedLog",
-                            "🏁 [4/4 RESULT: ACCEPTED ✅] #$orderIdNum HTTP $winCode bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
+                            "🏁 [4/4 RESULT: ACCEPTED ✅] #$orderIdNum (Stream #${winningStreamAtom.get()}) HTTP $winCode bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
                         )
                         var parsedFood = if (foodPrice > 0.0) foodPrice else cashAmt
                         var parsedCash = cashAmt
