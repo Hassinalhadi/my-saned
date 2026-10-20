@@ -197,18 +197,24 @@ object OrderInterceptor {
         }
     }
 
-    // Single shared SSL-Bypassing HTTP/2 OkHttpClient with persistent ConnectionPool & 10s HTTP/2 PING frames
-    // Using a single shared HTTP/2 connection ensures all keep-warm polls and 0.0ms PUT accept streams multiplex over the exact same warm TLS socket!
+    // Dual independent pre-warmed HTTP/2 OkHttpClient instances (Primary + Secondary)
+    // Eliminates single-socket TCP Head-of-Line blocking while keeping both TLS 1.3 / HTTP/2 sockets & 4G/5G radio 100% hot!
     private val singleWarmHttpClient: OkHttpClient by lazy {
         createUnsafeOkHttpClient()
     }
 
+    private val secondaryWarmHttpClient: OkHttpClient by lazy {
+        createUnsafeOkHttpClient()
+    }
+
     private val httpClientPool: Array<OkHttpClient> by lazy {
-        Array(3) { singleWarmHttpClient }
+        arrayOf(singleWarmHttpClient, secondaryWarmHttpClient, singleWarmHttpClient)
     }
 
     private val httpClient: OkHttpClient
         get() = singleWarmHttpClient
+
+    val activeAcceptCallsCount = AtomicInteger(0)
 
     // Dedicated pre-started real-time thread pool (-19 THREAD_PRIORITY_URGENT_AUDIO) for 0.0ms instant order acceptance
     private val fastAcceptExecutor: java.util.concurrent.ThreadPoolExecutor by lazy {
@@ -241,14 +247,16 @@ object OrderInterceptor {
     val orderArrivalNanoMap = ConcurrentHashMap<Int, Long>()
 
     fun prewarmGatewayConnection(force: Boolean = false) {
+        if (activeAcceptCallsCount.get() > 0) return
         val now = SystemClock.elapsedRealtime()
-        if (!force && (now - lastPrewarmRealtime) < 4000L) return
+        if (!force && (now - lastPrewarmRealtime) < 1800L) return
         lastPrewarmRealtime = now
         val tok = cachedAuthToken
         val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
         if (rawTok.isEmpty()) return
         fastAcceptExecutor.execute {
             try {
+                if (activeAcceptCallsCount.get() > 0) return@execute
                 val t0 = System.nanoTime()
                 val rb = Request.Builder()
                     .url("https://gateway.saned.io/api/v1/dispatch/active")
@@ -259,17 +267,27 @@ object OrderInterceptor {
                 if (capturedDriverCipherB64.isNotEmpty()) {
                     rb.header("x-unique-Identifier", capturedDriverCipherB64)
                 }
-                val resp = singleWarmHttpClient.newCall(rb.build()).execute()
+                val req = rb.build()
+                val resp = singleWarmHttpClient.newCall(req).execute()
                 val rttMs = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
                 val proto = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
                 val code = resp.code
                 resp.close()
+                // Also prewarm secondary HTTP/2 socket asynchronously so Stream #1 has its own independent hot TLS socket
+                fastAcceptExecutor.execute {
+                    try {
+                        if (activeAcceptCallsCount.get() == 0) {
+                            secondaryWarmHttpClient.newCall(req).execute().close()
+                        }
+                    } catch (_: Throwable) {}
+                }
                 if (force) {
                     val idle = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
                     val total = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
+                    val secIdle = try { secondaryWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
                     DiagnosticLogger.logStep(
                         "SpeedLog",
-                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total cipher=${capturedDriverCipherB64.isNotEmpty()}"
+                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total(sec=$secIdle) cipher=${capturedDriverCipherB64.isNotEmpty()}"
                     )
                 }
             } catch (_: Throwable) {}
@@ -329,29 +347,9 @@ object OrderInterceptor {
       }
   } catch (_: Throwable) {}
         }
-        // If decision is ACCEPT, only finish IncomingDispatchActivity if API accept already succeeded (200..299).
-        // Otherwise, trigger UI auto-accept on IncomingDispatchActivity as backup so the order is never lost!
-        if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
-  val fcmArrNs = orderArrivalNanoMap[orderIdInt] ?: 0L
-  val deltaFcmMs = if (fcmArrNs > 0L) ((System.nanoTime() - fcmArrNs) / 1_000_000L) else -1L
-  DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending/failed -> triggering UI auto-accept backup")
-  DiagnosticLogger.logStep("SpeedLog", "📱 [UI BACKUP] IncomingDispatchActivity #$orderIdInt opened (deltaFromFcm=${deltaFcmMs}ms) -> scheduling UI swipe backup at 25ms, 100ms, 250ms")
-  for (delayMs in listOf(25L, 100L, 250L)) {
-      mainHandler.postDelayed({
-          try {
-              if (apiConfirmedAcceptIds.contains(orderIdInt)) {
-                  closeDispatchActivitySafely(activity, entry.wasInBackground)
-              } else if (!activity.isFinishing && !activity.isDestroyed) {
-                  val decor = activity.window?.decorView
-                  if (decor != null) {
-                      findAndTriggerOrder(decor, activity, System.currentTimeMillis())
-                  }
-              }
-          } catch (_: Throwable) {}
-      }, delayMs)
-  }
-  return
-        }
+        // Exact match with SanedAssistant-98 Ljx.d:
+        // Immediately finish IncomingDispatchActivity so its Google Maps initialization, logo downloads, and UI inflation
+        // at T+140ms NEVER compete for CPU or mobile radio bandwidth while our 0.0ms HTTP/2 PUT streams are in flight!
         closeDispatchActivitySafely(activity, entry.wasInBackground)
     }
 
@@ -2059,9 +2057,12 @@ object OrderInterceptor {
                 ?: map["dispatchId"]?.trim()
                 ?: return ""
             if (rawReqId.isEmpty() || rawReqId == "0") return ""
+            val reqIdInt = rawReqId.toIntOrNull() ?: 0
+            val alreadyHandled = reqIdInt > 0 && handledOrdersMap.containsKey(reqIdInt)
             val res = processFcmMapWithLs90(map)
-            if (res.isNotEmpty()) {
+            if (res.isNotEmpty() && !alreadyHandled) {
                 CoroutineScope(Dispatchers.IO).launch {
+                    delay(260L)
                     DiagnosticLogger.logStep("EarlyFCM", "Intercepted Order #$rawReqId at $sourceLabel layer (0.0ms pre-handler)")
                 }
             }
@@ -2158,6 +2159,14 @@ object OrderInterceptor {
                       DiagnosticLogger.logError("FCM", "Error in FCM hook", t)
                   }
                   if (decisionAction == "REJECT" && !isDryRun) return null
+                  // Give our 0.0ms HTTP/2 PUT accept streams a 120ms network head-start before allowing Jahez
+                  // to write to SQLite dispatches_db or launch IncomingDispatchActivity!
+                  if (decisionAction == "ACCEPT" && !isDryRun) {
+                      val waitStart = SystemClock.elapsedRealtime()
+                      while ((SystemClock.elapsedRealtime() - waitStart) < 120L && activeAcceptCallsCount.get() > 0) {
+                          try { Thread.sleep(4L) } catch (_: Throwable) { break }
+                      }
+                  }
                   return chain.proceed()
               }
           })
@@ -2222,6 +2231,7 @@ object OrderInterceptor {
             sourceChannel = "PUSH"
         )
         CoroutineScope(Dispatchers.IO).launch {
+            delay(250L)
             DiagnosticLogger.logStep("FCM", "Order #$reqId received (price=$cleanPrice, restDist=$calcRestDist) -> 0.0ms dispatch")
             DiagnosticLogger.logStep(
                 "NavLog",
@@ -2998,19 +3008,27 @@ object OrderInterceptor {
         CoroutineScope(Dispatchers.IO).launch {
             while (true) {
                 try {
-                    if (isMasterRunning && isActivePolling) {
+                    if (activeAcceptCallsCount.get() == 0) {
                         if (cachedAuthToken.isEmpty()) {
                             readPersistedToken()
                         }
                         if (cachedAuthToken.isNotEmpty()) {
-                            pollServerForAvailableOrders()
+                            if (isMasterRunning && isActivePolling) {
+                                pollServerForAvailableOrders()
+                            } else {
+                                // Even if active polling is off, keep both HTTP/2 sockets & 4G/5G radio warm (preventing +270ms RRC Idle penalty)
+                                prewarmGatewayConnection(force = false)
+                            }
                         }
                     }
                 } catch (_: Throwable) {}
-                // Optimal 2.0s keep-warm polling (matches SanedAssistant-98 Lb11$b.s): keeps the single HTTP/2 TLS socket 100% warm
-                // while leaving mobile radio uplink 99% idle and uncongested for instant 0.0ms FCM push acceptance!
-                val effSec = if (pollIntervalSec < 1.5f) 2.0f else pollIntervalSec.coerceIn(1.5f, 10.0f)
-                val delayMs = (effSec * 1000f).toLong().coerceAtLeast(1500L)
+                // High-frequency 450ms sub-second polling in Instant Mode (0.0s-0.5s):
+                // Catches new orders on /api/v1/dispatch/active BEFORE FCM Push arrives AND prevents 4G/5G cDRX/RRC sleep!
+                val delayMs = when {
+                    !isActivePolling -> 1800L
+                    pollIntervalSec <= 0.5f -> 450L
+                    else -> (pollIntervalSec * 1000f).toLong().coerceIn(450L, 5000L)
+                }
                 delay(delayMs)
             }
         }
@@ -3137,48 +3155,59 @@ object OrderInterceptor {
 
     private fun pollServerForAvailableOrders() {
         if (!DiagnosticLogger.hookBootstrapLoop) return
+        if (activeAcceptCallsCount.get() > 0) return
         val ctx = resolveApplicationContext() ?: currentActivity
         if (knownDbOrderIds.isEmpty() && ctx != null) {
-            try { scanJahezDatabases(ctx) } catch (_: Throwable) {}
+            CoroutineScope(Dispatchers.IO).launch {
+                try { scanJahezDatabases(ctx) } catch (_: Throwable) {}
+            }
         }
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
         if (token.isEmpty()) return
-        val clientToUse = singleWarmHttpClient
+        val hitIdx = pollingHits.incrementAndGet()
+        // Alternate across both warm HTTP/2 clients so both Primary and Secondary sockets stay 100% hot!
+        val clientToUse = if (hitIdx % 3 == 0) secondaryWarmHttpClient else singleWarmHttpClient
 
         if (Native.isLoaded) {
-  try {
-      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-      val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
-      if (spec.size >= 2 && spec[1].startsWith("http")) {
-          lastPrewarmRealtime = SystemClock.elapsedRealtime()
-          pollingHits.incrementAndGet()
-          val rb = Request.Builder().url(spec[1]).get()
-          var idx = 2
-          while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
-          val resp = clientToUse.newCall(rb.build()).execute()
-          val code = resp.code
-          lastHttpResponseCode = code
-          val body = resp.body?.string() ?: ""
-          resp.close()
-          if (code == 401 || code == 403) {
-              cachedEncPrefs = null
-              if (ctx != null) readExactJahezEncryptedPrefs(ctx)
-          } else if (code in 200..299 && body.isNotEmpty()) {
-              failedPollingCount = 0
-              // 1. IMMEDIATELY run Lb11 0.0ms active dispatch acceptance BEFORE any DB/UI work!
-              processPolledActiveDispatchesLb11(body)
-              // 2. Sync embedded order details
-              findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-              val nowRt = SystemClock.elapsedRealtime()
-              if (ctx != null && (nowRt - lastPollDbSyncRealtime) > 2500L) {
-                  lastPollDbSyncRealtime = nowRt
-                  scanJahezDatabases(ctx)
-              }
-              return
-          }
-      }
-  } catch (_: Throwable) {}
+            try {
+                val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+                val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+                if (spec.size >= 2 && spec[1].startsWith("http")) {
+                    lastPrewarmRealtime = SystemClock.elapsedRealtime()
+                    val rb = Request.Builder().url(spec[1]).get()
+                    var idx = 2
+                    while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+                    val resp = clientToUse.newCall(rb.build()).execute()
+                    val code = resp.code
+                    lastHttpResponseCode = code
+                    val body = resp.body?.string() ?: ""
+                    resp.close()
+                    lastPrewarmRealtime = SystemClock.elapsedRealtime()
+                    if (code == 401 || code == 403) {
+                        cachedEncPrefs = null
+                        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
+                    } else if (code in 200..299 && body.isNotEmpty()) {
+                        failedPollingCount = 0
+                        // 1. IMMEDIATELY run Lb11 0.0ms active dispatch acceptance BEFORE any DB/UI work!
+                        processPolledActiveDispatchesLb11(body)
+                        // 2. Offload heavy JSON sync & SQLite scan to background coroutine so next 450ms poll is NEVER delayed!
+                        val nowRt = SystemClock.elapsedRealtime()
+                        if ((nowRt - lastPollDbSyncRealtime) > 4000L) {
+                            lastPollDbSyncRealtime = nowRt
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    if (activeAcceptCallsCount.get() == 0) {
+                                        findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+                                        if (ctx != null) scanJahezDatabases(ctx)
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                        return
+                    }
+                }
+            } catch (_: Throwable) {}
         }
     }
 
@@ -3578,13 +3607,15 @@ object OrderInterceptor {
                 failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
             }
         }
+        val roundedRestKm = kotlin.math.round(distRest * 100.0) / 100.0
+        val roundedCustKm = kotlin.math.round(distCust * 100.0) / 100.0
         if (maxDistToRestaurant > 0.0) {
             if (distRest <= 0.0) {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     failedReasons.add("location unknown")
                 }
-            } else if (distRest > maxDistToRestaurant) {
-                val fmtD = String.format(Locale.US, "%.2f", distRest)
+            } else if (roundedRestKm > maxDistToRestaurant + 0.005) {
+                val fmtD = String.format(Locale.US, "%.2f", roundedRestKm)
                 failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
             }
         }
@@ -3593,8 +3624,8 @@ object OrderInterceptor {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
                 }
-            } else if (distCust > maxDistCustomer) {
-                val fmtC = String.format(Locale.US, "%.2f", distCust)
+            } else if (roundedCustKm > maxDistCustomer + 0.005) {
+                val fmtC = String.format(Locale.US, "%.2f", roundedCustKm)
                 failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
             }
         }
@@ -3689,6 +3720,8 @@ object OrderInterceptor {
             lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId (0.0ms)..."
             executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
             CoroutineScope(Dispatchers.IO).launch {
+                // Defer Binder IPC logging by 220ms so 0% of CPU/Binder/Disk is used while PUT packets are in flight!
+                delay(220L)
                 DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason) [0.0ms Instant Fire]")
                 DiagnosticLogger.logStep(
                     "SpeedLog",
@@ -3888,9 +3921,14 @@ object OrderInterceptor {
                 val winningStreamAtom = AtomicInteger(-1)
                 val winningProtoRef = java.util.concurrent.atomic.AtomicReference<String>("?")
 
+                val lastWarmAgoMs = if (lastPrewarmRealtime > 0L) (SystemClock.elapsedRealtime() - lastPrewarmRealtime).coerceAtLeast(0L) else -1L
+                val streamLogsQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+                val burstCount = parallelRequests.coerceIn(1, 3)
+
                 if (isAccept && orderIdInt > 0) {
-                    // Clean HTTP/2 Multiplexed Burst over Single Shared Pre-Warmed Socket (Matching Ljx$c.s + Ly0.a in SanedAssistant-98):
-                    val burstCount = parallelRequests.coerceIn(1, 3)
+                    activeAcceptCallsCount.incrementAndGet()
+                    try {
+                    // Dual-Socket Pre-Warmed HTTP/2 Burst (Stream #0 & #2 on Primary Warm Socket, Stream #1 on Secondary Warm Socket):
                     val doneLatch = java.util.concurrent.CountDownLatch(1)
                     val finishedWorkers = AtomicInteger(0)
 
@@ -3901,8 +3939,9 @@ object OrderInterceptor {
                             lastInterceptedUrl = primaryUrl
                             val rb = Request.Builder().url(primaryUrl).put(emptyBody)
                             for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
+                            val clientForStream = if (streamIdx == 1) secondaryWarmHttpClient else singleWarmHttpClient
                             val reqStartNs = System.nanoTime()
-                            val resp = singleWarmHttpClient.newCall(rb.build()).execute()
+                            val resp = clientForStream.newCall(rb.build()).execute()
                             val reqEndNs = System.nanoTime()
                             val reqRttMs = ((reqEndNs - reqStartNs) / 1_000_000L).coerceAtLeast(1L)
                             val arrivalNs = orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs
@@ -3914,13 +3953,10 @@ object OrderInterceptor {
                             val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
                             resp.close()
                             lastHttpResponseCode = code
-                            CoroutineScope(Dispatchers.IO).launch {
-                                val cleanSnippet = bodyStr.replace("\n", " ").replace("\r", " ").trim().take(120)
-                                DiagnosticLogger.logStep(
-                                    "SpeedLog",
-                                    "🌐 [3/4 STREAM #$streamIdx] #$orderIdNum -> HTTP $code proto=$protoStr rtt=${reqRttMs}ms totalFromFcm=${sinceFcmMs}ms body=${cleanSnippet.ifEmpty { "<empty>" }}"
-                                )
-                            }
+                            val cleanSnippet = bodyStr.replace("\n", " ").replace("\r", " ").trim().take(120)
+                            streamLogsQueue.offer(
+                                "🌐 [3/4 STREAM #$streamIdx] #$orderIdNum -> HTTP $code proto=$protoStr rtt=${reqRttMs}ms totalFromFcm=${sinceFcmMs}ms body=${cleanSnippet.ifEmpty { "<empty>" }}"
+                            )
 
                             if (code in 200..299) {
                                 cachedApiHost = "https://gateway.saned.io"
@@ -3973,12 +4009,6 @@ object OrderInterceptor {
                         }
                     }
 
-                    CoroutineScope(Dispatchers.IO).launch {
-                        DiagnosticLogger.logStep(
-                            "SpeedLog",
-                            "🚀 [2/4 PRE-FLIGHT] #$orderIdNum firing $burstCount PUT streams -> queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_HIT" else "DISK_READ"}(${tokenPrepUs}us,len=${token.length}) driverCipher=${if (cipherWasReady) "READY(${capturedDriverCipherB64.take(8)}..)" else "EMPTY⚠️"} connPool=$poolIdleBefore/$poolTotalBefore"
-                        )
-                    }
                     // Spawn Streams #1..(burstCount-1) at 0.0ms with ZERO sleep across pre-warmed threads & sockets
                     for (extraIdx in 1 until burstCount) {
                         val capturedIdx = extraIdx
@@ -3990,6 +4020,18 @@ object OrderInterceptor {
                     // Run Stream #0 directly on the current real-time thread at 0.0ms
                     executeSingleStream(0)
                     try { doneLatch.await(2600L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
+                    } finally {
+                        activeAcceptCallsCount.decrementAndGet()
+                    }
+                    // Flush Pre-Flight & Stream telemetry AFTER network burst completes so 0% of CPU/Binder was used during flight
+                    DiagnosticLogger.logStep(
+                        "SpeedLog",
+                        "🚀 [2/4 PRE-FLIGHT] #$orderIdNum firing $burstCount PUT streams -> queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_HIT" else "DISK_READ"}(${tokenPrepUs}us,len=${token.length}) driverCipher=${if (cipherWasReady) "READY(${capturedDriverCipherB64.take(8)}..)" else "EMPTY⚠️"} connPool=$poolIdleBefore/$poolTotalBefore warmAgo=${lastWarmAgoMs}ms polls=${pollingHits.get()}"
+                    )
+                    while (true) {
+                        val sLog = streamLogsQueue.poll() ?: break
+                        DiagnosticLogger.logStep("SpeedLog", sLog)
+                    }
                 } else {
                     // Reject or non-burst path
                     try {
