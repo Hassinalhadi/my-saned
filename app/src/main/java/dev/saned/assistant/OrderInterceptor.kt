@@ -258,8 +258,8 @@ object OrderInterceptor {
     fun prewarmGatewayConnection(force: Boolean = false) {
         if (activeAcceptCallsCount.get() > 0) return
         val now = SystemClock.elapsedRealtime()
-        // Keep HTTP/2 sockets warm every 15 seconds (never spam every 450ms so connPool is always 1/1 IDLE when FCM arrives!)
-        if (!force && (now - lastPrewarmRealtime) < 15_000L) return
+        // Keep HTTP/2 sockets warm every 45 seconds (prevents Cloudflare HTTP 429 Error 1015 rate-limiting while keeping H2 pool 1/1 IDLE!)
+        if (!force && (now - lastPrewarmRealtime) < 45_000L) return
         lastPrewarmRealtime = now
         val tok = cachedAuthToken
         val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
@@ -972,17 +972,72 @@ object OrderInterceptor {
     // Caches [pickupLat, pickupLng, destLat, destLng] per orderId / referenceId (matching Luf1 h,i,j,k)
     private val coordsCache = ConcurrentHashMap<String, DoubleArray>()
 
+    private val isPaymentDiskLoaded = AtomicBoolean(false)
+
+    private fun loadPersistedPaymentCacheIfNeeded() {
+        if (!isPaymentDiskLoaded.compareAndSet(false, true)) return
+        try {
+            val f = File("/data/local/tmp/saned_payment_cache.json")
+            if (f.exists()) {
+                val root = JSONObject(f.readText())
+                val fpObj = root.optJSONObject("food")
+                if (fpObj != null) {
+                    val it = fpObj.keys()
+                    while (it.hasNext()) {
+                        val k = it.next()
+                        val v = fpObj.optDouble(k, 0.0)
+                        if (v > 0.0) foodPriceCache[k] = v
+                    }
+                }
+                val pmObj = root.optJSONObject("method")
+                if (pmObj != null) {
+                    val it = pmObj.keys()
+                    while (it.hasNext()) {
+                        val k = it.next()
+                        val v = pmObj.optString(k, "")
+                        if (v.isNotEmpty()) paymentMethodCache[k] = v
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun savePersistedPaymentCache() {
+        try {
+            val root = JSONObject()
+            val fpObj = JSONObject()
+            for ((k, v) in foodPriceCache) if (v > 0.0) fpObj.put(k, v)
+            val pmObj = JSONObject()
+            for ((k, v) in paymentMethodCache) if (v.isNotEmpty()) pmObj.put(k, v)
+            root.put("food", fpObj)
+            root.put("method", pmObj)
+            val f = File("/data/local/tmp/saned_payment_cache.json")
+            f.writeText(root.toString())
+            f.setReadable(true, false)
+            f.setWritable(true, false)
+        } catch (_: Throwable) {}
+    }
+
     fun cacheOrderPayment(idOrRef: String, foodPrice: Double, cashAmt: Double = 0.0, payMethod: String = "") {
+        loadPersistedPaymentCacheIfNeeded()
         val key = idOrRef.replace("#", "").trim()
         if (key.isEmpty() || key == "0") return
+        var changed = false
         val effFood = if (!foodPrice.isNaN() && foodPrice > 0.0) foodPrice else if (!cashAmt.isNaN() && cashAmt > 0.0) cashAmt else 0.0
         if (effFood > 0.0) {
             val prev = foodPriceCache[key] ?: 0.0
-            if (effFood >= prev) foodPriceCache[key] = effFood
+            if (effFood > prev) {
+                foodPriceCache[key] = effFood
+                changed = true
+            }
         }
         if (payMethod.isNotEmpty() && payMethod != "null") {
-            paymentMethodCache[key] = payMethod
+            if (paymentMethodCache[key] != payMethod) {
+                paymentMethodCache[key] = payMethod
+                changed = true
+            }
         }
+        if (changed) savePersistedPaymentCache()
     }
     private val loggedNavOrderKeys = ConcurrentHashMap.newKeySet<String>()
     private val loggedLocationSchema = AtomicBoolean(false)
@@ -2677,7 +2732,7 @@ object OrderInterceptor {
                 triggerPendingMaxLimitOrdersRetry("Order #$idStr status -> $rawStatus")
             }
         }
-        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
+        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld && !fetchedDetailIds.contains(idStr)) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
     }
@@ -2699,6 +2754,7 @@ object OrderInterceptor {
     }
 
     fun scanJahezDatabases(context: Context) {
+        loadPersistedPaymentCacheIfNeeded()
         try {
             val exactDbName = Native.safeF()
             val exactSql = Native.safeG()
