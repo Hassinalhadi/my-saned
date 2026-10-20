@@ -211,6 +211,11 @@ object OrderInterceptor {
         createUnsafeOkHttpClient()
     }
 
+    // Separate client for background polling/details so the 3 Accept sockets remain 100% idle (connPool=1/1) at all times!
+    private val pollingHttpClient: OkHttpClient by lazy {
+        createUnsafeOkHttpClient()
+    }
+
     private val httpClientPool: Array<OkHttpClient> by lazy {
         arrayOf(singleWarmHttpClient, secondaryWarmHttpClient, tertiaryWarmHttpClient)
     }
@@ -253,7 +258,8 @@ object OrderInterceptor {
     fun prewarmGatewayConnection(force: Boolean = false) {
         if (activeAcceptCallsCount.get() > 0) return
         val now = SystemClock.elapsedRealtime()
-        if (!force && (now - lastPrewarmRealtime) < 1800L) return
+        // Keep HTTP/2 sockets warm every 15 seconds (never spam every 450ms so connPool is always 1/1 IDLE when FCM arrives!)
+        if (!force && (now - lastPrewarmRealtime) < 15_000L) return
         lastPrewarmRealtime = now
         val tok = cachedAuthToken
         val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
@@ -277,12 +283,14 @@ object OrderInterceptor {
                 val proto = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
                 val code = resp.code
                 resp.close()
-                // Also prewarm secondary & tertiary HTTP/2 sockets asynchronously so Streams #0, #1, #2 each have an independent hot TLS socket
-                fastAcceptExecutor.execute {
+                // Prewarm secondary & tertiary HTTP/2 sockets with a 150ms stagger so they never collide on the radio
+                CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        delay(150L)
                         if (activeAcceptCallsCount.get() == 0) {
                             secondaryWarmHttpClient.newCall(req).execute().close()
                         }
+                        delay(150L)
                         if (activeAcceptCallsCount.get() == 0) {
                             tertiaryWarmHttpClient.newCall(req).execute().close()
                         }
@@ -292,9 +300,10 @@ object OrderInterceptor {
                     val idle = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
                     val total = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
                     val secIdle = try { secondaryWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
+                    val terIdle = try { tertiaryWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
                     DiagnosticLogger.logStep(
                         "SpeedLog",
-                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total(sec=$secIdle) cipher=${capturedDriverCipherB64.isNotEmpty()}"
+                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total(sec=$secIdle,ter=$terIdle) cipher=${capturedDriverCipherB64.isNotEmpty()}"
                     )
                 }
             } catch (_: Throwable) {}
@@ -341,10 +350,11 @@ object OrderInterceptor {
     } catch (_: Throwable) { 0 }
 
     val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
+    val apiConfirmedTakenIds = ConcurrentHashMap.newKeySet<Int>()
 
     private fun triggerUiAutoAcceptBackupOnActivity(activity: Activity, orderIdInt: Int, tag: String) {
         if (activity.isFinishing || activity.isDestroyed) return
-        if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
+        if (orderIdInt != 0 && (apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt))) {
             val entry = handledOrdersMap[orderIdInt]
             closeDispatchActivitySafely(activity, entry?.wasInBackground ?: false)
             return
@@ -403,8 +413,8 @@ object OrderInterceptor {
             return
         }
         // Decision is ACCEPT:
-        // 1. If DirectApi ALREADY confirmed HTTP 200 acceptance, close IncomingDispatchActivity immediately.
-        if (apiConfirmedAcceptIds.contains(orderIdInt)) {
+        // 1. If DirectApi ALREADY confirmed HTTP 200 acceptance OR confirmed order was already taken (HTTP 400), close IncomingDispatchActivity immediately.
+        if (apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt)) {
             closeDispatchActivitySafely(activity, entry.wasInBackground)
             return
         }
@@ -3268,12 +3278,11 @@ object OrderInterceptor {
                         }
                     }
                 } catch (_: Throwable) {}
-                // High-frequency 450ms sub-second polling in Instant Mode (0.0s-0.5s):
-                // Catches new orders on /api/v1/dispatch/active BEFORE FCM Push arrives AND prevents 4G/5G cDRX/RRC sleep!
+                // Matches Lb11$b in SanedAssistant-98-7bac1ec.apk (minimum 2500ms interval):
+                // Prevents Cloudflare rate-limiting (rtt=3216ms) and keeps cellular radio & Accept sockets 100% free (connPool=1/1) when FCM Push arrives!
                 val delayMs = when {
-                    !isActivePolling -> 1800L
-                    pollIntervalSec <= 0.5f -> 450L
-                    else -> (pollIntervalSec * 1000f).toLong().coerceIn(450L, 5000L)
+                    !isActivePolling -> 15_000L
+                    else -> (pollIntervalSec * 1000f).toLong().coerceIn(2500L, 60_000L)
                 }
                 delay(delayMs)
             }
@@ -3424,25 +3433,24 @@ object OrderInterceptor {
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
         if (token.isEmpty()) return
-        val hitIdx = pollingHits.incrementAndGet()
-        // Alternate across both warm HTTP/2 clients so both Primary and Secondary sockets stay 100% hot!
-        val clientToUse = if (hitIdx % 3 == 0) secondaryWarmHttpClient else singleWarmHttpClient
+        pollingHits.incrementAndGet()
+        // Always use dedicated pollingHttpClient for background polling so singleWarmHttpClient, secondaryWarmHttpClient,
+        // and tertiaryWarmHttpClient stay 100% IDLE (connPool=1/1) for 0.0ms PUT acceptance!
+        prewarmGatewayConnection(force = false)
 
         if (Native.isLoaded) {
             try {
                 val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
                 val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
                 if (spec.size >= 2 && spec[1].startsWith("http")) {
-                    lastPrewarmRealtime = SystemClock.elapsedRealtime()
                     val rb = Request.Builder().url(spec[1]).get()
                     var idx = 2
                     while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
-                    val resp = clientToUse.newCall(rb.build()).execute()
+                    val resp = pollingHttpClient.newCall(rb.build()).execute()
                     val code = resp.code
                     lastHttpResponseCode = code
                     val body = resp.body?.string() ?: ""
                     resp.close()
-                    lastPrewarmRealtime = SystemClock.elapsedRealtime()
                     if (code == 401 || code == 403) {
                         cachedEncPrefs = null
                         if (ctx != null) readExactJahezEncryptedPrefs(ctx)
@@ -4540,15 +4548,13 @@ object OrderInterceptor {
                             decisionReason = takenReason,
                             notifyUser = true
                         )
-                        // Do NOT add to apiConfirmedAcceptIds or close IncomingDispatchActivity on HTTP 400 so UI backup can still attempt acceptance if screen is open!
+                        if (orderIdInt != 0) {
+                            apiConfirmedTakenIds.add(orderIdInt)
+                        }
                         currentActivity?.let { act ->
-                            if (!act.isFinishing && !act.isDestroyed) {
-                                act.runOnUiThread {
-                                    try {
-                                        val decor = act.window?.decorView
-                                        if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
-                                    } catch (_: Throwable) {}
-                                }
+                            if (act.javaClass.name == Native.safeE()) {
+                                val entry = handledOrdersMap[orderIdInt]
+                                closeDispatchActivitySafely(act, entry?.wasInBackground ?: false)
                             }
                         }
                     } else {
