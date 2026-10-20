@@ -116,7 +116,7 @@ object Native {
     fun safeR(path: String): Boolean = true
     fun safeS(versionCode: Long): Int = when (versionCode) {
         40093L -> 0
-        40099L -> 1
+        40099L, 4099L, in 40100L..40199L -> 1
         40089L -> 2
         else -> -1
     }

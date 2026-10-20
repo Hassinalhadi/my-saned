@@ -3328,8 +3328,14 @@ object OrderInterceptor {
                     continue
                 }
 
-                val st = item.optString(fcmKeys.getOrNull(6) ?: "dispatchType", item.optString("status", "")).trim().uppercase(Locale.US)
-                if (st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT")) {
+                val rawStatusField = item.optString("status", item.optString("dispatchStatus", "")).trim().uppercase(Locale.US)
+                val st = item.optString(fcmKeys.getOrNull(6) ?: "dispatchType", rawStatusField).trim().uppercase(Locale.US)
+                if (st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT") ||
+                    rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PROGRESS") || rawStatusField.contains("STARTED") || rawStatusField.contains("WAY") || rawStatusField.contains("VENDOR")) {
+                    if (rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PICKED") || rawStatusField.contains("COLLECT") || rawStatusField.contains("PROGRESS")) {
+                        apiConfirmedAcceptIds.add(orderIdInt)
+                        activeDbOrderIds.add(orderIdInt.toString())
+                    }
                     continue
                 }
 
