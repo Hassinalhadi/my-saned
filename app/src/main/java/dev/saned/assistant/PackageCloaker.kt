@@ -223,6 +223,12 @@ object PackageCloaker {
                   if (act != null) {
                       val actClsName = act.javaClass.name
                       DiagnosticLogger.logStep("Activity.onResume", "Resumed: $actClsName")
+                      try {
+                          OrderInterceptor.onActivityResumed(act)
+                          if (OrderInterceptor.cachedAuthToken.isEmpty()) {
+                              OrderInterceptor.scanAllSharedPreferencesForTokens(act.applicationContext)
+                          }
+                      } catch (_: Throwable) {}
                       if (blockedActivities.contains(actClsName) && !act.isFinishing) {
                           try {
                               DiagnosticLogger.logWarn("BlockedActivity", "Intercepted blocked activity $actClsName -> redirecting to $mainActName")
