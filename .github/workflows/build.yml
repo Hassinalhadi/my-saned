@@ -33,30 +33,11 @@ jobs:
           gradle-version: '8.5'
           cache-disabled: true
 
-      - name: Install Android Build & Decompilation Tools (JADX + Apktool)
+      - name: Install Android Signing Tools (Quiet & Fast)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zipalign apksigner apktool zip unzip wget curl python3
-
-          # Install JADX 1.5.0 from GitHub Releases (fault-tolerant)
-          if curl -fsSL https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip -o /tmp/jadx.zip; then
-            sudo mkdir -p /opt/jadx
-            sudo unzip -q -o /tmp/jadx.zip -d /opt/jadx
-            sudo chmod +x /opt/jadx/bin/jadx || true
-          fi
-
-      - name: Decompile SanedAssistant-98-7bac1ec.apk into Full Open-Source Export
-        run: |
+          sudo apt-get update -qq > /dev/null
+          sudo apt-get install -y -qq zipalign apksigner zip unzip python3 > /dev/null
           mkdir -p SanedAssistant-98-OpenSource
-          if [ -f "SanedAssistant-98-7bac1ec.apk" ]; then
-            if [ -x "/opt/jadx/bin/jadx" ]; then
-              /opt/jadx/bin/jadx --export-gradle --deobf --show-bad-code \
-                -d SanedAssistant-98-OpenSource/jadx-gradle-project \
-                SanedAssistant-98-7bac1ec.apk || true
-            fi
-            apktool d -f SanedAssistant-98-7bac1ec.apk \
-              -o SanedAssistant-98-OpenSource/apktool-exact || unzip -q -o SanedAssistant-98-7bac1ec.apk -d SanedAssistant-98-OpenSource/apk-unpacked
-          fi
 
       - name: Sync 100% SanedAssistant-98 Parity + Live Crash & Hook Diagnostic Log Window
         run: |
