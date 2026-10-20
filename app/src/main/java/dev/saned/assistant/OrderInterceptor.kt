@@ -207,8 +207,12 @@ object OrderInterceptor {
         createUnsafeOkHttpClient()
     }
 
+    private val tertiaryWarmHttpClient: OkHttpClient by lazy {
+        createUnsafeOkHttpClient()
+    }
+
     private val httpClientPool: Array<OkHttpClient> by lazy {
-        arrayOf(singleWarmHttpClient, secondaryWarmHttpClient, singleWarmHttpClient)
+        arrayOf(singleWarmHttpClient, secondaryWarmHttpClient, tertiaryWarmHttpClient)
     }
 
     private val httpClient: OkHttpClient
@@ -273,11 +277,14 @@ object OrderInterceptor {
                 val proto = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
                 val code = resp.code
                 resp.close()
-                // Also prewarm secondary HTTP/2 socket asynchronously so Stream #1 has its own independent hot TLS socket
+                // Also prewarm secondary & tertiary HTTP/2 sockets asynchronously so Streams #0, #1, #2 each have an independent hot TLS socket
                 fastAcceptExecutor.execute {
                     try {
                         if (activeAcceptCallsCount.get() == 0) {
                             secondaryWarmHttpClient.newCall(req).execute().close()
+                        }
+                        if (activeAcceptCallsCount.get() == 0) {
+                            tertiaryWarmHttpClient.newCall(req).execute().close()
                         }
                     } catch (_: Throwable) {}
                 }
@@ -3339,25 +3346,32 @@ object OrderInterceptor {
                     continue
                 }
 
-                var pLat = item.optDouble(fcmKeys.getOrNull(1) ?: "dispatchPickupLat", Double.NaN)
-                var pLng = item.optDouble(fcmKeys.getOrNull(2) ?: "dispatchPickupLng", Double.NaN)
-                var dLat = item.optDouble(fcmKeys.getOrNull(3) ?: "dispatchDestLat", Double.NaN)
-                var dLng = item.optDouble(fcmKeys.getOrNull(4) ?: "dispatchDestLng", Double.NaN)
+                val locObj = item.optJSONObject("location")
+                var pLat = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(1) ?: "dispatchPickupLat", "pickupLatitude", "pickupLat", "pickup_lat")
+                var pLng = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(2) ?: "dispatchPickupLng", "pickupLongitude", "pickupLng", "pickupLong", "pickup_lng")
+                var dLat = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(3) ?: "dispatchDestLat", "destinationLatitude", "destLat", "dropoffLat", "destination_lat")
+                var dLng = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(4) ?: "dispatchDestLng", "destinationLongitude", "destLng", "destLong", "dropoffLng", "destination_lng")
 
-                val pickupObj = item.optJSONObject(kPickup) ?: item.optJSONObject("location")?.optJSONObject(kPickup)
+                val pickupObj = item.optJSONObject(kPickup) ?: locObj?.optJSONObject(kPickup)
                 if (pickupObj != null) {
+                    if (pLat == 0.0) pLat = extractFirstDouble(pickupObj, "latitude", "lat")
+                    if (pLng == 0.0) pLng = extractFirstDouble(pickupObj, "longitude", "lng", "lon")
                     val cArr = pickupObj.optJSONArray(kCoords)
                     if (cArr != null && cArr.length() >= 2) {
-                        pLng = cArr.optDouble(0, pLng)
-                        pLat = cArr.optDouble(1, pLat)
+                        val c0 = cArr.optDouble(0, 0.0)
+                        val c1 = cArr.optDouble(1, 0.0)
+                        if (c1 in 15.0..35.0) { pLng = c0; pLat = c1 } else if (c0 in 15.0..35.0) { pLat = c0; pLng = c1 }
                     }
                 }
-                val destObj = item.optJSONObject(kDest) ?: item.optJSONObject("location")?.optJSONObject(kDest)
+                val destObj = item.optJSONObject(kDest) ?: locObj?.optJSONObject(kDest) ?: item.optJSONObject("dropoff")
                 if (destObj != null) {
+                    if (dLat == 0.0) dLat = extractFirstDouble(destObj, "latitude", "lat")
+                    if (dLng == 0.0) dLng = extractFirstDouble(destObj, "longitude", "lng", "lon")
                     val cArr = destObj.optJSONArray(kCoords)
                     if (cArr != null && cArr.length() >= 2) {
-                        dLng = cArr.optDouble(0, dLng)
-                        dLat = cArr.optDouble(1, dLat)
+                        val c0 = cArr.optDouble(0, 0.0)
+                        val c1 = cArr.optDouble(1, 0.0)
+                        if (c1 in 15.0..35.0) { dLng = c0; dLat = c1 } else if (c0 in 15.0..35.0) { dLat = c0; dLng = c1 }
                     }
                 }
                 val cleanPLat = if (pLat.isNaN() || pLat.isInfinite()) 0.0 else pLat
@@ -4241,7 +4255,11 @@ object OrderInterceptor {
                             lastInterceptedUrl = primaryUrl
                             val rb = Request.Builder().url(primaryUrl).put(emptyBody)
                             for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                            val clientForStream = if (streamIdx == 1) secondaryWarmHttpClient else singleWarmHttpClient
+                            val clientForStream = when (streamIdx) {
+                                1 -> secondaryWarmHttpClient
+                                2 -> tertiaryWarmHttpClient
+                                else -> singleWarmHttpClient
+                            }
                             val reqStartNs = System.nanoTime()
                             val resp = clientForStream.newCall(rb.build()).execute()
                             val reqEndNs = System.nanoTime()
