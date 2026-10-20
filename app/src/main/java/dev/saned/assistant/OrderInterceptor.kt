@@ -3403,8 +3403,9 @@ object OrderInterceptor {
                 val rawStatusField = item.optString("status", item.optString("dispatchStatus", "")).trim().uppercase(Locale.US)
                 val st = item.optString(fcmKeys.getOrNull(6) ?: "dispatchType", rawStatusField).trim().uppercase(Locale.US)
                 if (st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT") ||
+                    st.equals("DISPATCHED", ignoreCase = true) || rawStatusField.equals("DISPATCHED", ignoreCase = true) ||
                     rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PROGRESS") || rawStatusField.contains("STARTED") || rawStatusField.contains("WAY") || rawStatusField.contains("VENDOR")) {
-                    if (rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PICKED") || rawStatusField.contains("COLLECT") || rawStatusField.contains("PROGRESS")) {
+                    if (st.equals("DISPATCHED", ignoreCase = true) || rawStatusField.equals("DISPATCHED", ignoreCase = true) || rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PICKED") || rawStatusField.contains("COLLECT") || rawStatusField.contains("PROGRESS")) {
                         apiConfirmedAcceptIds.add(orderIdInt)
                         activeDbOrderIds.add(orderIdInt.toString())
                     }
@@ -3826,10 +3827,10 @@ object OrderInterceptor {
                         else -> 0.0
                     }
                 }
-                val isPollOrPushOffer = (channelSource.contains("POLL", ignoreCase = true) || channelSource.contains("PUSH", ignoreCase = true)) &&
+                val isPollOrPushOffer = channelSource.contains("PUSH", ignoreCase = true) &&
                     !knownDbOrderIds.contains(rawOrderIdClean) &&
                     !apiConfirmedAcceptIds.contains(rawOrderIdClean.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0) &&
-                    (rawStatusFromJson.isEmpty() || rawStatusFromJson.equals("DISPATCHED", ignoreCase = true) || rawStatusFromJson.contains("NEW", ignoreCase = true) || rawStatusFromJson.contains("AUTO", ignoreCase = true))
+                    (rawStatusFromJson.isEmpty() || rawStatusFromJson.contains("NEW", ignoreCase = true) || rawStatusFromJson.contains("OFFER", ignoreCase = true))
                 if (!isPollOrPushOffer && (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean) || channelSource.contains("Active Dispatches", ignoreCase = true))) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
                     val hasCoords = (dLat != 0.0 && dLng != 0.0)
@@ -4380,10 +4381,11 @@ object OrderInterceptor {
 
                             lastErrCodeAtom.compareAndSet(0, code)
                             if (bodyStr.isNotEmpty()) lastErrBodyRef.compareAndSet("", bodyStr)
-                            // IMPORTANT: Do NOT call doneLatch.countDown() on HTTP 400!
-                            // When firing 3 parallel PUT streams, our winning stream (HTTP 200) takes ~15-25ms longer on the server
-                            // to commit the order than our other 2 streams which immediately get HTTP 400 ("Order is already accepted")!
-                            // Waiting for all 3 streams (or the first HTTP 200) ensures we never miss our own winning stream's HTTP 200!
+                            if (streamIdx == 0 && code == 400 && bodyStr.contains("already accepted", ignoreCase = true)) {
+                                // Since Stream #0 fired alone at 0.0ms (before Stream #1 at +65ms), if Stream #0 itself got "already accepted",
+                                // no earlier stream from us is in flight — release latch immediately!
+                                doneLatch.countDown()
+                            }
                         } catch (t: Throwable) {
                             lastErrCodeAtom.compareAndSet(0, -1)
                             if (lastErrBodyRef.get().isEmpty()) lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
@@ -4394,15 +4396,24 @@ object OrderInterceptor {
                         }
                     }
 
-                    // Spawn Streams #1..(burstCount-1) at 0.0ms with ZERO sleep across pre-warmed threads & sockets
+                    // Stagger extra streams (#1 at +65ms, #2 at +130ms) so Stream #0 fires at 0.0ms ALONE
+                    // with 100% of radio uplink bandwidth and ZERO backend database transaction self-collision!
                     for (extraIdx in 1 until burstCount) {
                         val capturedIdx = extraIdx
+                        val staggerMs = capturedIdx * 65L
                         fastAcceptExecutor.execute {
                             try { Process.setThreadPriority(-19) } catch (_: Throwable) {}
+                            try { Thread.sleep(staggerMs) } catch (_: Throwable) {}
+                            if (winCodeAtom.get() in 200..299 || apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt)) {
+                                if (finishedWorkers.incrementAndGet() >= burstCount) {
+                                    doneLatch.countDown()
+                                }
+                                return@execute
+                            }
                             executeSingleStream(capturedIdx)
                         }
                     }
-                    // Run Stream #0 directly on the current real-time thread at 0.0ms
+                    // Run Stream #0 directly on the current real-time thread at 0.0ms ALONE
                     executeSingleStream(0)
                     try { doneLatch.await(2600L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
                     } finally {
