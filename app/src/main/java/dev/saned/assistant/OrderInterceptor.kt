@@ -3400,14 +3400,22 @@ object OrderInterceptor {
                     continue
                 }
 
-                val rawStatusField = item.optString("status", item.optString("dispatchStatus", "")).trim().uppercase(Locale.US)
+                val infoObj = item.optJSONObject("dispatchInfo") ?: item.optJSONObject("dispatch_info")
+                val rawStatusField = extractFirstString(item, "status", "dispatchStatus", "state", "orderStatus")
+                    .ifEmpty { if (infoObj != null) extractFirstString(infoObj, "status", "dispatchStatus", "state") else "" }
+                    .trim().uppercase(Locale.US)
                 val st = item.optString(fcmKeys.getOrNull(6) ?: "dispatchType", rawStatusField).trim().uppercase(Locale.US)
-                if (st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT") ||
-                    st.equals("DISPATCHED", ignoreCase = true) || rawStatusField.equals("DISPATCHED", ignoreCase = true) ||
-                    rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PROGRESS") || rawStatusField.contains("STARTED") || rawStatusField.contains("WAY") || rawStatusField.contains("VENDOR")) {
-                    if (st.equals("DISPATCHED", ignoreCase = true) || rawStatusField.equals("DISPATCHED", ignoreCase = true) || rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PICKED") || rawStatusField.contains("COLLECT") || rawStatusField.contains("PROGRESS")) {
+                val isAlreadyOurActiveOrder = st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT") ||
+                    st.contains("DISPATCHED") || rawStatusField.contains("DISPATCHED") ||
+                    rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PROGRESS") ||
+                    rawStatusField.contains("STARTED") || rawStatusField.contains("WAY") || rawStatusField.contains("VENDOR") ||
+                    rawStatusField.contains("PICK") || (item.has("vendor") && item.has("client") && !item.has("dispatchPickupLat"))
+                if (isAlreadyOurActiveOrder) {
+                    if (!st.contains("DELIVER") && !st.contains("COMPLET") && !st.contains("CANCEL") && !st.contains("REJECT") &&
+                        !rawStatusField.contains("DELIVER") && !rawStatusField.contains("COMPLET") && !rawStatusField.contains("CANCEL") && !rawStatusField.contains("REJECT")) {
                         apiConfirmedAcceptIds.add(orderIdInt)
                         activeDbOrderIds.add(orderIdInt.toString())
+                        knownDbOrderIds.add(orderIdInt.toString())
                     }
                     continue
                 }
@@ -3459,6 +3467,11 @@ object OrderInterceptor {
                 } else 0.0
                 val restName = extractFirstString(item, "subscriberName", "vendorName", "restaurantName", "storeName")
 
+                if (cleanPLat == 0.0 && cleanDLat == 0.0 && calcRestDist == 0.0 && calcCustDist == 0.0) {
+                    apiConfirmedAcceptIds.add(orderIdInt)
+                    knownDbOrderIds.add(orderIdInt.toString())
+                    continue
+                }
                 handleOrderViaApi(
                     orderId = "#$orderIdInt",
                     price = totalPrice,
