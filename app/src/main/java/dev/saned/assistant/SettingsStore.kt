@@ -231,6 +231,48 @@ object SettingsStore {
         getPrefs(context).edit().putString("google_maps_api_key", value.trim()).apply()
     }
 
+    // App UI Language ("ar" = Pure Arabic, "en" = Pure English)
+    fun getAppLanguage(context: Context): String = getPrefs(context).getString("app_ui_language", "ar") ?: "ar"
+    fun setAppLanguage(context: Context, lang: String) {
+        val clean = if (lang.lowercase().startsWith("en")) "en" else "ar"
+        getPrefs(context).edit().putString("app_ui_language", clean).apply()
+        broadcastSettings(context)
+    }
+
+    // 2-Point Route Simulator (Point 1 -> Point 2) & Variable Speeds
+    fun getPoint1Lat(context: Context): Double = getPrefs(context).getString("point1_lat", null)?.toDoubleOrNull() ?: getFakeLat(context)
+    fun getPoint1Lng(context: Context): Double = getPrefs(context).getString("point1_lng", null)?.toDoubleOrNull() ?: getFakeLng(context)
+    fun setPoint1(context: Context, lat: Double, lng: Double) {
+        getPrefs(context).edit()
+            .putString("point1_lat", lat.toString())
+            .putString("point1_lng", lng.toString())
+            .apply()
+    }
+
+    fun getPoint2Lat(context: Context): Double = getPrefs(context).getString("point2_lat", "0.0")?.toDoubleOrNull() ?: 0.0
+    fun getPoint2Lng(context: Context): Double = getPrefs(context).getString("point2_lng", "0.0")?.toDoubleOrNull() ?: 0.0
+    fun setPoint2(context: Context, lat: Double, lng: Double) {
+        getPrefs(context).edit()
+            .putString("point2_lat", lat.toString())
+            .putString("point2_lng", lng.toString())
+            .apply()
+    }
+
+    fun isVariableSpeedEnabled(context: Context): Boolean = getPrefs(context).getBoolean("route_sim_var_speed", true)
+    fun setVariableSpeedEnabled(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("route_sim_var_speed", value).apply()
+    }
+
+    fun getRouteSimMinSpeedKmh(context: Context): Float = getPrefs(context).getFloat("route_sim_min_speed_kmh", 30.0f)
+    fun setRouteSimMinSpeedKmh(context: Context, value: Float) {
+        getPrefs(context).edit().putFloat("route_sim_min_speed_kmh", value.coerceIn(1.0f, 220.0f)).apply()
+    }
+
+    fun getRouteSimMaxSpeedKmh(context: Context): Float = getPrefs(context).getFloat("route_sim_max_speed_kmh", 70.0f)
+    fun setRouteSimMaxSpeedKmh(context: Context, value: Float) {
+        getPrefs(context).edit().putFloat("route_sim_max_speed_kmh", value.coerceIn(1.0f, 220.0f)).apply()
+    }
+
     fun pushLiveLocationStep(
         context: Context,
         lat: Double,

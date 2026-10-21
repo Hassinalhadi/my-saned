@@ -11,10 +11,7 @@ import java.util.Locale
 
 /**
  * High-speed System Notification builder matching Luc1;.c from SanedAssistant:
- * Channel: sanedhook_accepted
- * Category: CATEGORY_EVENT
- * Multi-lingual: ar, en, ur, bn
- * PendingIntent: Launches Jahez Fleets directly with one tap
+ * Strictly respects the selected app language ("ar" = 100% Arabic, "en" = 100% English) without mixing languages.
  */
 object NotificationHelper {
 
@@ -23,16 +20,17 @@ object NotificationHelper {
     fun showOrderNotification(context: Context, order: OrderModel, isAccepted: Boolean = true) {
         try {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val isAr = SettingsStore.getAppLanguage(context) != "en"
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val existing = nm.getNotificationChannel(CHANNEL_ACCEPTED)
                 if (existing == null) {
                     val chan = NotificationChannel(
                         CHANNEL_ACCEPTED,
-                        "Saned Accepted Orders",
+                        if (isAr) "إشعارات الطلبات المقبولة" else "Accepted Orders Notifications",
                         NotificationManager.IMPORTANCE_HIGH
                     ).apply {
-                        description = "Instant notifications for captured and accepted Jahez orders"
+                        description = if (isAr) "إشعارات فورية للطلبات الملتقطة والمقبولة" else "Instant notifications for captured and accepted orders"
                         enableLights(true)
                         enableVibration(true)
                         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -41,28 +39,19 @@ object NotificationHelper {
                 }
             }
 
-            val lang = Locale.getDefault().language.lowercase()
-            val ref = if (order.reference.isNotEmpty()) order.reference else order.id.toString().ifEmpty { "Offer" }
+            val ref = if (order.reference.isNotEmpty()) order.reference else order.id.toString().ifEmpty { if (isAr) "طلب" else "Offer" }
 
             val title = if (isAccepted) {
-                when (lang) {
-                    "ar" -> "✅ تم قبول الطلب رقم #$ref"
-                    "ur" -> "✅ آرڈر #$ref قبول کر لیا گیا"
-                    "bn" -> "✅ অর্ডার #$ref গ্রহণ করা হয়েছে"
-                    else -> "✅ Order #$ref Accepted"
-                }
+                if (isAr) "✅ تم قبول الطلب رقم #$ref" else "✅ Order #$ref Accepted"
             } else {
-                when (lang) {
-                    "ar" -> "⚡ طلب جديد · #$ref"
-                    "ur" -> "⚡ نیا آرڈر · #$ref"
-                    "bn" -> "⚡ নতুন অর্ডার · #$ref"
-                    else -> "⚡ New Offer · #$ref"
-                }
+                if (isAr) "⚡ طلب جديد · #$ref" else "⚡ New Offer · #$ref"
             }
 
-            val restStr = if (order.restaurant.isNotEmpty()) order.restaurant else "Jahez Fleet"
-            val distStr = if (order.distanceKm > 0.0) String.format(Locale.US, "%.1f", order.distanceKm) + " km" else ""
-            val priceStr = String.format(Locale.US, "%.1f", order.price) + " " + order.currency
+            val restStr = if (order.restaurant.isNotEmpty()) order.restaurant else if (isAr) "مطعم" else "Restaurant"
+            val unitKm = if (isAr) "كم" else "km"
+            val currLabel = if (isAr && order.currency.equals("SAR", ignoreCase = true)) "ر.س" else order.currency
+            val distStr = if (order.distanceKm > 0.0) String.format(Locale.US, "%.1f %s", order.distanceKm, unitKm) else ""
+            val priceStr = String.format(Locale.US, "%.1f %s", order.price, currLabel)
 
             val summaryParts = mutableListOf<String>()
             summaryParts.add("#$ref")
@@ -72,11 +61,10 @@ object NotificationHelper {
 
             var bigText = summaryParts.joinToString(" · ")
             if (order.cashAmount > 0.0) {
-                val cashMsg = when (lang) {
-                    "ar" -> "\n💵 استلم نقداً: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-                    "ur" -> "\n💵 نقد وصول کریں: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-                    "bn" -> "\n💵 নগদ সংগ্রহ করুন: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
-                    else -> "\n💵 Collect Cash: " + String.format(Locale.US, "%.1f", order.cashAmount) + " " + order.currency
+                val cashMsg = if (isAr) {
+                    "\n💵 استلم نقداً: " + String.format(Locale.US, "%.1f %s", order.cashAmount, currLabel)
+                } else {
+                    "\n💵 Collect Cash: " + String.format(Locale.US, "%.1f %s", order.cashAmount, currLabel)
                 }
                 bigText += cashMsg
             }
@@ -113,13 +101,13 @@ object NotificationHelper {
                 .setContentText(summaryParts.joinToString(" · "))
                 .setStyle(Notification.BigTextStyle().bigText(bigText))
                 .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    setSmallIcon(android.graphics.drawable.Icon.createWithResource("dev.jing.sanedhook", R.drawable.ic_notif_original))
-                } else {
-                    @Suppress("DEPRECATION")
-                    setSmallIcon(R.drawable.ic_notif_original)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        setSmallIcon(android.graphics.drawable.Icon.createWithResource("dev.jing.sanedhook", R.drawable.ic_notif_original))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        setSmallIcon(R.drawable.ic_notif_original)
+                    }
                 }
-            }
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_EVENT)

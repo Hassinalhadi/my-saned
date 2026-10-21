@@ -34,6 +34,14 @@ import java.util.Random
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private var pendingRestoreTab: Int = -1
+    }
+
+    // Strict Single-Language State ("ar" = 100% pure Arabic, "en" = 100% pure English)
+    private var isAr: Boolean = true
+    private fun tr(ar: String, en: String): String = if (isAr) ar else en
+
     // Tabs
     private lateinit var tabOrdersView: ScrollView
     private lateinit var tabMapView: ScrollView
@@ -60,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var navSettingsIconBg: TextView
     private lateinit var navOrdersLabel: TextView
     private lateinit var navSettingsLabel: TextView
-    private var currentTab = 0 // 0 = Orders, 1 = Settings
+    private var currentTab = 0 // 0 = Orders, 1 = Settings, 2 = Logs, 3 = Map
 
     // Orders Tab Containers
     private lateinit var activeOrdersContainer: LinearLayout
@@ -91,7 +99,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chkAndroidId: CheckBox
     private lateinit var edtAndroidId: EditText
 
-    // Location & Route Simulator
+    // Location & 2-Point Route Simulator
     private lateinit var chkFakeLoc: CheckBox
     private lateinit var chkFixLoc: CheckBox
     private lateinit var edtLat: EditText
@@ -99,26 +107,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mapWebView: WebView
     private lateinit var tvRouteSimStatus: TextView
     private lateinit var tvRouteMetricsBadge: TextView
+    private lateinit var tvTwoPointSummary: TextView
     private lateinit var btnStartRouteSim: Button
     private lateinit var btnPauseRouteSim: Button
     private lateinit var btnStopRouteSim: Button
     private lateinit var btnModeTeleport: Button
-    private lateinit var btnModeRoute: Button
+    private lateinit var btnModePoint1: Button
+    private lateinit var btnModePoint2: Button
     private lateinit var edtMapSearch: EditText
 
-    // Route Simulator Engine State (runs at 500ms ticks along real street polyline)
+    // 2-Point Route Simulator Engine State (Point 1 -> Point 2 with Variable Speeds & Custom Speed)
     private val routeWaypoints = mutableListOf<Pair<Double, Double>>()
     private var routeCumulativeMeters = DoubleArray(0)
     private var routeTotalMeters: Double = 0.0
     private var routeTraveledMeters: Double = 0.0
     private var routeSimSpeedKmh: Float = 45.0f
+    private var isVariableSpeedMode: Boolean = true
+    private var routeSimMinSpeedKmh: Float = 30.0f
+    private var routeSimMaxSpeedKmh: Float = 75.0f
+    private var routeSimCurrentDynamicSpeedKmh: Float = 45.0f
+    private var routeTickCounter: Int = 0
     private var isRouteSimRunning: Boolean = false
     private var isRouteSimPaused: Boolean = false
     private var isRouteSimLooping: Boolean = false
     private var isRouteSimForward: Boolean = true
-    private var isMapRouteClickMode: Boolean = true // Default true so clicking sets route A -> B
-    private var routeDestLat: Double = 0.0
-    private var routeDestLng: Double = 0.0
+    private var mapTapMode: String = "point2" // "teleport", "point1", "point2"
+    private var point1Lat: Double = 24.803508
+    private var point1Lng: Double = 46.604578
+    private var point2Lat: Double = 24.812500
+    private var point2Lng: Double = 46.615200
 
     // Auto Accept & Filters
     private lateinit var chkAutoAccept: CheckBox
@@ -160,8 +177,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        isAr = SettingsStore.getAppLanguage(this) != "en"
+        window.decorView.layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+
+        routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)
+        isVariableSpeedMode = SettingsStore.isVariableSpeedEnabled(this)
+        routeSimMinSpeedKmh = SettingsStore.getRouteSimMinSpeedKmh(this)
+        routeSimMaxSpeedKmh = SettingsStore.getRouteSimMaxSpeedKmh(this)
+        routeSimCurrentDynamicSpeedKmh = routeSimSpeedKmh
+        point1Lat = SettingsStore.getPoint1Lat(this).takeIf { it != 0.0 } ?: SettingsStore.getFakeLat(this).takeIf { it != 0.0 } ?: 24.803508
+        point1Lng = SettingsStore.getPoint1Lng(this).takeIf { it != 0.0 } ?: SettingsStore.getFakeLng(this).takeIf { it != 0.0 } ?: 46.604578
+        point2Lat = SettingsStore.getPoint2Lat(this).takeIf { it != 0.0 } ?: 24.812500
+        point2Lng = SettingsStore.getPoint2Lng(this).takeIf { it != 0.0 } ?: 46.615200
+
         val rootContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
             setBackgroundColor(Color.parseColor("#F8F7FC"))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -169,7 +200,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // ================= TOP BAR (Matching Original 34.jpg) =================
+        // ================= TOP BAR =================
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -179,7 +210,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val appTitle = TextView(this).apply {
-            text = "Saned Assistant"
+            text = tr("مساعد ساند", "Saned Assistant")
             textSize = 21f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
@@ -187,12 +218,11 @@ class MainActivity : AppCompatActivity() {
         }
         topBar.addView(appTitle)
 
-        // Simulate Test Order quick button in top bar
         val btnTopLogs = TextView(this).apply {
-  text = "📋"
-  textSize = 18f
-  setPadding(20, 10, 20, 10)
-  setOnClickListener { switchTab(2) }
+            text = "📋"
+            textSize = 18f
+            setPadding(20, 10, 20, 10)
+            setOnClickListener { switchTab(2) }
         }
         topBar.addView(btnTopLogs)
 
@@ -204,7 +234,6 @@ class MainActivity : AppCompatActivity() {
         }
         topBar.addView(btnTopSim)
 
-        // Clear orders icon button (matching trash icon in 34.jpg)
         val btnClearTop = TextView(this).apply {
             text = "🗑️"
             textSize = 18f
@@ -213,12 +242,15 @@ class MainActivity : AppCompatActivity() {
                 SettingsStore.clearOrdersLog(this@MainActivity)
                 try { File("/data/local/tmp/saned_orders.json").delete() } catch (_: Throwable) {}
                 refreshOrdersLogUI()
-                Toast.makeText(this@MainActivity, "Orders list cleared", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم مسح قائمة الطلبات", "Orders list cleared"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         topBar.addView(btnClearTop)
 
-        // Refresh / Ping icon button
         val btnRefreshTop = TextView(this).apply {
             text = "🌐"
             textSize = 18f
@@ -226,14 +258,18 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 sendPing()
                 refreshOrdersLogUI()
-                Toast.makeText(this@MainActivity, "Orders & Connection Refreshed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم تحديث الطلبات وحالة الاتصال", "Orders & connection refreshed"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         topBar.addView(btnRefreshTop)
 
         rootContainer.addView(topBar)
 
-        // ================= CONTENT FRAME (Holds Orders Tab & Settings Tab) =================
+        // ================= CONTENT FRAME =================
         val contentFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -242,7 +278,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)
         tabOrdersView = buildOrdersTabView()
         tabMapView = buildMapTabView()
         tabSettingsView = buildSettingsTabView()
@@ -254,7 +289,7 @@ class MainActivity : AppCompatActivity() {
         contentFrame.addView(tabLogsView)
         rootContainer.addView(contentFrame)
 
-        // ================= BOTTOM NAVIGATION BAR (Orders | Settings matching 34.jpg) =================
+        // ================= BOTTOM NAVIGATION BAR =================
         val bottomNav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -276,7 +311,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(42, 10, 42, 10)
         }
         navOrdersLabel = TextView(this).apply {
-            text = "Orders"
+            text = tr("الطلبات", "Orders")
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
@@ -297,7 +332,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(42, 10, 42, 10)
         }
         navSettingsLabel = TextView(this).apply {
-            text = "Settings"
+            text = tr("الإعدادات", "Settings")
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
@@ -306,22 +341,22 @@ class MainActivity : AppCompatActivity() {
         navSettingsBtn.addView(navSettingsLabel)
 
         navLogsBtn = LinearLayout(this).apply {
-  orientation = LinearLayout.VERTICAL
-  gravity = Gravity.CENTER
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-  setOnClickListener { switchTab(2) }
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { switchTab(2) }
         }
         navLogsIconBg = TextView(this).apply {
-  text = "📋"
-  textSize = 16f
-  gravity = Gravity.CENTER
-  setPadding(42, 10, 42, 10)
+            text = "📋"
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(42, 10, 42, 10)
         }
         navLogsLabel = TextView(this).apply {
-  text = "Logs"
-  textSize = 12.5f
-  typeface = Typeface.DEFAULT_BOLD
-  setPadding(0, 6, 0, 0)
+            text = tr("السجلات", "Logs")
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 6, 0, 0)
         }
         navLogsBtn.addView(navLogsIconBg)
         navLogsBtn.addView(navLogsLabel)
@@ -339,7 +374,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(36, 10, 36, 10)
         }
         navMapLabel = TextView(this).apply {
-            text = "Map & Route"
+            text = tr("الخريطة والمسار", "Map & Route")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
@@ -355,9 +390,23 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(rootContainer)
 
-        // Default to Orders tab (matching 34.jpg)
-        switchTab(0)
+        val initialTab = if (pendingRestoreTab in 0..3) {
+            val t = pendingRestoreTab
+            pendingRestoreTab = -1
+            t
+        } else {
+            0
+        }
+        switchTab(initialTab)
         refreshOrdersLogUI()
+    }
+
+    private fun switchLanguage(newLang: String) {
+        val current = SettingsStore.getAppLanguage(this)
+        if (current == newLang) return
+        SettingsStore.setAppLanguage(this, newLang)
+        pendingRestoreTab = currentTab
+        recreate()
     }
 
     private fun switchTab(tabIndex: Int) {
@@ -384,194 +433,224 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // =========================================================================
+    // TAB 2: DIAGNOSTIC LOGS TAB (100% Pure Selected Language)
+    // =========================================================================
     private fun buildLogsTabView(): ScrollView {
         val scroll = ScrollView(this).apply {
-  setBackgroundColor(Color.parseColor("#F4F6F9"))
-  layoutParams = FrameLayout.LayoutParams(
-      FrameLayout.LayoutParams.MATCH_PARENT,
-      FrameLayout.LayoutParams.MATCH_PARENT
-  )
+            setBackgroundColor(Color.parseColor("#F4F6F9"))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         }
 
         val container = LinearLayout(this).apply {
-  orientation = LinearLayout.VERTICAL
-  setPadding(24, 24, 24, 60)
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 60)
         }
 
-        // Card 1: Live Crash & Hook Diagnostic Window
         val logCard = createStyledCard()
         val logLayout = LinearLayout(this).apply {
-  orientation = LinearLayout.VERTICAL
-  setPadding(24, 24, 24, 24)
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
         }
 
         val title = TextView(this).apply {
-  text = "📋 نافذة السجل التشخيصي وصيد الكراش (Live Crash & Hook Logs)"
-  textSize = 15.5f
-  typeface = Typeface.DEFAULT_BOLD
-  setTextColor(Color.parseColor("#0F172A"))
-  setPadding(0, 0, 0, 6)
+            text = tr("📋 نافذة السجل التشخيصي ورصد الأعطال", "📋 Live Diagnostic & Crash Logs")
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 6)
         }
         logLayout.addView(title)
 
         tvDiagLogSummary = TextView(this).apply {
-  text = "جاهز لالتقاط أي خطأ أو Stacktrace فور فتح تطبيق net.jahez.fleets..."
-  textSize = 12f
-  typeface = Typeface.DEFAULT_BOLD
-  setTextColor(Color.parseColor("#059669"))
-  setPadding(0, 0, 0, 12)
+            text = tr(
+                "جاهز لالتقاط جميع الأحداث والأخطاء فور فتح تطبيق ساند...",
+                "Ready to capture all events and errors as soon as the target app opens..."
+            )
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#059669"))
+            setPadding(0, 0, 0, 12)
         }
         logLayout.addView(tvDiagLogSummary)
 
-        // Filter & Action Buttons Row
         val btnRow1 = LinearLayout(this).apply {
-  orientation = LinearLayout.HORIZONTAL
-  setPadding(0, 0, 0, 10)
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 10)
         }
 
         val btnFilterToggle = Button(this).apply {
-  text = "🔎 الكل / الأخطاء فقط"
-  textSize = 11.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
-      setMargins(0, 0, 8, 0)
-  }
-  setBackgroundColor(Color.parseColor("#4F46E5"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      filterErrorsOnly = !filterErrorsOnly
-      text = if (filterErrorsOnly) "🚨 الأخطاء والكراش فقط" else "🔎 عرض كل السجلات"
-      refreshDiagLogsUI()
-  }
+            text = tr("🔎 الكل / الأخطاء فقط", "🔎 All / Errors Only")
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+            setBackgroundColor(Color.parseColor("#4F46E5"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                filterErrorsOnly = !filterErrorsOnly
+                text = if (filterErrorsOnly) {
+                    tr("🚨 الأخطاء والأعطال فقط", "🚨 Errors & Crashes Only")
+                } else {
+                    tr("🔎 عرض كل السجلات", "🔎 Show All Logs")
+                }
+                refreshDiagLogsUI()
+            }
         }
         btnRow1.addView(btnFilterToggle)
 
         val btnCopyLogs = Button(this).apply {
-  text = "📋 نسخ السجل"
-  textSize = 11.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-      setMargins(4, 0, 4, 0)
-  }
-  setBackgroundColor(Color.parseColor("#059669"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      val fullLogs = SettingsStore.getDiagLogs(this@MainActivity)
-      val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", fullLogs.ifEmpty { "No logs yet" }))
-      Toast.makeText(this@MainActivity, "✅ تم نسخ السجل التشخيصي بالكامل للحافظة", Toast.LENGTH_SHORT).show()
-  }
+            text = tr("📋 نسخ السجل", "📋 Copy Logs")
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(4, 0, 4, 0)
+            }
+            setBackgroundColor(Color.parseColor("#059669"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                val fullLogs = SettingsStore.getDiagLogs(this@MainActivity)
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(
+                    ClipData.newPlainText(
+                        tr("سجل التشخيص", "Diagnostic Logs"),
+                        fullLogs.ifEmpty { tr("لا توجد سجلات بعد", "No logs yet") }
+                    )
+                )
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("✅ تم نسخ السجل التشخيصي بالكامل إلى الحافظة", "✅ Diagnostic logs copied to clipboard"),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         btnRow1.addView(btnCopyLogs)
 
         val btnClearLogs = Button(this).apply {
-  text = "🗑️ مسح"
-  textSize = 11.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f).apply {
-      setMargins(8, 0, 0, 0)
-  }
-  setBackgroundColor(Color.parseColor("#DC2626"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      SettingsStore.clearDiagLogs(this@MainActivity)
-      refreshDiagLogsUI()
-      Toast.makeText(this@MainActivity, "تم مسح السجل", Toast.LENGTH_SHORT).show()
-  }
+            text = tr("🗑️ مسح", "🗑️ Clear")
+            textSize = 11.5f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f).apply {
+                setMargins(8, 0, 0, 0)
+            }
+            setBackgroundColor(Color.parseColor("#DC2626"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                SettingsStore.clearDiagLogs(this@MainActivity)
+                refreshDiagLogsUI()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم مسح السجل", "Logs cleared"),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         btnRow1.addView(btnClearLogs)
         logLayout.addView(btnRow1)
 
-        // Dark Terminal Console Box
         val hScroll = HorizontalScrollView(this).apply {
-  background = roundedBg("#0F172A", 14f, "#334155", 2)
-  setPadding(20, 20, 20, 20)
-  layoutParams = LinearLayout.LayoutParams(
-      LinearLayout.LayoutParams.MATCH_PARENT,
-      LinearLayout.LayoutParams.WRAP_CONTENT
-  )
+            background = roundedBg("#0F172A", 14f, "#334155", 2)
+            setPadding(20, 20, 20, 20)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
         }
 
         tvDiagLogConsole = TextView(this).apply {
-  text = "لا توجد سجلات بعد.\nافتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
-  textSize = 11.5f
-  typeface = Typeface.MONOSPACE
-  setTextColor(Color.parseColor("#E2E8F0"))
-  setTextIsSelectable(true)
-  setLineSpacing(6f, 1.0f)
+            text = tr(
+                "لا توجد سجلات بعد.\nافتح تطبيق ساند الآن وسيظهر هنا كل حدث يتم تفعيله مع تفاصيل الطلبات والأخطاء بالكامل.",
+                "No logs recorded yet.\nOpen the target app now and every active hook, version detail, and stacktrace will appear here."
+            )
+            textSize = 11.5f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setTextIsSelectable(true)
+            setLineSpacing(6f, 1.0f)
         }
         hScroll.addView(tvDiagLogConsole)
         logLayout.addView(hScroll)
         logCard.addView(logLayout)
         container.addView(logCard)
 
-        // Card 2: Per-Hook Group Isolation Toggles
+        // Card 2: Per-Hook Group Isolation Toggles (Pure Arabic / Pure English)
         val isoCard = createStyledCard()
         val isoLayout = LinearLayout(this).apply {
-  orientation = LinearLayout.VERTICAL
-  setPadding(24, 24, 24, 24)
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
         }
 
         val isoTitle = TextView(this).apply {
-  text = "🛠️ عزل وتجربة الـ Hooks فردياً (Hook Isolation)"
-  textSize = 15.5f
-  typeface = Typeface.DEFAULT_BOLD
-  setTextColor(Color.parseColor("#0F172A"))
-  setPadding(0, 0, 0, 4)
+            text = tr("🛠️ التحكم في وحدات النظام فردياً", "🛠️ Individual Module Isolation")
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 4)
         }
         isoLayout.addView(isoTitle)
 
         val isoSub = TextView(this).apply {
-  text = "يمكنك إيقاف أو تشغيل أي مجموعة Hooks على حدة ثم إغلاق تطبيق سند وفتحه لمعرفة المسبب لأي سلوك بدقة:"
-  textSize = 12f
-  setTextColor(Color.parseColor("#64748B"))
-  setPadding(0, 0, 0, 12)
+            text = tr(
+                "يمكنك إيقاف أو تشغيل أي وحدة نظام على حدة ثم إعادة فتح التطبيق لتجربة كل ميزة بشكل مستقل:",
+                "You can enable or disable any module individually and restart the target app to test each feature independently:"
+            )
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 12)
         }
         isoLayout.addView(isoSub)
 
         chkHookEarlyCloaker = CheckBox(this).apply {
-  text = "1. حماية المكتبات المبكرة (Early Native Cloaker - Lvh1)"
-  isChecked = SettingsStore.isHookEarlyCloaker(this@MainActivity)
+            text = tr("1. حماية المكتبات الأصلية المبكرة", "1. Early Native Library Cloaker")
+            isChecked = SettingsStore.isHookEarlyCloaker(this@MainActivity)
         }
         isoLayout.addView(chkHookEarlyCloaker)
 
         chkHookSecCloaker = CheckBox(this).apply {
-  text = "2. إخفاء الروت والحماية (RootBeer & ShadowArmor - Lu80)"
-  isChecked = SettingsStore.isHookSecCloaker(this@MainActivity)
+            text = tr("2. إخفاء الروت وأدوات الفحص الأمني", "2. Root & Security Detection Cloaker")
+            isChecked = SettingsStore.isHookSecCloaker(this@MainActivity)
         }
         isoLayout.addView(chkHookSecCloaker)
 
         chkHookLocation = CheckBox(this).apply {
-  text = "3. خطاف الموقع (Location Hook - Ltz0)"
-  isChecked = SettingsStore.isHookLocation(this@MainActivity)
+            text = tr("3. محرك الموقع المزيف ومحاكاة المسار", "3. Fake Location & Route Simulator Module")
+            isChecked = SettingsStore.isHookLocation(this@MainActivity)
         }
         isoLayout.addView(chkHookLocation)
 
         chkHookDeviceSpoofer = CheckBox(this).apply {
-  text = "4. خطاف بصمة الجهاز (Android ID Hook - Lly1)"
-  isChecked = SettingsStore.isHookDeviceSpoofer(this@MainActivity)
+            text = tr("4. تغيير بصمة ومعرف الجهاز", "4. Device Identifier Spoofer Module")
+            isChecked = SettingsStore.isHookDeviceSpoofer(this@MainActivity)
         }
         isoLayout.addView(chkHookDeviceSpoofer)
 
         chkHookOrders = CheckBox(this).apply {
-  text = "5. خطافات الطلبات (FCM / DispatchActivity / Cipher)"
-  isChecked = SettingsStore.isHookOrders(this@MainActivity)
+            text = tr("5. اعتراض وقبول الطلبات الفوري", "5. Instant Order Interceptor Module")
+            isChecked = SettingsStore.isHookOrders(this@MainActivity)
         }
         isoLayout.addView(chkHookOrders)
 
         chkHookBootstrapLoop = CheckBox(this).apply {
-  text = "6. فحص قاعدة البيانات والسيرفر بالخلفية (DB & Polling Loop)"
-  isChecked = SettingsStore.isHookBootstrapLoop(this@MainActivity)
+            text = tr("6. فحص السيرفر وقاعدة البيانات في الخلفية", "6. Background Database & Server Polling Module")
+            isChecked = SettingsStore.isHookBootstrapLoop(this@MainActivity)
         }
         isoLayout.addView(chkHookBootstrapLoop)
 
         val btnSaveIso = Button(this).apply {
-  text = "💾 حفظ إعدادات العزل وتطبيقها"
-  textSize = 13.5f
-  typeface = Typeface.DEFAULT_BOLD
-  setBackgroundColor(Color.parseColor("#059669"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      saveAllSettings()
-      Toast.makeText(this@MainActivity, "✅ تم حفظ إعدادات العزل! أعد تشغيل تطبيق net.jahez.fleets للتجربة", Toast.LENGTH_LONG).show()
-  }
+            text = tr("💾 حفظ إعدادات الوحدات وتطبيقها", "💾 Save & Apply Module Settings")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(Color.parseColor("#059669"))
+            setTextColor(Color.WHITE)
+            setOnClickListener {
+                saveAllSettings()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("✅ تم حفظ إعدادات الوحدات بنجاح", "✅ Module settings saved and applied"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
         isoLayout.addView(btnSaveIso)
 
@@ -586,11 +665,17 @@ class MainActivity : AppCompatActivity() {
         if (!::tvDiagLogConsole.isInitialized) return
         val rawLogs = SettingsStore.getDiagLogs(this)
         if (rawLogs.isBlank()) {
-  tvDiagLogSummary.text = "🟢 لا توجد أخطاء مسجلة — افتح تطبيق net.jahez.fleets لبدء التسجيل المباشر"
-  tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
-  tvDiagLogConsole.text = "لا توجد سجلات بعد.\nافتح تطبيق net.jahez.fleets الآن وسيظهر هنا كل خطاف (Hook) يتم تفعيله، ورقم إصدار جاهز، وأي استثناء أو Crash بالتفصيل الكامل (Stacktrace)."
-  tvDiagLogConsole.setTextColor(Color.parseColor("#94A3B8"))
-  return
+            tvDiagLogSummary.text = tr(
+                "🟢 لا توجد أخطاء مسجلة — افتح تطبيق ساند لبدء التسجيل المباشر",
+                "🟢 No errors recorded — Open the target app to start live logging"
+            )
+            tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
+            tvDiagLogConsole.text = tr(
+                "لا توجد سجلات بعد.\nافتح تطبيق ساند الآن وسيظهر هنا كل حدث يتم تفعيله مع تفاصيل الطلبات والأخطاء بالكامل.",
+                "No logs recorded yet.\nOpen the target app now and every active hook, version detail, and stacktrace will appear here."
+            )
+            tvDiagLogConsole.setTextColor(Color.parseColor("#94A3B8"))
+            return
         }
 
         val lines = rawLogs.lines()
@@ -599,33 +684,46 @@ class MainActivity : AppCompatActivity() {
         val warnCount = lines.count { it.contains("[WARN]") }
 
         if (crashCount > 0 || errCount > 0) {
-  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)"
-  tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
+            tvDiagLogSummary.text = tr(
+                "🚨 تم رصد $crashCount انهيار و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)",
+                "🚨 Detected $crashCount crashes, $errCount errors, and $warnCount warnings (Total ${lines.size} lines)"
+            )
+            tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
         } else {
-  tvDiagLogSummary.text = "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 كراش)"
-  tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
+            tvDiagLogSummary.text = tr(
+                "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 أعطال)",
+                "✅ Logger running cleanly (${lines.size} lines | $warnCount warnings | 0 crashes)"
+            )
+            tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
         }
 
         val displayText = if (filterErrorsOnly) {
-  val filtered = mutableListOf<String>()
-  var includeContinuation = false
-  for (line in lines) {
-      if (line.startsWith("[")) {
-          includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
-      }
-      if (includeContinuation) filtered.add(line)
-  }
-  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
+            val filtered = mutableListOf<String>()
+            var includeContinuation = false
+            for (line in lines) {
+                if (line.startsWith("[")) {
+                    includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
+                }
+                if (includeContinuation) filtered.add(line)
+            }
+            if (filtered.isEmpty()) {
+                tr("لا توجد أخطاء أو أعطال في السجل الحالي ✅", "No errors or crashes in current log ✅")
+            } else {
+                filtered.joinToString("\n")
+            }
         } else {
-  rawLogs
+            rawLogs
         }
 
         tvDiagLogConsole.text = displayText
         tvDiagLogConsole.setTextColor(
-  if (crashCount > 0) Color.parseColor("#FCA5A5") else Color.parseColor("#38BDF8")
+            if (crashCount > 0) Color.parseColor("#FCA5A5") else Color.parseColor("#38BDF8")
         )
     }
 
+    // =========================================================================
+    // TAB 0: ORDERS TAB (100% Pure Selected Language)
+    // =========================================================================
     private fun buildOrdersTabView(): ScrollView {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#F8F7FC"))
@@ -640,7 +738,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 24, 28, 48)
         }
 
-        // Quick status strip at top of Orders tab
         val statusStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -659,9 +756,15 @@ class MainActivity : AppCompatActivity() {
             val isAcc = SettingsStore.isAutoAccept(this@MainActivity)
             val isRej = SettingsStore.isAutoReject(this@MainActivity)
             text = if (isRun) {
-                "🟢 Interceptor Active  •  Auto-Accept: ${if (isAcc) "ON" else "OFF"}  •  Auto-Reject: ${if (isRej) "ON" else "OFF"}"
+                tr(
+                    "🟢 النظام نشط  •  القبول التلقائي: ${if (isAcc) "مفعل" else "متوقف"}  •  الرفض التلقائي: ${if (isRej) "مفعل" else "متوقف"}",
+                    "🟢 Interceptor Active  •  Auto-Accept: ${if (isAcc) "ON" else "OFF"}  •  Auto-Reject: ${if (isRej) "ON" else "OFF"}"
+                )
             } else {
-                "🔴 Master Switch OFF (Orders are still logged below)"
+                tr(
+                    "🔴 المفتاح الرئيسي متوقف (يستمر تسجيل وعرض الطلبات بالأسفل)",
+                    "🔴 Master Switch OFF (Orders are still logged below)"
+                )
             }
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
@@ -671,9 +774,11 @@ class MainActivity : AppCompatActivity() {
         statusStrip.addView(tvOrdersSubStatus)
         container.addView(statusStrip)
 
-        // Empty state
         tvOrdersEmptyState = TextView(this).apply {
-            text = "No orders received yet.\n\nEvery order that appears in net.jahez.fleets (whether Accepted, Rejected by distance/price, or Manual) will immediately appear here with full details."
+            text = tr(
+                "لم يتم استلام أي طلبات بعد.\n\nكل طلب يظهر في التطبيق (سواء تم قبوله أو رفضه حسب المسافة والسعر أو يدوياً) سيظهر هنا فوراً بكامل تفاصيله.",
+                "No orders received yet.\n\nEvery order that appears in the app (whether Accepted, Rejected by distance/price, or Manual) will immediately appear here with full details."
+            )
             textSize = 13.5f
             setTextColor(Color.parseColor("#64748B"))
             gravity = Gravity.CENTER
@@ -682,13 +787,11 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(tvOrdersEmptyState)
 
-        // 1. Active / Accepted / Delivered Orders Container
         activeOrdersContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         container.addView(activeOrdersContainer)
 
-        // 2. MISSED Section Header (Matches "MISSED  1" in 34.jpg)
         missedSectionHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -696,11 +799,11 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         val tvMissedTitle = TextView(this).apply {
-            text = "MISSED"
+            text = tr("الطلبات الفائتة والمرفوضة", "MISSED & REJECTED")
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#475569"))
-            letterSpacing = 0.08f
+            letterSpacing = 0.04f
         }
         tvMissedCountBadge = TextView(this).apply {
             text = "0"
@@ -713,14 +816,13 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(16, 0, 0, 0)
+                setMargins(16, 0, 16, 0)
             }
         }
         missedSectionHeader.addView(tvMissedTitle)
         missedSectionHeader.addView(tvMissedCountBadge)
         container.addView(missedSectionHeader)
 
-        // 3. Missed / Rejected / Failed Orders Container
         missedOrdersContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -731,7 +833,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // TAB 1: SETTINGS TAB (Contains all configuration cards)
+    // TAB 1: SETTINGS TAB (Language Card + All Configuration Cards)
     // =========================================================================
     private fun buildSettingsTabView(): ScrollView {
         val scroll = ScrollView(this).apply {
@@ -747,6 +849,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 24, 28, 60)
         }
 
+        mainLayout.addView(createLanguageCard())
         mainLayout.addView(createConnectionPingCard())
         mainLayout.addView(createDiagnosticsCard())
         mainLayout.addView(createMasterSwitchCard())
@@ -756,7 +859,7 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(createLocationShortcutCard())
 
         val btnSave = Button(this).apply {
-            text = "💾 Save & Apply All Settings"
+            text = tr("💾 حفظ وتطبيق جميع الإعدادات", "💾 Save & Apply All Settings")
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -770,8 +873,76 @@ class MainActivity : AppCompatActivity() {
         return scroll
     }
 
+    private fun createLanguageCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#FFFFFF"))
+        }
+
+        val title = TextView(this).apply {
+            text = tr("🌐 لغة التطبيق", "🌐 Application Language")
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 6)
+        }
+        layout.addView(title)
+
+        val desc = TextView(this).apply {
+            text = tr(
+                "اختر لغة واجهة التطبيق بالكامل (عربي خالص أو إنجليزي خالص بدون دمج بين اللغتين):",
+                "Select the application interface language (pure Arabic or pure English without mixing languages):"
+            )
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 0, 0, 14)
+        }
+        layout.addView(desc)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val btnArabic = Button(this).apply {
+            text = if (isAr) "✅ العربية" else "العربية"
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(Color.parseColor(if (isAr) "#4F46E5" else "#E2E8F0"))
+            setTextColor(if (isAr) Color.WHITE else Color.parseColor("#1E293B"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+            setOnClickListener {
+                switchLanguage("ar")
+            }
+        }
+        btnRow.addView(btnArabic)
+
+        val btnEnglish = Button(this).apply {
+            text = if (!isAr) "✅ English" else "English"
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(Color.parseColor(if (!isAr) "#4F46E5" else "#E2E8F0"))
+            setTextColor(if (!isAr) Color.WHITE else Color.parseColor("#1E293B"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(8, 0, 0, 0)
+            }
+            setOnClickListener {
+                switchLanguage("en")
+            }
+        }
+        btnRow.addView(btnEnglish)
+
+        layout.addView(btnRow)
+        card.addView(layout)
+        return card
+    }
+
     // =========================================================================
-    // RENDER ORDERS IN ORDERS TAB (Matching 34.jpg)
+    // RENDER ORDERS IN ORDERS TAB
     // =========================================================================
     private fun isSameOrderUi(a: OrderModel, b: OrderModel): Boolean {
         val idA = if (a.id != 0) a.id.toString() else ""
@@ -857,10 +1028,25 @@ class MainActivity : AppCompatActivity() {
         sendPing()
     }
 
+    private fun localizeStatusText(rawStatus: String): String {
+        val s = rawStatus.trim()
+        if (!isAr) {
+            return if (s.equals("Dispatched", ignoreCase = true) || s.isEmpty()) "Accepted ✅" else s
+        }
+        val low = s.lowercase(Locale.US)
+        return when {
+            low.contains("picked") || low.contains("استلام") -> "تم الاستلام 📦"
+            low.contains("deliver") || low.contains("توصيل") -> "تم التوصيل 🏁"
+            low.contains("accept") || low.contains("dispatched") || s.isEmpty() -> "مقبول ✅"
+            low.contains("reject") || low.contains("رفض") -> "مرفوض ❌"
+            low.contains("dry") -> "وضع التجربة 🧪"
+            else -> s
+        }
+    }
+
     private fun refreshOrdersLogUI() {
         if (!::activeOrdersContainer.isInitialized) return
 
-        // Update status strip
         if (::tvOrdersSubStatus.isInitialized) {
             val isRun = SettingsStore.isMasterRunning(this)
             val isAcc = SettingsStore.isAutoAccept(this)
@@ -870,9 +1056,15 @@ class MainActivity : AppCompatActivity() {
             val minP = SettingsStore.getMinPrice(this)
             val showFood = SettingsStore.isShowFoodPrice(this)
             tvOrdersSubStatus.text = if (isRun) {
-                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
+                tr(
+                    "🟢 نشط • القبول: ${if (isAcc) "مفعل" else "متوقف"} • الرفض: ${if (isRej) "مفعل" else "متوقف"} • المطعم≤${maxRest}كم • العميل≤${maxCust}كم • الأدنى≥${minP} • سعر الطعام: ${if (showFood) "مفعل" else "متوقف"}",
+                    "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Food Price: ${if (showFood) "ON" else "OFF"}"
+                )
             } else {
-                "🔴 Master Switch OFF (Incoming orders are still captured & shown below)"
+                tr(
+                    "🔴 المفتاح الرئيسي متوقف (يستمر التقاط وعرض الطلبات الواردة بالأسفل)",
+                    "🔴 Master Switch OFF (Incoming orders are still captured & shown below)"
+                )
             }
             tvOrdersSubStatus.setTextColor(if (isRun) Color.parseColor("#059669") else Color.parseColor("#D97706"))
         }
@@ -883,7 +1075,6 @@ class MainActivity : AppCompatActivity() {
         val jsonStr = SettingsStore.getOrdersLog(this)
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
 
-        // Merge with fallback file if any orders were written directly from hook process (cross-matching both id and reference!)
         try {
             val f = File("/data/local/tmp/saned_orders.json")
             if (f.exists()) {
@@ -959,11 +1150,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Exact implementation of Lg8.U & Lg8.W in SanedAssistant-98-7bac1ec.apk:
-     * Opens Google Maps navigation to (targetLat, targetLng), optionally starting from (originLat, originLng),
-     * so the driver can view & navigate to the customer's home BEFORE confirming pickup in Saned!
-     */
     private fun openGoogleMapsNavigation(
         targetLat: Double,
         targetLng: Double,
@@ -1011,7 +1197,11 @@ class MainActivity : AppCompatActivity() {
                 return
             } catch (_: Throwable) {}
         }
-        Toast.makeText(this, "⚠️ إحداثيات الموقع غير متوفرة بعد لهذا الطلب", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            tr("⚠️ إحداثيات الموقع غير متوفرة بعد لهذا الطلب", "⚠️ Location coordinates are not available for this order yet"),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun buildActiveOrderCard(order: OrderModel): CardView {
@@ -1019,6 +1209,7 @@ class MainActivity : AppCompatActivity() {
         val displayId = if (rawId.startsWith("#")) rawId else "#$rawId"
         val showFoodPriceOpt = SettingsStore.isShowFoodPrice(this)
         val effectiveFoodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+        val currLabel = if (isAr && order.currency.equals("SAR", ignoreCase = true)) "ر.س" else order.currency
 
         val card = CardView(this).apply {
             radius = 28f
@@ -1037,7 +1228,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 28, 28, 28)
         }
 
-        // 1. Header Row: Status Pill ("Accepted ✅" / "Picked Up" / "Delivered") + Order ID with Copy button
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1045,8 +1235,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val statusBadge = TextView(this).apply {
-            val stText = if (order.status.equals("Dispatched", ignoreCase = true)) "Accepted ✅" else order.status.ifEmpty { "Accepted ✅" }
-            text = stText
+            text = localizeStatusText(order.status)
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
@@ -1068,13 +1257,17 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clip.setPrimaryClip(ClipData.newPlainText("Order ID", rawId.removePrefix("#")))
-                Toast.makeText(this@MainActivity, "Copied $displayId", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم نسخ الرقم $displayId", "Copied $displayId"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         headerRow.addView(idCopyTv)
         inner.addView(headerRow)
 
-        // 2. Pickup Box (Matches 34.jpg & Lg8.U case 0: tapping opens Google Maps directions to restaurant)
+        // 2. Pickup Box
         val pickupBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1108,14 +1301,20 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val pickupLabel = TextView(this).apply {
-            val distRestStr = if (order.distanceKm > 0.0) String.format(Locale.US, " • %.1f km from you", order.distanceKm) else ""
-            text = "Pickup$distRestStr"
+            val distRestStr = if (order.distanceKm > 0.0) {
+                if (isAr) {
+                    String.format(Locale.US, " • يبعد %.1f كم عنك", order.distanceKm)
+                } else {
+                    String.format(Locale.US, " • %.1f km from you", order.distanceKm)
+                }
+            } else ""
+            text = tr("الاستلام من المطعم$distRestStr", "Pickup$distRestStr")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#475569"))
         }
         val pickupNameTv = TextView(this).apply {
-            val restTitle = order.restaurant.ifEmpty { "JAHEZ Restaurant" }
+            val restTitle = order.restaurant.ifEmpty { tr("المطعم", "Restaurant") }
             val pickAddr = if (order.pickupAddress.isNotEmpty() && order.pickupAddress != restTitle) "\n${order.pickupAddress}" else ""
             val pickCoordStr = if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
                 String.format(Locale.US, "\n📍 %.5f, %.5f", order.pickupLat, order.pickupLng)
@@ -1131,7 +1330,7 @@ class MainActivity : AppCompatActivity() {
         pickupBox.addView(pickupTextCol)
 
         val pickupNavBtn = TextView(this).apply {
-            text = "Navigate ↗"
+            text = tr("اتجاهات ↗", "Navigate ↗")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#334155"))
@@ -1141,7 +1340,7 @@ class MainActivity : AppCompatActivity() {
         pickupBox.addView(pickupNavBtn)
         inner.addView(pickupBox)
 
-        // 3. Drop-off Box (Matches 34.jpg & Lg8.U case 1: opens customer home location in Google Maps BEFORE or AFTER pickup!)
+        // 3. Drop-off Box
         val dropoffBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1191,13 +1390,13 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         val dropoffLabel = TextView(this).apply {
-            text = "Drop-off  "
+            text = tr("التوصيل للعميل  ", "Drop-off  ")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
         }
         val nextBadge = TextView(this).apply {
-            text = "NEXT"
+            text = tr("التالي", "NEXT")
             textSize = 10f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -1208,7 +1407,11 @@ class MainActivity : AppCompatActivity() {
         dropoffHeaderRow.addView(nextBadge)
         if (order.customerDistanceKm > 0.0) {
             val custDistTv = TextView(this).apply {
-                text = String.format(Locale.US, "  •  %.1f km from pickup", order.customerDistanceKm)
+                text = if (isAr) {
+                    String.format(Locale.US, "  •  %.1f كم من المطعم", order.customerDistanceKm)
+                } else {
+                    String.format(Locale.US, "  •  %.1f km from pickup", order.customerDistanceKm)
+                }
                 textSize = 11.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#4C1D95"))
@@ -1223,13 +1426,17 @@ class MainActivity : AppCompatActivity() {
             if (order.address.isNotEmpty() && order.address != "Location on map") parts.add(order.address)
             val hasDestCoords = order.destLat != 0.0 && order.destLng != 0.0
             val coordLine = if (hasDestCoords) {
-                String.format(Locale.US, "📍 منزل العميل: %.5f, %.5f", order.destLat, order.destLng)
+                if (isAr) {
+                    String.format(Locale.US, "📍 موقع العميل: %.5f, %.5f", order.destLat, order.destLng)
+                } else {
+                    String.format(Locale.US, "📍 Customer Location: %.5f, %.5f", order.destLat, order.destLng)
+                }
             } else ""
             text = when {
                 parts.isNotEmpty() && coordLine.isNotEmpty() -> "${parts.joinToString(" — ")}\n$coordLine"
                 parts.isNotEmpty() -> parts.joinToString(" — ")
-                coordLine.isNotEmpty() -> "$coordLine\nاضغط لفتح موقع العميل في الخريطة (قبل الاستلام)"
-                else -> "Location on map"
+                coordLine.isNotEmpty() -> coordLine + "\n" + tr("اضغط لفتح موقع العميل في الخريطة", "Tap to open customer location in Maps")
+                else -> tr("الموقع على الخريطة", "Location on map")
             }
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -1240,7 +1447,7 @@ class MainActivity : AppCompatActivity() {
         dropoffBox.addView(dropoffTextCol)
 
         val dropoffNavBtn = TextView(this).apply {
-            text = "Navigate ↗"
+            text = tr("اتجاهات ↗", "Navigate ↗")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -1250,7 +1457,7 @@ class MainActivity : AppCompatActivity() {
         dropoffBox.addView(dropoffNavBtn)
         inner.addView(dropoffBox)
 
-        // 4. Dedicated Price Food (سعر الطعام) + Payment Box (Shown on ALL orders in Accepted / Picked Up / Delivered — whether Prepaid or Cash on Delivery!)
+        // 4. Payment & Food Price Box (100% pure Arabic or 100% pure English)
         val isCash = order.cashAmount > 0.0
         val paymentBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1265,7 +1472,11 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 requestOrderDetailsRefresh(order)
-                Toast.makeText(this@MainActivity, "🔄 جاري تحديث سعر الطعام وتفاصيل الطلب $displayId...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("🔄 جاري تحديث سعر الطعام وتفاصيل الطلب $displayId...", "🔄 Refreshing food price & order details for $displayId..."),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
@@ -1281,11 +1492,14 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val payTitle = TextView(this).apply {
-            val methodSuffix = if (order.paymentMethod.isNotEmpty()) " (${order.paymentMethod})" else ""
             text = if (isCash) {
-                String.format(Locale.US, "Cash on Delivery: %.2f %s", order.cashAmount, order.currency)
+                if (isAr) {
+                    String.format(Locale.US, "الدفع عند الاستلام: %.2f %s", order.cashAmount, currLabel)
+                } else {
+                    String.format(Locale.US, "Cash on Delivery: %.2f %s", order.cashAmount, currLabel)
+                }
             } else {
-                "Prepaid$methodSuffix"
+                tr("مدفوع مسبقاً", "Prepaid")
             }
             textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
@@ -1293,9 +1507,13 @@ class MainActivity : AppCompatActivity() {
         }
         val paySub = TextView(this).apply {
             text = if (isCash) {
-                String.format(Locale.US, "Collect %.2f %s from customer", order.cashAmount, order.currency)
+                if (isAr) {
+                    String.format(Locale.US, "استلم %.2f %s نقداً من العميل", order.cashAmount, currLabel)
+                } else {
+                    String.format(Locale.US, "Collect %.2f %s from customer", order.cashAmount, currLabel)
+                }
             } else {
-                "Nothing to collect (مدفوع مسبقاً)"
+                tr("لا يوجد مبلغ مطلوب تحصيله من العميل", "Nothing to collect from customer")
             }
             textSize = 12f
             setTextColor(Color.parseColor("#475569"))
@@ -1306,9 +1524,17 @@ class MainActivity : AppCompatActivity() {
         if (showFoodPriceOpt) {
             val foodPriceTv = TextView(this).apply {
                 text = if (effectiveFoodPrice > 0.0) {
-                    String.format(Locale.US, "🍔 Price Food (سعر الطعام): %.2f %s", effectiveFoodPrice, order.currency)
+                    if (isAr) {
+                        String.format(Locale.US, "🍔 سعر الطعام: %.2f %s", effectiveFoodPrice, currLabel)
+                    } else {
+                        String.format(Locale.US, "🍔 Food Price: %.2f %s", effectiveFoodPrice, currLabel)
+                    }
                 } else {
-                    String.format(Locale.US, "🍔 Price Food (سعر الطعام): 0.00 %s (Prepaid)", order.currency)
+                    if (isAr) {
+                        String.format(Locale.US, "🍔 سعر الطعام: 0.00 %s (مدفوع)", currLabel)
+                    } else {
+                        String.format(Locale.US, "🍔 Food Price: 0.00 %s (Prepaid)", currLabel)
+                    }
                 }
                 textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
@@ -1327,7 +1553,7 @@ class MainActivity : AppCompatActivity() {
 
         if (order.price > 0.0) {
             val priceBadge = TextView(this).apply {
-                text = String.format(Locale.US, "🚗 %.2f %s", order.price, order.currency)
+                text = String.format(Locale.US, "🚗 %.2f %s", order.price, currLabel)
                 textSize = 13.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.parseColor("#059669"))
@@ -1339,7 +1565,7 @@ class MainActivity : AppCompatActivity() {
 
         if (showFoodPriceOpt) {
             val foodBadge = TextView(this).apply {
-                text = String.format(Locale.US, "🍔 %.2f %s", effectiveFoodPrice, order.currency)
+                text = String.format(Locale.US, "🍔 %.2f %s", effectiveFoodPrice, currLabel)
                 textSize = 12.5f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(if (effectiveFoodPrice > 0.0) Color.parseColor("#B45309") else Color.parseColor("#475569"))
@@ -1358,7 +1584,7 @@ class MainActivity : AppCompatActivity() {
         paymentBox.addView(rightPricesCol)
         inner.addView(paymentBox)
 
-        // 5. Call & WhatsApp Buttons Row (Matches Lg8.a in SanedAssistant: shown when customerPhone is present, hidden for old SQLite orders without customer phone)
+        // 5. Call & WhatsApp Buttons Row
         val cleanPhone = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
         if (cleanPhone.isNotEmpty()) {
             val actionsRow = LinearLayout(this).apply {
@@ -1367,7 +1593,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val btnCall = TextView(this).apply {
-                text = "📞   Call"
+                text = tr("📞   اتصال", "📞   Call")
                 textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -1381,14 +1607,14 @@ class MainActivity : AppCompatActivity() {
                     try {
                         startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanPhone")))
                     } catch (_: Throwable) {
-                        Toast.makeText(this@MainActivity, "Phone: $cleanPhone", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, cleanPhone, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
             actionsRow.addView(btnCall)
 
             val btnWhatsApp = TextView(this).apply {
-                text = "💬   WhatsApp"
+                text = tr("💬   واتساب", "💬   WhatsApp")
                 textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -1403,7 +1629,7 @@ class MainActivity : AppCompatActivity() {
                         val waUrl = "https://api.whatsapp.com/send?phone=$cleanPhone"
                         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(waUrl)))
                     } catch (_: Throwable) {
-                        Toast.makeText(this@MainActivity, "WhatsApp phone: $cleanPhone", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, cleanPhone, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -1411,10 +1637,11 @@ class MainActivity : AppCompatActivity() {
 
             inner.addView(actionsRow)
         }
-        // 6. Quick Route Simulator Button for this Order (Restaurant or Customer)
+
+        // 6. Quick 2-Point Route Simulator Button for this Order
         if ((order.pickupLat != 0.0 && order.pickupLng != 0.0) || (order.destLat != 0.0 && order.destLng != 0.0)) {
             val btnSimOrderRoute = TextView(this).apply {
-                text = "🚗  محاكاة المشي في الطريق لهذا الطلب (Route Simulator)"
+                text = tr("🚗  محاكاة مسار الطريق لهذا الطلب من نقطة 1 إلى نقطة 2", "🚗  Simulate 2-Point Street Route for This Order")
                 textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -1438,13 +1665,10 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    /**
-     * Builds a Missed / Rejected / Manual Order Card matching the "MISSED" card at the bottom of 34.jpg,
-     * plus shows Price Food & full pickup/dropoff details when tapped.
-     */
     private fun buildMissedOrderCard(order: OrderModel): CardView {
         val showFoodPriceOpt = SettingsStore.isShowFoodPrice(this)
         val effectiveFoodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+        val currLabel = if (isAr && order.currency.equals("SAR", ignoreCase = true)) "ر.س" else order.currency
 
         val card = CardView(this).apply {
             radius = 22f
@@ -1489,7 +1713,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val restNameTv = TextView(this).apply {
-            text = order.restaurant.ifEmpty { "Restaurant" }
+            text = order.restaurant.ifEmpty { tr("مطعم", "Restaurant") }
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
@@ -1497,8 +1721,8 @@ class MainActivity : AppCompatActivity() {
         centerCol.addView(restNameTv)
 
         val statusLineTv = TextView(this).apply {
-            val reasonText = if (order.decisionReason.isNotEmpty()) order.decisionReason else order.status
-            text = "⚠️ $reasonText  •  ${order.time.ifEmpty { "just now" }}"
+            val reasonText = if (order.decisionReason.isNotEmpty()) order.decisionReason else localizeStatusText(order.status)
+            text = "⚠️ $reasonText  •  ${order.time.ifEmpty { tr("الآن", "just now") }}"
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#B91C1C"))
@@ -1507,7 +1731,7 @@ class MainActivity : AppCompatActivity() {
         centerCol.addView(statusLineTv)
 
         val pkgLineTv = TextView(this).apply {
-            val pickInfo = order.pickupAddress.ifEmpty { "net.jahez.fleets" }
+            val pickInfo = order.pickupAddress.ifEmpty { tr("موقع المطعم", "Restaurant Location") }
             val dropInfo = if (order.address.isNotEmpty()) " ➔ ${order.address}" else ""
             text = "$pickInfo$dropInfo"
             textSize = 12f
@@ -1522,12 +1746,32 @@ class MainActivity : AppCompatActivity() {
 
         val metricsTv = TextView(this).apply {
             val distStr = if (order.customerDistanceKm > 0.0) {
-                String.format(Locale.US, "Pickup %.1f km • Drop-off %.1f km", order.distanceKm, order.customerDistanceKm)
+                if (isAr) {
+                    String.format(Locale.US, "المطعم %.1f كم • العميل %.1f كم", order.distanceKm, order.customerDistanceKm)
+                } else {
+                    String.format(Locale.US, "Pickup %.1f km • Drop-off %.1f km", order.distanceKm, order.customerDistanceKm)
+                }
             } else {
-                String.format(Locale.US, "Delivery ≈ %.2f km", distToUse)
+                if (isAr) {
+                    String.format(Locale.US, "المسافة ≈ %.2f كم", distToUse)
+                } else {
+                    String.format(Locale.US, "Distance ≈ %.2f km", distToUse)
+                }
             }
-            val rateStr = if (ratePerKm > 0.0) String.format(Locale.US, "  •  %.2f SAR/km", ratePerKm) else ""
-            val foodStr = if (showFoodPriceOpt) String.format(Locale.US, "  •  🍔 Food: %.2f %s", effectiveFoodPrice, order.currency) else ""
+            val rateStr = if (ratePerKm > 0.0) {
+                if (isAr) {
+                    String.format(Locale.US, "  •  %.2f %s/كم", ratePerKm, currLabel)
+                } else {
+                    String.format(Locale.US, "  •  %.2f %s/km", ratePerKm, currLabel)
+                }
+            } else ""
+            val foodStr = if (showFoodPriceOpt) {
+                if (isAr) {
+                    String.format(Locale.US, "  •  🍔 الطعام: %.2f %s", effectiveFoodPrice, currLabel)
+                } else {
+                    String.format(Locale.US, "  •  🍔 Food: %.2f %s", effectiveFoodPrice, currLabel)
+                }
+            } else ""
             text = "$distStr$rateStr$foodStr"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
@@ -1540,9 +1784,9 @@ class MainActivity : AppCompatActivity() {
 
         val priceRightTv = TextView(this).apply {
             val priceFormatted = if (order.price % 1.0 == 0.0) {
-                String.format(Locale.US, "%.0f %s", order.price, order.currency)
+                String.format(Locale.US, "%.0f %s", order.price, currLabel)
             } else {
-                String.format(Locale.US, "%.2f %s", order.price, order.currency)
+                String.format(Locale.US, "%.2f %s", order.price, currLabel)
             }
             text = priceFormatted
             textSize = 15.5f
@@ -1569,7 +1813,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // SETTINGS TAB CARDS
+    // SETTINGS TAB CARDS (100% Pure Selected Language)
     // =========================================================================
     private fun createConnectionPingCard(): CardView {
         val card = createStyledCard()
@@ -1580,7 +1824,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "📡 Connection & Live Ping Status"
+            text = tr("📡 حالة الاتصال المباشر بالتطبيق", "📡 Live App Connection Status")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1589,7 +1833,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         tvPingStatus = TextView(this).apply {
-            text = "Checking connection to Jahez Fleets... ⏳"
+            text = tr("جاري فحص الاتصال بتطبيق ساند... ⏳", "Checking connection to target app... ⏳")
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#D97706"))
@@ -1598,7 +1842,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvPingStatus)
 
         tvPingDetails = TextView(this).apply {
-            text = "Hook: Initializing  •  Auth: Waiting for login  •  Orders: 0"
+            text = tr(
+                "النظام: قيد التهيئة  •  المصادقة: بانتظار تسجيل الدخول  •  الطلبات: 0",
+                "Hook: Initializing  •  Auth: Waiting for login  •  Orders: 0"
+            )
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -1606,14 +1853,18 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvPingDetails)
 
         val btnPing = Button(this).apply {
-            text = "⚡ TEST PING NOW"
+            text = tr("⚡ فحص الاتصال الآن", "⚡ Test Connection Now")
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#2563EB"))
             setTextColor(Color.WHITE)
             setOnClickListener {
                 sendPing()
-                Toast.makeText(this@MainActivity, "Ping request sent to Jahez Fleets", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم إرسال نبضة فحص الاتصال", "Connection ping request sent"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         layout.addView(btnPing)
@@ -1631,7 +1882,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🌐 OkHttp & Network Diagnostics"
+            text = tr("🌐 تشخيص الشبكة والاتصال المباشر بالسيرفر", "🌐 Network & Direct Server Diagnostics")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1640,7 +1891,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val sub = TextView(this).apply {
-            text = "Live inspection of OkHttp traffic, background polling hits, and direct API probe:"
+            text = tr(
+                "مراقبة حية لحركة الشبكة، وعدد عمليات السحب في الخلفية، واختبار الاتصال الفوري:",
+                "Live inspection of network traffic, background polling hits, and direct server probe:"
+            )
             textSize = 11.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 10)
@@ -1648,7 +1902,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(sub)
 
         tvOkHttpHookStatus = TextView(this).apply {
-            text = "OkHttp Hook: Active & Intercepting 🟢"
+            text = tr("حالة معترض الشبكة: نشط ويعترض الطلبات 🟢", "Network Interceptor: Active & Intercepting 🟢")
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#059669"))
@@ -1657,7 +1911,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvOkHttpHookStatus)
 
         tvHttpRequestsCount = TextView(this).apply {
-            text = "Total Captured HTTP Requests: 0"
+            text = tr("إجمالي طلبات الشبكة الملتقطة: 0", "Total Captured Network Requests: 0")
             textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
             setPadding(0, 0, 0, 4)
@@ -1665,7 +1919,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvHttpRequestsCount)
 
         tvPollingHits = TextView(this).apply {
-            text = "Active Server Polling Hits: 0"
+            text = tr("عمليات فحص السيرفر في الخلفية: 0", "Background Server Polling Hits: 0")
             textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
             setPadding(0, 0, 0, 4)
@@ -1673,7 +1927,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvPollingHits)
 
         tvLastHttpUrl = TextView(this).apply {
-            text = "Last Request: Waiting for network traffic..."
+            text = tr("آخر طلب شبكة: بانتظار حركة البيانات...", "Last Request: Waiting for network traffic...")
             textSize = 11.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 4)
@@ -1681,7 +1935,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tvLastHttpUrl)
 
         tvLastOrderEvent = TextView(this).apply {
-            text = "Last Event: Ready for orders"
+            text = tr("آخر حدث: جاهز لاستقبال الطلبات", "Last Event: Ready for orders")
             textSize = 11.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -1693,7 +1947,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnTestApi = Button(this).apply {
-            text = "🧪 Test Live Jahez API"
+            text = tr("🧪 فحص اتصال السيرفر", "🧪 Test Server API")
             textSize = 11.5f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
             setBackgroundColor(Color.parseColor("#0D9488"))
@@ -1710,7 +1964,7 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(spacer)
 
         val btnSimOrder = Button(this).apply {
-            text = "⚡ Simulate Order (68.jpg)"
+            text = tr("⚡ محاكاة طلب تجريبي", "⚡ Simulate Test Order")
             textSize = 11.5f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setBackgroundColor(Color.parseColor("#7C3AED"))
@@ -1728,7 +1982,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 10, 0, 0)
         }
         val btnClearToken = Button(this).apply {
-            text = "🗑️ Clear Cached Token"
+            text = tr("🗑️ مسح رمز الجلسة المخزن", "🗑️ Clear Cached Session Token")
             textSize = 11.5f
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             setBackgroundColor(Color.parseColor("#475569"))
@@ -1745,7 +1999,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendTestApiProbe() {
-        Toast.makeText(this, "Testing direct OkHttp call to Jahez API...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            tr("جاري اختبار الاتصال المباشر بالسيرفر...", "Testing direct server connection..."),
+            Toast.LENGTH_SHORT
+        ).show()
         val intent = Intent("dev.saned.assistant.ACTION_TEST_API").apply {
             setPackage("net.jahez.fleets")
         }
@@ -1756,7 +2014,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendSimulateOrder() {
-        Toast.makeText(this, "Simulating Jahez Order...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            tr("جاري إنشاء طلب تجريبي...", "Simulating test order..."),
+            Toast.LENGTH_SHORT
+        ).show()
         val intent = Intent("dev.saned.assistant.ACTION_SIMULATE_ORDER").apply {
             setPackage("net.jahez.fleets")
         }
@@ -1770,20 +2032,24 @@ class MainActivity : AppCompatActivity() {
             val simOrder = OrderModel(
                 id = testNum,
                 reference = "#$testNum",
-                status = "Accepted ✅",
-                restaurant = "McDonald's KSA 🇸🇦 - ماكدونالدز وجبة_فيلم_سبايدرمان",
-                pickupAddress = "Pick-up from RJ43+H42, Al Malqa, Riyadh 13524",
-                customerName = "عبدالله الشمري (Abdullah)",
+                status = if (isAr) "مقبول ✅" else "Accepted ✅",
+                restaurant = if (isAr) "ماكدونالدز - فرع الملقا" else "McDonald's - Al Malqa Branch",
+                pickupAddress = if (isAr) "حي الملقا، الرياض 13524" else "Al Malqa District, Riyadh 13524",
+                customerName = if (isAr) "عبدالله الشمري" else "Abdullah Al-Shammari",
                 customerPhone = "0551234567",
-                address = "Location on map",
+                address = if (isAr) "حي حطين، الرياض" else "Hittin District, Riyadh",
+                pickupLat = 24.803508,
+                pickupLng = 46.604578,
+                destLat = 24.774265,
+                destLng = 46.618340,
                 price = 7.00,
                 currency = "SAR",
                 cashAmount = 0.0,
                 foodPrice = 65.00,
-                paymentMethod = "Prepaid",
+                paymentMethod = if (isAr) "مدفوع مسبقاً" else "Prepaid",
                 distanceKm = 0.5,
                 customerDistanceKm = 2.8,
-                decisionReason = "Accepted (0.5km / 2.8km)",
+                decisionReason = if (isAr) "تم القبول (0.5 كم / 2.8 كم)" else "Accepted (0.5 km / 2.8 km)",
                 isMissedOrRejected = false,
                 time = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date())
             )
@@ -1805,7 +2071,11 @@ class MainActivity : AppCompatActivity() {
         try {
             sendBroadcast(Intent("dev.saned.assistant.ACTION_CLEAR_TOKEN"))
         } catch (_: Throwable) {}
-        Toast.makeText(this, "Token cache cleared! Open Jahez Fleets app to refresh token.", Toast.LENGTH_LONG).show()
+        Toast.makeText(
+            this,
+            tr("تم مسح رمز الجلسة المخزن! افتح التطبيق لتحديث الجلسة.", "Session token cache cleared! Open the target app to refresh."),
+            Toast.LENGTH_LONG
+        ).show()
         sendPing()
     }
 
@@ -1831,9 +2101,9 @@ class MainActivity : AppCompatActivity() {
         val now = System.currentTimeMillis()
         if (lastPongTimestamp > 0 && (now - lastPongTimestamp) > 4000L) {
             if (::tvPingStatus.isInitialized) {
-                tvPingStatus.text = "🔴 Disconnected (Jahez App Closed or Inactive)"
+                tvPingStatus.text = tr("🔴 غير متصل (التطبيق مغلق أو غير نشط)", "🔴 Disconnected (Target App Closed or Inactive)")
                 tvPingStatus.setTextColor(Color.parseColor("#DC2626"))
-                tvPingDetails.text = "Open Jahez Fleet app to establish real-time link"
+                tvPingDetails.text = tr("افتح تطبيق ساند لتفعيل الربط المباشر", "Open the target app to establish real-time link")
             }
         }
     }
@@ -1847,7 +2117,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🔘 Master Control Switch"
+            text = tr("🔘 مفتاح التشغيل الرئيسي", "🔘 Master Control Switch")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1861,7 +2131,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         swMaster = Switch(this).apply {
-            text = "Enable All Assistant Functions (Master ON / OFF)"
+            text = tr("تفعيل جميع ميزات المساعد (تشغيل / إيقاف شامل)", "Enable All Assistant Functions (Master ON / OFF)")
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             isChecked = SettingsStore.isMasterRunning(this@MainActivity)
@@ -1880,10 +2150,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateMasterStatusUI(isRunning: Boolean) {
         if (isRunning) {
-            tvMasterStatus.text = "Status: 🟢 Active & Ready for Jahez Orders"
+            tvMasterStatus.text = tr("الحالة: 🟢 نشط وجاهز لالتقاط الطلبات فوراً", "Status: 🟢 Active & Ready for Orders")
             tvMasterStatus.setTextColor(Color.parseColor("#059669"))
         } else {
-            tvMasterStatus.text = "Status: 🔴 Stopped (Orders are still logged in Orders tab)"
+            tvMasterStatus.text = tr("الحالة: 🔴 متوقف (يستمر عرض الطلبات في تبويب الطلبات)", "Status: 🔴 Stopped (Orders are still logged in Orders tab)")
             tvMasterStatus.setTextColor(Color.parseColor("#DC2626"))
         }
     }
@@ -1896,7 +2166,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "📱 Device Identifier (Android ID / IMEI)"
+            text = tr("📱 معرف وبصمة الجهاز", "📱 Device Identifier")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1905,7 +2175,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val note = TextView(this).apply {
-            text = "Note: Jahez Fleets uses Android ID as device IMEI on the login screen. Modifying this changes the reported device ID."
+            text = tr(
+                "ملاحظة: يستخدم التطبيق معرف الجهاز عند تسجيل الدخول. يتيح لك هذا الخيار تخصيص أو توليد معرف جهاز جديد.",
+                "Note: The target app uses the device identifier on the login screen. Modifying this changes the reported device ID."
+            )
             textSize = 11.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -1913,7 +2186,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(note)
 
         chkAndroidId = CheckBox(this).apply {
-            text = "Enable Device ID Spoofing"
+            text = tr("تفعيل تغيير معرف الجهاز", "Enable Device Identifier Spoofing")
             isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setSpoofAndroidId(this@MainActivity, isChecked)
@@ -1922,7 +2195,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(chkAndroidId)
 
         edtAndroidId = EditText(this).apply {
-            hint = "Enter 16-hex characters (e.g. a1b2c3d4e5f67890)"
+            hint = tr("أدخل 16 رمزاً سداسياً عشرياً", "Enter 16 hexadecimal characters")
             setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))
             textSize = 14f
             typeface = Typeface.MONOSPACE
@@ -1936,7 +2209,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnGen = Button(this).apply {
-            text = "🎲 Randomize (16-char)"
+            text = tr("🎲 توليد عشوائي", "🎲 Generate Random ID")
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
@@ -1947,13 +2220,17 @@ class MainActivity : AppCompatActivity() {
         btnRow.addView(btnGen)
 
         val btnCopy = Button(this).apply {
-            text = "📋 Copy ID"
+            text = tr("📋 نسخ المعرف", "📋 Copy ID")
             textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clip.setPrimaryClip(ClipData.newPlainText("Android ID", edtAndroidId.text.toString().trim()))
-                Toast.makeText(this@MainActivity, "Device ID copied to clipboard", Toast.LENGTH_SHORT).show()
+                clip.setPrimaryClip(ClipData.newPlainText("Device ID", edtAndroidId.text.toString().trim()))
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("تم نسخ معرف الجهاز إلى الحافظة", "Device ID copied to clipboard"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         btnRow.addView(btnCopy)
@@ -1970,7 +2247,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 24, 24, 24)
         }
         val title = TextView(this).apply {
-            text = "🗺️ Google Maps Spoofer & Route Simulator (محاكي الطريق)"
+            text = tr("🗺️ محاكي الموقع والمسار بين نقطتين", "🗺️ 2-Point Location Spoofer & Route Simulator")
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1978,14 +2255,17 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(title)
         val sub = TextView(this).apply {
-            text = "تم نقل خريطة Google Maps التفاعلية ومحاكي المشي في الطريق (Route Simulator بتخصيص السرعة) إلى تبويب مستقل بالأسفل (🗺️ Map & Route) لسهولة التحكم الكامل."
+            text = tr(
+                "انتقل إلى تبويب الخريطة والمسار لتحديد النقطة 1 والنقطة 2 ومحاكاة المشي في الطريق بسرعات مختلفة أو بسرعة مخصصة.",
+                "Open the Map & Route tab to set Point 1 and Point 2 and simulate driving along the road with variable speeds or a custom speed."
+            )
             textSize = 12f
             setTextColor(Color.parseColor("#475569"))
             setPadding(0, 0, 0, 14)
         }
         layout.addView(sub)
         val btnOpenMap = Button(this).apply {
-            text = "🗺️ فتح خريطة Google Maps ومحاكي الطريق الآن"
+            text = tr("🗺️ فتح الخريطة ومحاكي النقطتين الآن", "🗺️ Open Map & 2-Point Simulator Now")
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#2563EB"))
@@ -1997,6 +2277,9 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
+    // =========================================================================
+    // TAB 3: MAP & 2-POINT ROUTE SIMULATOR TAB (Point 1 -> Point 2 + Variable/Custom Speeds)
+    // =========================================================================
     private fun buildMapTabView(): ScrollView {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#F4F6F9"))
@@ -2021,14 +2304,14 @@ class MainActivity : AppCompatActivity() {
             setPadding(22, 22, 22, 22)
         }
 
-        // Header Row: Title + Google Maps API Key Button
+        // Header Row: Title + API Key Button
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, 8)
         }
         val title = TextView(this).apply {
-            text = "🗺️ Google Maps GPS Spoof & Route Simulator"
+            text = tr("🗺️ الموقع المزيف ومحاكي المسار (نقطتين 1 ➔ 2)", "🗺️ Location Spoofer & 2-Point Route Simulator")
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -2037,7 +2320,7 @@ class MainActivity : AppCompatActivity() {
         headerRow.addView(title)
 
         val btnApiKey = TextView(this).apply {
-            text = "🔑 API Key"
+            text = tr("🔑 مفتاح الخريطة", "🔑 Map Key")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E40AF"))
@@ -2052,9 +2335,15 @@ class MainActivity : AppCompatActivity() {
         tvRouteSimStatus = TextView(this).apply {
             val isFake = SettingsStore.isFakeLocation(this@MainActivity)
             text = if (isFake) {
-                "🟢 تغيير الموقع مفعل (GPS Spoof ON) • حدد وجهة على خريطة Google لبدء محاكاة الطريق"
+                tr(
+                    "🟢 الموقع المزيف مفعل • حدد النقطة 1 والنقطة 2 على الخريطة لبدء محاكاة الطريق",
+                    "🟢 Fake Location Enabled • Set Point 1 and Point 2 on the map to start route simulation"
+                )
             } else {
-                "⚪ اضغط على أي مكان في خريطة Google لتثبيت موقعك أو رسم مسار المشي في الطريق"
+                tr(
+                    "⚪ اضغط على الخريطة لتعيين النقطة 1 والنقطة 2 أو تثبيت موقعك",
+                    "⚪ Tap on the map to set Point 1 and Point 2 or pin your location"
+                )
             }
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
@@ -2070,9 +2359,9 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(tvRouteSimStatus)
 
-        // Toggles Row
+        // Toggles Row (Pure Arabic or Pure English — NO mixed text!)
         chkFakeLoc = CheckBox(this).apply {
-            text = "تفعيل تغيير الموقع والمحاكي الذكي (Enable GPS Spoof & Anti-Mock Protection)"
+            text = tr("تفعيل الموقع المزيف والحماية من الكشف", "Enable Fake Location & Anti-Detection")
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -2087,7 +2376,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(chkFakeLoc)
 
         chkFixLoc = CheckBox(this).apply {
-            text = "إصلاح خطأ 'الموقع غير معروف' (Fix Location Unknown)"
+            text = tr("إصلاح خطأ الموقع غير معروف", "Fix Location Unknown Error")
             isChecked = SettingsStore.isFixLocation(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setFixLocation(this@MainActivity, isChecked)
@@ -2095,14 +2384,14 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkFixLoc)
 
-        // Search Row for Google Maps
+        // Search Row
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 6, 0, 8)
         }
         edtMapSearch = EditText(this).apply {
-            hint = "🔍 ابحث عن حي أو مطعم أو شارع (مثال: حي الملقا الرياض)..."
+            hint = tr("🔍 ابحث عن حي أو مطعم أو شارع (مثال: حي الملقا الرياض)...", "🔍 Search district, restaurant, or street (e.g. Al Malqa Riyadh)...")
             textSize = 13f
             setSingleLine(true)
             background = roundedBg("#F1F5F9", 12f, "#CBD5E1", 2)
@@ -2114,7 +2403,7 @@ class MainActivity : AppCompatActivity() {
         searchRow.addView(edtMapSearch)
 
         val btnSearchPlace = Button(this).apply {
-            text = "بحث 🔎"
+            text = tr("بحث 🔎", "Search 🔎")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#1E293B"))
@@ -2130,41 +2419,129 @@ class MainActivity : AppCompatActivity() {
         searchRow.addView(btnSearchPlace)
         layout.addView(searchRow)
 
-        // Mode Switcher Row: Teleport Mode vs Route Simulator Mode
+        // 3-Button Mode Switcher Row: [📍 موقع واحد] [1️⃣ النقطة 1 (انطلاق)] [2️⃣ النقطة 2 (وصول)]
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 4, 0, 8)
         }
         btnModeTeleport = Button(this).apply {
-            text = "📍 نقل فوري (Teleport)"
-            textSize = 11.5f
+            text = tr("📍 موقع واحد", "📍 Single Pin")
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(0, 0, 6, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply {
+                setMargins(0, 0, 4, 0)
             }
-            setOnClickListener { setMapClickMode(false) }
+            setOnClickListener { setMapTapSelectionMode("teleport") }
         }
-        btnModeRoute = Button(this).apply {
-            text = "🛣️ رسم مسار (Route Sim)"
-            textSize = 11.5f
+        btnModePoint1 = Button(this).apply {
+            text = tr("1️⃣ النقطة 1 (انطلاق)", "1️⃣ Point 1 (Start)")
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(6, 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
+                setMargins(4, 0, 4, 0)
             }
-            setOnClickListener { setMapClickMode(true) }
+            setOnClickListener { setMapTapSelectionMode("point1") }
+        }
+        btnModePoint2 = Button(this).apply {
+            text = tr("2️⃣ النقطة 2 (وصول)", "2️⃣ Point 2 (End)")
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
+                setMargins(4, 0, 0, 0)
+            }
+            setOnClickListener { setMapTapSelectionMode("point2") }
         }
         modeRow.addView(btnModeTeleport)
-        modeRow.addView(btnModeRoute)
+        modeRow.addView(btnModePoint1)
+        modeRow.addView(btnModePoint2)
         layout.addView(modeRow)
 
-        // Google Maps Layer Switcher + Active Order Route Loader Row
+        // 2-Point Coordinates Summary & Quick Actions Box
+        val twoPtBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#F0FDF4", 12f, "#86EFAC", 2)
+            setPadding(18, 14, 18, 14)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 8)
+            }
+        }
+
+        tvTwoPointSummary = TextView(this).apply {
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#065F46"))
+            setPadding(0, 0, 0, 10)
+        }
+        twoPtBox.addView(tvTwoPointSummary)
+
+        val twoPtBtnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val btnEditTwoPts = TextView(this).apply {
+            text = tr("✏️ تعيين النقطتين 1 و 2", "✏️ Set Points 1 & 2")
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#059669", 10f)
+            setPadding(14, 12, 14, 12)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.15f).apply {
+                setMargins(0, 0, 6, 0)
+            }
+            setOnClickListener { showEditTwoPointsDialog() }
+        }
+        val btnSwapTwoPts = TextView(this).apply {
+            text = tr("🔄 عكس (1 ⇄ 2)", "🔄 Swap (1 ⇄ 2)")
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#0284C7", 10f)
+            setPadding(14, 12, 14, 12)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.95f).apply {
+                setMargins(3, 0, 3, 0)
+            }
+            setOnClickListener { swapPoint1AndPoint2() }
+        }
+        val btnBuildTwoPtRoute = TextView(this).apply {
+            text = tr("🛣️ رسم مسار 1 ➔ 2", "🛣️ Route 1 ➔ 2")
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#2563EB", 10f)
+            setPadding(14, 12, 14, 12)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
+                setMargins(6, 0, 0, 0)
+            }
+            setOnClickListener {
+                if (::mapWebView.isInitialized) {
+                    mapWebView.evaluateJavascript(
+                        "if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);",
+                        null
+                    )
+                }
+            }
+        }
+        twoPtBtnRow.addView(btnEditTwoPts)
+        twoPtBtnRow.addView(btnSwapTwoPts)
+        twoPtBtnRow.addView(btnBuildTwoPtRoute)
+        twoPtBox.addView(twoPtBtnRow)
+        layout.addView(twoPtBox)
+
+        // Layer Switcher + Active Order Route Loader Row
         val layerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, 8)
         }
         val btnLayerRoad = TextView(this).apply {
-            text = "🗺️ خريطة جوجل"
+            text = tr("🗺️ خريطة الشوارع", "🗺️ Street Map")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2179,7 +2556,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val btnLayerSat = TextView(this).apply {
-            text = "🛰️ قمر صناعي"
+            text = tr("🛰️ قمر صناعي", "🛰️ Satellite")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2194,7 +2571,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val btnLayerTraffic = TextView(this).apply {
-            text = "🚦 الزحام"
+            text = tr("🚦 الزحام", "🚦 Traffic")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2209,7 +2586,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val btnLoadOrderRoute = TextView(this).apply {
-            text = "📦 مسار طلب"
+            text = tr("📦 مسار طلب", "📦 Order Route")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2225,7 +2602,7 @@ class MainActivity : AppCompatActivity() {
         layerRow.addView(btnLoadOrderRoute)
         layout.addView(layerRow)
 
-        // Interactive Google Map Frame (920px height + touch intercept lock so dragging map never scrolls parent ScrollView)
+        // Interactive Google Map Frame
         val mapFrame = FrameLayout(this).apply {
             background = roundedBg("#E2E8F0", 16f, "#CBD5E1", 2)
             layoutParams = LinearLayout.LayoutParams(
@@ -2260,9 +2637,8 @@ class MainActivity : AppCompatActivity() {
         mapFrame.addView(mapWebView)
         layout.addView(mapFrame)
 
-        // Route Metrics & Speed Badge
+        // Route Metrics & Speed Mode Badge
         tvRouteMetricsBadge = TextView(this).apply {
-            text = "🛣️ المسار: اضغط على خريطة Google لتحديد وجهة الطريق (أو اختر 📦 مسار طلب) • السرعة المخصصة: ${routeSimSpeedKmh.toInt()} كم/س"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E3A8A"))
@@ -2280,7 +2656,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(tvRouteMetricsBadge)
 
-        // Route Simulator Control Buttons Row: [▶️ بدء محاكاة الطريق (مع تخصيص السرعة)] [⚡ السرعة] [⏸️ إيقاف مؤقت] [⏹️ إنهاء]
+        // Route Simulator Control Buttons Row
         val simCtrlRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2288,12 +2664,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartRouteSim = Button(this).apply {
-            text = "🚗 بدء محاكاة الطريق (تخصيص السرعة)"
+            text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#059669"))
             setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.6f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.55f).apply {
                 setMargins(0, 0, 6, 0)
             }
             setOnClickListener {
@@ -2303,7 +2679,7 @@ class MainActivity : AppCompatActivity() {
         simCtrlRow.addView(btnStartRouteSim)
 
         val btnSpeedDialog = Button(this).apply {
-            text = "⚡ السرعة"
+            text = tr("⚡ السرعات", "⚡ Speeds")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#2563EB"))
@@ -2334,7 +2710,7 @@ class MainActivity : AppCompatActivity() {
         simCtrlRow.addView(btnPauseRouteSim)
 
         btnStopRouteSim = Button(this).apply {
-            text = "⏹️ إيقاف"
+            text = tr("⏹️ إيقاف", "⏹️ Stop")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#DC2626"))
@@ -2345,13 +2721,17 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 stopRouteSimulation()
                 mapWebView.evaluateJavascript("if(window.clearSimulatedRoute) window.clearSimulatedRoute();", null)
-                Toast.makeText(this@MainActivity, "⏹️ تم إيقاف محاكاة الطريق وتثبيت الموقع الحالي", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("⏹️ تم إيقاف محاكاة المسار وتثبيت الموقع الحالي", "⏹️ Route simulation stopped and current location pinned"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         simCtrlRow.addView(btnStopRouteSim)
         layout.addView(simCtrlRow)
 
-        // Coordinates Row (Manual Lat / Lng + Apply Pin button)
+        // Current Live Coordinates Row
         val coordsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2359,9 +2739,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         edtLat = EditText(this).apply {
-            hint = "Latitude (Lat)"
+            hint = tr("خط العرض", "Latitude")
             val l = SettingsStore.getFakeLat(this@MainActivity)
-            setText(if (l != 0.0) String.format(Locale.US, "%.6f", l) else "24.803508")
+            setText(if (l != 0.0) String.format(Locale.US, "%.6f", l) else String.format(Locale.US, "%.6f", point1Lat))
             textSize = 12.5f
             setSingleLine(true)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -2369,9 +2749,9 @@ class MainActivity : AppCompatActivity() {
         coordsRow.addView(edtLat)
 
         edtLng = EditText(this).apply {
-            hint = "Longitude (Lng)"
+            hint = tr("خط الطول", "Longitude")
             val g = SettingsStore.getFakeLng(this@MainActivity)
-            setText(if (g != 0.0) String.format(Locale.US, "%.6f", g) else "46.604578")
+            setText(if (g != 0.0) String.format(Locale.US, "%.6f", g) else String.format(Locale.US, "%.6f", point1Lng))
             textSize = 12.5f
             setSingleLine(true)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -2379,7 +2759,7 @@ class MainActivity : AppCompatActivity() {
         coordsRow.addView(edtLng)
 
         val btnApplyCoords = Button(this).apply {
-            text = "📍 تثبيت"
+            text = tr("📍 تثبيت", "📍 Pin")
             textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#4F46E5"))
@@ -2388,31 +2768,195 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 val lt = edtLat.text.toString().toDoubleOrNull() ?: return@setOnClickListener
                 val lg = edtLng.text.toString().toDoubleOrNull() ?: return@setOnClickListener
+                point1Lat = lt
+                point1Lng = lg
+                SettingsStore.setPoint1(this@MainActivity, lt, lg)
+                updateTwoPointSummaryUI()
                 applyImmediateSpoofLocation(lt, lg, panMap = true)
-                Toast.makeText(this@MainActivity, "✅ تم تحديث الموقع الوهمي فوراً!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("✅ تم تحديث وتثبيت الموقع فوراً", "✅ Spoofed location updated and pinned immediately"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         coordsRow.addView(btnApplyCoords)
         layout.addView(coordsRow)
 
-        setMapClickMode(true)
+        updateTwoPointSummaryUI()
+        updateRouteMetricsUI()
+        setMapTapSelectionMode("point2")
         setupGoogleMapWebView()
 
         card.addView(layout)
         return card
     }
 
-    private fun setMapClickMode(routeMode: Boolean) {
-        isMapRouteClickMode = routeMode
-        if (::btnModeTeleport.isInitialized && ::btnModeRoute.isInitialized) {
-            btnModeTeleport.setBackgroundColor(Color.parseColor(if (!routeMode) "#4F46E5" else "#CBD5E1"))
-            btnModeTeleport.setTextColor(if (!routeMode) Color.WHITE else Color.parseColor("#1E293B"))
-            btnModeRoute.setBackgroundColor(Color.parseColor(if (routeMode) "#2563EB" else "#CBD5E1"))
-            btnModeRoute.setTextColor(if (routeMode) Color.WHITE else Color.parseColor("#1E293B"))
+    private fun updateTwoPointSummaryUI() {
+        if (!::tvTwoPointSummary.isInitialized) return
+        val straightDistKm = computeDistanceMeters(point1Lat, point1Lng, point2Lat, point2Lng) / 1000.0
+        tvTwoPointSummary.text = if (isAr) {
+            String.format(
+                Locale.US,
+                "1️⃣ النقطة 1 (انطلاق): %.5f, %.5f\n2️⃣ النقطة 2 (وصول):   %.5f, %.5f   •   البعد المباشر: %.2f كم",
+                point1Lat, point1Lng, point2Lat, point2Lng, straightDistKm
+            )
+        } else {
+            String.format(
+                Locale.US,
+                "1️⃣ Point 1 (Start): %.5f, %.5f\n2️⃣ Point 2 (End):   %.5f, %.5f   •   Direct Distance: %.2f km",
+                point1Lat, point1Lng, point2Lat, point2Lng, straightDistKm
+            )
+        }
+    }
+
+    private fun setMapTapSelectionMode(mode: String) {
+        mapTapMode = mode
+        if (::btnModeTeleport.isInitialized && ::btnModePoint1.isInitialized && ::btnModePoint2.isInitialized) {
+            val isTel = mode == "teleport"
+            val isP1 = mode == "point1"
+            val isP2 = mode == "point2"
+
+            btnModeTeleport.setBackgroundColor(Color.parseColor(if (isTel) "#4F46E5" else "#CBD5E1"))
+            btnModeTeleport.setTextColor(if (isTel) Color.WHITE else Color.parseColor("#1E293B"))
+
+            btnModePoint1.setBackgroundColor(Color.parseColor(if (isP1) "#059669" else "#CBD5E1"))
+            btnModePoint1.setTextColor(if (isP1) Color.WHITE else Color.parseColor("#1E293B"))
+
+            btnModePoint2.setBackgroundColor(Color.parseColor(if (isP2) "#DC2626" else "#CBD5E1"))
+            btnModePoint2.setTextColor(if (isP2) Color.WHITE else Color.parseColor("#1E293B"))
         }
         if (::mapWebView.isInitialized) {
-            mapWebView.evaluateJavascript("if(window.setClickMode) window.setClickMode('${if (routeMode) "route" else "teleport"}');", null)
+            mapWebView.evaluateJavascript("if(window.setClickMode) window.setClickMode('$mode');", null)
         }
+    }
+
+    private fun swapPoint1AndPoint2() {
+        val tmpLat = point1Lat
+        val tmpLng = point1Lng
+        point1Lat = point2Lat
+        point1Lng = point2Lng
+        point2Lat = tmpLat
+        point2Lng = tmpLng
+        SettingsStore.setPoint1(this, point1Lat, point1Lng)
+        SettingsStore.setPoint2(this, point2Lat, point2Lng)
+        updateTwoPointSummaryUI()
+        applyImmediateSpoofLocation(point1Lat, point1Lng, panMap = false)
+        if (::mapWebView.isInitialized) {
+            mapWebView.evaluateJavascript(
+                "if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, false);",
+                null
+            )
+        }
+        Toast.makeText(
+            this,
+            tr("🔄 تم عكس النقطتين (1 ⇄ 2) وإعادة رسم المسار", "🔄 Swapped Point 1 ⇄ Point 2 and rebuilt route"),
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun showEditTwoPointsDialog() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 28, 48, 16)
+        }
+
+        val info = TextView(this).apply {
+            text = tr(
+                "حدد إحداثيات النقطة 1 (نقطة الانطلاق) والنقطة 2 (نقطة الوصول) لمحاكاة الطريق بينهما:",
+                "Specify coordinates for Point 1 (Start) and Point 2 (Destination) to simulate the street route between them:"
+            )
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#334155"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(info)
+
+        val lblP1 = TextView(this).apply {
+            text = tr("1️⃣ النقطة 1 — نقطة الانطلاق (خط العرض , خط الطول):", "1️⃣ Point 1 — Start Location (Lat , Lng):")
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#059669"))
+        }
+        layout.addView(lblP1)
+
+        val rowP1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 6, 0, 12)
+        }
+        val edtP1Lat = EditText(this).apply {
+            setText(String.format(Locale.US, "%.6f", point1Lat))
+            hint = tr("عرض 1", "Lat 1")
+            textSize = 13f
+            setSingleLine(true)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val edtP1Lng = EditText(this).apply {
+            setText(String.format(Locale.US, "%.6f", point1Lng))
+            hint = tr("طول 1", "Lng 1")
+            textSize = 13f
+            setSingleLine(true)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        rowP1.addView(edtP1Lat)
+        rowP1.addView(edtP1Lng)
+        layout.addView(rowP1)
+
+        val lblP2 = TextView(this).apply {
+            text = tr("2️⃣ النقطة 2 — نقطة الوصول (خط العرض , خط الطول):", "2️⃣ Point 2 — Destination Location (Lat , Lng):")
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#DC2626"))
+        }
+        layout.addView(lblP2)
+
+        val rowP2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 6, 0, 12)
+        }
+        val edtP2Lat = EditText(this).apply {
+            setText(String.format(Locale.US, "%.6f", point2Lat))
+            hint = tr("عرض 2", "Lat 2")
+            textSize = 13f
+            setSingleLine(true)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val edtP2Lng = EditText(this).apply {
+            setText(String.format(Locale.US, "%.6f", point2Lng))
+            hint = tr("طول 2", "Lng 2")
+            textSize = 13f
+            setSingleLine(true)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        rowP2.addView(edtP2Lat)
+        rowP2.addView(edtP2Lng)
+        layout.addView(rowP2)
+
+        AlertDialog.Builder(this)
+            .setTitle(tr("1️⃣➔2️⃣ تعيين النقطتين 1 و 2 للمسار", "1️⃣➔2️⃣ Set Route Points 1 & 2"))
+            .setView(layout)
+            .setPositiveButton(tr("🛣️ حفظ ورسم المسار", "🛣️ Save & Build Route")) { _, _ ->
+                val p1Lt = edtP1Lat.text.toString().trim().toDoubleOrNull() ?: point1Lat
+                val p1Lg = edtP1Lng.text.toString().trim().toDoubleOrNull() ?: point1Lng
+                val p2Lt = edtP2Lat.text.toString().trim().toDoubleOrNull() ?: point2Lat
+                val p2Lg = edtP2Lng.text.toString().trim().toDoubleOrNull() ?: point2Lng
+                point1Lat = p1Lt
+                point1Lng = p1Lg
+                point2Lat = p2Lt
+                point2Lng = p2Lg
+                SettingsStore.setPoint1(this, point1Lat, point1Lng)
+                SettingsStore.setPoint2(this, point2Lat, point2Lng)
+                updateTwoPointSummaryUI()
+                applyImmediateSpoofLocation(point1Lat, point1Lng, panMap = false)
+                if (::mapWebView.isInitialized) {
+                    mapWebView.evaluateJavascript(
+                        "if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);",
+                        null
+                    )
+                }
+            }
+            .setNegativeButton(tr("إلغاء", "Cancel"), null)
+            .show()
     }
 
     private fun applyImmediateSpoofLocation(lat: Double, lng: Double, panMap: Boolean = false) {
@@ -2427,7 +2971,7 @@ class MainActivity : AppCompatActivity() {
             this,
             lat = lat,
             lng = lng,
-            speedKmh = if (isRouteSimRunning) routeSimSpeedKmh else 0.0f,
+            speedKmh = if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
             bearing = SettingsStore.getRouteSimBearing(this),
             simActive = isRouteSimRunning && !isRouteSimPaused
         )
@@ -2438,67 +2982,242 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Dialog requested by user:
-     * "توفير مربع حوار يطلب تخصيص سرعة في ميزة route simulator حيث يظهر كما لو انني امشي في طريق في سرعة"
+     * Dialog supporting BOTH:
+     * 1) Variable Multi-Speed Mode (بسرعات مختلفة بين حد أدنى وحد أقصى على طول الطريق من نقطة 1 إلى نقطة 2)
+     * 2) Custom Speed Mode (سرعة مخصصة يحددها المستخدم بالرقم أو بشريط التمرير)
      */
     private fun showRouteSpeedCustomizationDialog(startImmediately: Boolean) {
+        val scrollWrap = ScrollView(this)
         val dialogLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 32, 48, 24)
+            setPadding(44, 28, 44, 20)
         }
+        scrollWrap.addView(dialogLayout)
 
+        val distKm = routeTotalMeters / 1000.0
         val infoTv = TextView(this).apply {
-            val distKm = routeTotalMeters / 1000.0
             text = if (distKm > 0.01) {
-                String.format(Locale.US, "🛣️ طول المسار المحدد على الشوارع: %.2f كم\nحدد السرعة التي تريد أن يظهر بها حسابك وكأنك تمشي في الطريق:", distKm)
+                if (isAr) {
+                    String.format(Locale.US, "🛣️ مسار الطريق من النقطة 1 إلى النقطة 2: %.2f كم\nاختر نظام السرعة لمحاكاة المشي في الطريق:", distKm)
+                } else {
+                    String.format(Locale.US, "🛣️ Street route from Point 1 to Point 2: %.2f km\nChoose your speed mode for the route simulation:", distKm)
+                }
             } else {
-                "حدد السرعة بالكيلومتر/ساعة (km/h) لمحاكاة المشي في الطريق:"
+                tr(
+                    "اختر نظام السرعة لمحاكاة الطريق من النقطة 1 إلى النقطة 2 (سرعات مختلفة واقعية أو سرعة مخصصة ثابتة):",
+                    "Select speed mode for simulating the route from Point 1 to Point 2 (Variable realistic speeds or Custom fixed speed):"
+                )
             }
-            textSize = 13f
+            textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
-            setPadding(0, 0, 0, 16)
+            setPadding(0, 0, 0, 14)
         }
         dialogLayout.addView(infoTv)
+
+        var selectedVarMode = isVariableSpeedMode
+
+        val modeSwitchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 14)
+        }
+        val btnSelectVariable = Button(this).apply {
+            text = tr("🌊 بسرعات مختلفة", "🌊 Variable Speeds")
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 6, 0)
+            }
+        }
+        val btnSelectCustom = Button(this).apply {
+            text = tr("🎯 سرعة مخصصة", "🎯 Custom Speed")
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(6, 0, 0, 0)
+            }
+        }
+        modeSwitchRow.addView(btnSelectVariable)
+        modeSwitchRow.addView(btnSelectCustom)
+        dialogLayout.addView(modeSwitchRow)
+
+        // Container A: Variable Speeds Mode (Min Speed -> Max Speed)
+        val variableContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#F0FDF4", 12f, "#86EFAC", 2)
+            setPadding(24, 20, 24, 20)
+        }
+
+        val varDesc = TextView(this).apply {
+            text = tr(
+                "يتحرك الحساب من النقطة 1 إلى النقطة 2 بسرعات متغيرة تلقائياً بين الحد الأدنى والحد الأقصى (تهدئة واقعية عند المنعطفات وتسارع في الشوارع المستقيمة):",
+                "Moves from Point 1 to Point 2 at realistic varying speeds between Min and Max (smoothly slowing down on turns and accelerating on straight roads):"
+            )
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#065F46"))
+            setPadding(0, 0, 0, 12)
+        }
+        variableContainer.addView(varDesc)
+
+        val minMaxRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val minCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+        }
+        val lblMin = TextView(this).apply {
+            text = tr("الحد الأدنى (كم/س)", "Min Speed (km/h)")
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#047857"))
+        }
+        val edtMinSpd = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(routeSimMinSpeedKmh.toInt().toString())
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = roundedBg("#FFFFFF", 10f, "#6EE7B7", 2)
+            setPadding(16, 16, 16, 16)
+        }
+        minCol.addView(lblMin)
+        minCol.addView(edtMinSpd)
+
+        val maxCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(8, 0, 0, 0)
+            }
+        }
+        val lblMax = TextView(this).apply {
+            text = tr("الحد الأقصى (كم/س)", "Max Speed (km/h)")
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#047857"))
+        }
+        val edtMaxSpd = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(routeSimMaxSpeedKmh.toInt().toString())
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = roundedBg("#FFFFFF", 10f, "#6EE7B7", 2)
+            setPadding(16, 16, 16, 16)
+        }
+        maxCol.addView(lblMax)
+        maxCol.addView(edtMaxSpd)
+
+        minMaxRow.addView(minCol)
+        minMaxRow.addView(maxCol)
+        variableContainer.addView(minMaxRow)
+
+        val varPresetsLbl = TextView(this).apply {
+            text = tr("نطاقات سرعات مختلفة جاهزة:", "Quick Variable Speed Ranges:")
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#047857"))
+            setPadding(0, 12, 0, 6)
+        }
+        variableContainer.addView(varPresetsLbl)
+
+        val varPresetsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val varRanges = listOf(
+            "🛵 20-45" to (20 to 45),
+            "🚗 30-75" to (30 to 75),
+            "🛣️ 45-95" to (45 to 95),
+            "⚡ 65-120" to (65 to 120)
+        )
+        for ((lbl, pair) in varRanges) {
+            val chip = TextView(this).apply {
+                text = lbl
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor("#065F46"))
+                background = roundedBg("#D1FAE5", 10f)
+                setPadding(10, 12, 10, 12)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins(3, 0, 3, 0)
+                }
+                setOnClickListener {
+                    edtMinSpd.setText(pair.first.toString())
+                    edtMaxSpd.setText(pair.second.toString())
+                }
+            }
+            varPresetsRow.addView(chip)
+        }
+        variableContainer.addView(varPresetsRow)
+        dialogLayout.addView(variableContainer)
+
+        // Container B: Custom Fixed Speed Mode
+        val customContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#EFF6FF", 12f, "#93C5FD", 2)
+            setPadding(24, 20, 24, 20)
+        }
+
+        val custDesc = TextView(this).apply {
+            text = tr(
+                "أدخل أي سرعة مخصصة تريدها (كم/س) أو اسحب المؤشر لتثبيت سرعة محددة طوال المسار:",
+                "Enter any custom speed (km/h) or drag the slider to lock a specific speed along the route:"
+            )
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#1E3A8A"))
+            setPadding(0, 0, 0, 10)
+        }
+        customContainer.addView(custDesc)
 
         val edtSpeed = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(routeSimSpeedKmh.toInt().toString())
-            hint = "السرعة (كم/س) مثل 45"
+            hint = tr("السرعة المخصصة (كم/س) مثل 50", "Custom Speed (km/h) e.g. 50")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            background = roundedBg("#F1F5F9", 12f, "#94A3B8", 2)
-            setPadding(24, 20, 24, 20)
+            background = roundedBg("#FFFFFF", 12f, "#93C5FD", 2)
+            setPadding(24, 18, 24, 18)
         }
-        dialogLayout.addView(edtSpeed)
+        customContainer.addView(edtSpeed)
 
         val tvLiveEta = TextView(this).apply {
-            textSize = 12.5f
+            textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#059669"))
+            setTextColor(Color.parseColor("#1D4ED8"))
             gravity = Gravity.CENTER
-            setPadding(0, 12, 0, 12)
+            setPadding(0, 10, 0, 10)
         }
-        dialogLayout.addView(tvLiveEta)
+        customContainer.addView(tvLiveEta)
 
         fun updateDialogEtaPreview(spdKmh: Float) {
-            val cleanSpd = spdKmh.coerceIn(2f, 200f)
+            val cleanSpd = spdKmh.coerceIn(2f, 240f)
             val mps = cleanSpd / 3.6f
-            val distKm = routeTotalMeters / 1000.0
             if (distKm > 0.01) {
                 val totalSec = (routeTotalMeters / mps).toInt().coerceAtLeast(1)
                 val mins = totalSec / 60
                 val secs = totalSec % 60
-                tvLiveEta.text = String.format(Locale.US, "⚡ السرعة: %.0f كم/س (%.1f م/ث) • زمن الوصول المتوقع: %d د و %d ث", cleanSpd, mps, mins, secs)
+                tvLiveEta.text = if (isAr) {
+                    String.format(Locale.US, "⚡ السرعة المخصصة: %.0f كم/س (%.1f م/ث) • الوصول خلال: %d د و %d ث", cleanSpd, mps, mins, secs)
+                } else {
+                    String.format(Locale.US, "⚡ Custom Speed: %.0f km/h (%.1f m/s) • ETA: %d min %d sec", cleanSpd, mps, mins, secs)
+                }
             } else {
-                tvLiveEta.text = String.format(Locale.US, "⚡ السرعة المختارة: %.0f كم/س (%.1f متر/ثانية)", cleanSpd, mps)
+                tvLiveEta.text = if (isAr) {
+                    String.format(Locale.US, "⚡ السرعة المخصصة: %.0f كم/س (%.1f متر/ثانية)", cleanSpd, mps)
+                } else {
+                    String.format(Locale.US, "⚡ Custom Speed: %.0f km/h (%.1f m/s)", cleanSpd, mps)
+                }
             }
         }
         updateDialogEtaPreview(routeSimSpeedKmh)
 
         val seekBar = SeekBar(this).apply {
-            max = 155 // 5 km/h .. 160 km/h
-            progress = (routeSimSpeedKmh.toInt() - 5).coerceIn(0, 155)
+            max = 175 // 5 km/h .. 180 km/h
+            progress = (routeSimSpeedKmh.toInt() - 5).coerceIn(0, 175)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                     val spd = (progress + 5).toFloat()
@@ -2511,16 +3230,15 @@ class MainActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
             })
         }
-        dialogLayout.addView(seekBar)
+        customContainer.addView(seekBar)
 
-        // Quick Speed Presets Row
         val presetsLabel = TextView(this).apply {
-            text = "سرعات جاهزة بضغطة واحدة:"
-            textSize = 12f
-            setTextColor(Color.parseColor("#64748B"))
-            setPadding(0, 14, 0, 8)
+            text = tr("سرعات مخصصة سريعة:", "Quick Custom Speeds:")
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#1E3A8A"))
+            setPadding(0, 12, 0, 6)
         }
-        dialogLayout.addView(presetsLabel)
+        customContainer.addView(presetsLabel)
 
         val presetsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2535,48 +3253,103 @@ class MainActivity : AppCompatActivity() {
         for ((lbl, valSpd) in presets) {
             val chip = TextView(this).apply {
                 text = lbl
-                textSize = 11.5f
+                textSize = 11f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
                 setTextColor(Color.parseColor("#1E40AF"))
                 background = roundedBg("#DBEAFE", 10f)
-                setPadding(12, 14, 12, 14)
+                setPadding(10, 12, 10, 12)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    setMargins(4, 0, 4, 0)
+                    setMargins(3, 0, 3, 0)
                 }
                 setOnClickListener {
                     edtSpeed.setText(valSpd.toString())
-                    seekBar.progress = (valSpd - 5).coerceIn(0, 155)
+                    seekBar.progress = (valSpd - 5).coerceIn(0, 175)
                     updateDialogEtaPreview(valSpd.toFloat())
                 }
             }
             presetsRow.addView(chip)
         }
-        dialogLayout.addView(presetsRow)
+        customContainer.addView(presetsRow)
+        dialogLayout.addView(customContainer)
+
+        fun refreshModeTabsUI() {
+            variableContainer.visibility = if (selectedVarMode) View.VISIBLE else View.GONE
+            customContainer.visibility = if (!selectedVarMode) View.VISIBLE else View.GONE
+
+            btnSelectVariable.setBackgroundColor(Color.parseColor(if (selectedVarMode) "#059669" else "#E2E8F0"))
+            btnSelectVariable.setTextColor(if (selectedVarMode) Color.WHITE else Color.parseColor("#1E293B"))
+
+            btnSelectCustom.setBackgroundColor(Color.parseColor(if (!selectedVarMode) "#2563EB" else "#E2E8F0"))
+            btnSelectCustom.setTextColor(if (!selectedVarMode) Color.WHITE else Color.parseColor("#1E293B"))
+        }
+
+        btnSelectVariable.setOnClickListener {
+            selectedVarMode = true
+            refreshModeTabsUI()
+        }
+        btnSelectCustom.setOnClickListener {
+            selectedVarMode = false
+            refreshModeTabsUI()
+        }
+        refreshModeTabsUI()
 
         val chkLoop = CheckBox(this).apply {
-            text = "🔄 إعادة المسار تلقائياً ذهاباً وإياباً عند الوصول للوجهة (Loop Route)"
+            text = tr(
+                "🔄 تكرار المسار ذهاباً وإياباً بين النقطة 1 والنقطة 2 تلقائياً",
+                "🔄 Automatically loop route back and forth between Point 1 and Point 2"
+            )
             isChecked = isRouteSimLooping
-            setPadding(0, 16, 0, 0)
+            setPadding(0, 14, 0, 0)
         }
         dialogLayout.addView(chkLoop)
 
         AlertDialog.Builder(this)
-            .setTitle("🚗 تخصيص سرعة محاكي الطريق (Route Simulator)")
-            .setView(dialogLayout)
-            .setPositiveButton(if (startImmediately) "🚀 ابدأ المشي في الطريق الآن" else "💾 حفظ السرعة") { _, _ ->
-                val chosenSpd = edtSpeed.text.toString().trim().toFloatOrNull()?.coerceIn(2.0f, 220.0f) ?: 45.0f
-                routeSimSpeedKmh = chosenSpd
+            .setTitle(tr("🚗 إعدادات السرعة لمحاكي المسار (1 ➔ 2)", "🚗 Route Simulator Speed Settings (1 ➔ 2)"))
+            .setView(scrollWrap)
+            .setPositiveButton(
+                if (startImmediately) {
+                    tr("🚀 بدء محاكاة المسار الآن", "🚀 Start Route Simulation Now")
+                } else {
+                    tr("💾 حفظ إعدادات السرعة", "💾 Save Speed Settings")
+                }
+            ) { _, _ ->
+                isVariableSpeedMode = selectedVarMode
                 isRouteSimLooping = chkLoop.isChecked
-                SettingsStore.setRouteSimSpeedKmh(this, chosenSpd)
+
+                val minV = edtMinSpd.text.toString().trim().toFloatOrNull()?.coerceIn(2.0f, 220.0f) ?: 30.0f
+                val maxV = edtMaxSpd.text.toString().trim().toFloatOrNull()?.coerceIn(minV, 240.0f) ?: 75.0f
+                routeSimMinSpeedKmh = minV
+                routeSimMaxSpeedKmh = maxV
+
+                val chosenCustomSpd = edtSpeed.text.toString().trim().toFloatOrNull()?.coerceIn(2.0f, 240.0f) ?: 45.0f
+                routeSimSpeedKmh = chosenCustomSpd
+                routeSimCurrentDynamicSpeedKmh = if (isVariableSpeedMode) ((minV + maxV) / 2.0f) else chosenCustomSpd
+
+                SettingsStore.setVariableSpeedEnabled(this, isVariableSpeedMode)
+                SettingsStore.setRouteSimMinSpeedKmh(this, routeSimMinSpeedKmh)
+                SettingsStore.setRouteSimMaxSpeedKmh(this, routeSimMaxSpeedKmh)
+                SettingsStore.setRouteSimSpeedKmh(this, routeSimSpeedKmh)
+
                 updateRouteMetricsUI()
                 if (startImmediately || isRouteSimRunning) {
                     startOrResumeRouteSimulation()
                 } else {
-                    Toast.makeText(this, "✅ تم ضبط سرعة محاكي الطريق على ${chosenSpd.toInt()} كم/س", Toast.LENGTH_SHORT).show()
+                    val msg = if (isVariableSpeedMode) {
+                        tr(
+                            "✅ تم تفعيل السرعات المختلفة (${minV.toInt()} - ${maxV.toInt()} كم/س)",
+                            "✅ Variable speeds enabled (${minV.toInt()} - ${maxV.toInt()} km/h)"
+                        )
+                    } else {
+                        tr(
+                            "✅ تم ضبط السرعة المخصصة على ${chosenCustomSpd.toInt()} كم/س",
+                            "✅ Custom speed set to ${chosenCustomSpd.toInt()} km/h"
+                        )
+                    }
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
                 }
             }
-            .setNegativeButton("إلغاء", null)
+            .setNegativeButton(tr("إلغاء", "Cancel"), null)
             .show()
     }
 
@@ -2586,7 +3359,10 @@ class MainActivity : AppCompatActivity() {
             setPadding(48, 28, 48, 16)
         }
         val tv = TextView(this).apply {
-            text = "تعمل خرائط Google Maps المدمجة وتوجيه الشوارع تلقائياً بدون مفتاح.\nوإذا كان لديك مفتاح Google Maps API خاص بك (اختياري)، يمكنك إدخاله هنا لتفعيل Google Directions API الرسمي:"
+            text = tr(
+                "تعمل الخرائط المدمجة ورسم الشوارع بين النقطة 1 والنقطة 2 تلقائياً بدون مفتاح.\nوإذا كان لديك مفتاح خاص بك (اختياري)، يمكنك إدخاله هنا:",
+                "Built-in street maps and Point 1 to Point 2 routing work automatically without a key.\nIf you have your own API key (optional), you can enter it here:"
+            )
             textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
             setPadding(0, 0, 0, 14)
@@ -2594,7 +3370,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(tv)
 
         val edtKey = EditText(this).apply {
-            hint = "AIzaSy... (اختياري — اتركه فارغاً للوضع التلقائي)"
+            hint = tr("اختياري — اتركه فارغاً للوضع التلقائي", "Optional — leave blank for automatic routing")
             setText(SettingsStore.getGoogleMapsApiKey(this@MainActivity))
             textSize = 13.5f
             setSingleLine(true)
@@ -2602,15 +3378,19 @@ class MainActivity : AppCompatActivity() {
         layout.addView(edtKey)
 
         AlertDialog.Builder(this)
-            .setTitle("🔑 إعداد مفتاح Google Maps API")
+            .setTitle(tr("🔑 إعداد مفتاح الخريطة", "🔑 Map API Key Settings"))
             .setView(layout)
-            .setPositiveButton("حفظ وإعادة تحميل الخريطة") { _, _ ->
+            .setPositiveButton(tr("حفظ وإعادة تحميل الخريطة", "Save & Reload Map")) { _, _ ->
                 val key = edtKey.text.toString().trim()
                 SettingsStore.setGoogleMapsApiKey(this, key)
                 setupGoogleMapWebView()
-                Toast.makeText(this, "✅ تم تحديث إعدادات خريطة Google Maps", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    tr("✅ تم تحديث إعدادات الخريطة", "✅ Map settings updated"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
-            .setNegativeButton("إغلاق", null)
+            .setNegativeButton(tr("إغلاق", "Close"), null)
             .show()
     }
 
@@ -2621,51 +3401,98 @@ class MainActivity : AppCompatActivity() {
         val actions = mutableListOf<() -> Unit>()
 
         if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
-            options.add("🏪 المشي من موقعي الحالي ➔ المطعم (${order.restaurant.ifEmpty { "Pickup" }})")
+            options.add(
+                tr(
+                    "🏪 مسار (1 ➔ 2) من موقعي الحالي إلى المطعم (${order.restaurant.ifEmpty { "المطعم" }})",
+                    "🏪 Route (1 ➔ 2) from Current Location to Restaurant (${order.restaurant.ifEmpty { "Pickup" }})"
+                )
+            )
             actions.add {
                 switchTab(3)
-                setMapClickMode(true)
-                val sLat = if (curLat != 0.0) curLat else order.pickupLat - 0.008
-                val sLng = if (curLng != 0.0) curLng else order.pickupLng - 0.008
-                mapWebView.evaluateJavascript("if(window.buildStreetRoute) window.buildStreetRoute($sLat, $sLng, ${order.pickupLat}, ${order.pickupLng}, true);", null)
+                point1Lat = if (curLat != 0.0) curLat else order.pickupLat - 0.008
+                point1Lng = if (curLng != 0.0) curLng else order.pickupLng - 0.008
+                point2Lat = order.pickupLat
+                point2Lng = order.pickupLng
+                SettingsStore.setPoint1(this, point1Lat, point1Lng)
+                SettingsStore.setPoint2(this, point2Lat, point2Lng)
+                updateTwoPointSummaryUI()
+                mapWebView.evaluateJavascript("if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);", null)
             }
         }
         if (order.destLat != 0.0 && order.destLng != 0.0) {
             val fromLat = if (order.pickupLat != 0.0) order.pickupLat else curLat
             val fromLng = if (order.pickupLng != 0.0) order.pickupLng else curLng
-            options.add("📍 المشي من المطعم ➔ منزل العميل (Drop-off)")
+            options.add(
+                tr(
+                    "📍 مسار (1 ➔ 2) من المطعم إلى موقع العميل",
+                    "📍 Route (1 ➔ 2) from Restaurant to Customer Drop-off"
+                )
+            )
             actions.add {
                 switchTab(3)
-                setMapClickMode(true)
-                mapWebView.evaluateJavascript("if(window.buildStreetRoute) window.buildStreetRoute($fromLat, $fromLng, ${order.destLat}, ${order.destLng}, true);", null)
+                point1Lat = fromLat
+                point1Lng = fromLng
+                point2Lat = order.destLat
+                point2Lng = order.destLng
+                SettingsStore.setPoint1(this, point1Lat, point1Lng)
+                SettingsStore.setPoint2(this, point2Lat, point2Lng)
+                updateTwoPointSummaryUI()
+                mapWebView.evaluateJavascript("if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);", null)
             }
         }
         if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
-            options.add("⚡ نقل موقعي فوراً إلى عند المطعم (Teleport to Pickup)")
+            options.add(
+                tr(
+                    "⚡ نقل موقعي فوراً إلى عند المطعم",
+                    "⚡ Teleport Immediately to Restaurant"
+                )
+            )
             actions.add {
                 applyImmediateSpoofLocation(order.pickupLat, order.pickupLng, panMap = true)
-                Toast.makeText(this, "📍 تم نقل موقعك فوراً إلى المطعم!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    tr("📍 تم نقل موقعك فوراً إلى المطعم", "📍 Teleported immediately to restaurant"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         if (order.destLat != 0.0 && order.destLng != 0.0) {
-            options.add("⚡ نقل موقعي فوراً إلى منزل العميل (Teleport to Customer)")
+            options.add(
+                tr(
+                    "⚡ نقل موقعي فوراً إلى موقع العميل",
+                    "⚡ Teleport Immediately to Customer Location"
+                )
+            )
             actions.add {
                 applyImmediateSpoofLocation(order.destLat, order.destLng, panMap = true)
-                Toast.makeText(this, "📍 تم نقل موقعك فوراً إلى منزل العميل!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    tr("📍 تم نقل موقعك فوراً إلى موقع العميل", "📍 Teleported immediately to customer location"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
         if (options.isEmpty()) {
-            Toast.makeText(this, "⚠️ لا تتوفر إحداثيات لهذا الطلب بعد", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                tr("⚠️ لا تتوفر إحداثيات لهذا الطلب بعد", "⚠️ No coordinates available for this order yet"),
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
         AlertDialog.Builder(this)
-            .setTitle("🚗 محاكاة الطريق للطلب #${order.reference.ifEmpty { order.id.toString() }}")
+            .setTitle(
+                tr(
+                    "🚗 محاكاة المسار للطلب #${order.reference.ifEmpty { order.id.toString() }}",
+                    "🚗 Route Simulator for Order #${order.reference.ifEmpty { order.id.toString() }}"
+                )
+            )
             .setItems(options.toTypedArray()) { _, which ->
                 actions[which].invoke()
             }
-            .setNegativeButton("إغلاق", null)
+            .setNegativeButton(tr("إغلاق", "Close"), null)
             .show()
     }
 
@@ -2683,33 +3510,83 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (ordersWithCoords.isEmpty()) {
-            Toast.makeText(this, "اضغط مباشرة على خريطة Google لتحديد نقطة الوصول أو انتظر وصول طلب", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                tr(
+                    "اضغط مباشرة على الخريطة لتحديد النقطة 1 والنقطة 2 أو انتظر وصول طلب",
+                    "Tap directly on the map to set Point 1 and Point 2, or wait for an order"
+                ),
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
         val labels = ordersWithCoords.map { o ->
             val idStr = if (o.reference.isNotEmpty()) "#${o.reference.removePrefix("#")}" else "#${o.id}"
-            "$idStr — ${o.restaurant.ifEmpty { "طلب ساند" }} (${o.status})"
+            "$idStr — ${o.restaurant.ifEmpty { tr("طلب", "Order") }} (${localizeStatusText(o.status)})"
         }.toTypedArray()
 
         AlertDialog.Builder(this)
-            .setTitle("📦 اختر طلباً لتحميل مساره على خريطة Google")
+            .setTitle(tr("📦 اختر طلباً لتحميل مساره (نقطة 1 ➔ نقطة 2)", "📦 Select Order to Load 2-Point Route"))
             .setItems(labels) { _, which ->
                 showOrderRouteQuickPickerDialog(ordersWithCoords[which])
             }
-            .setNegativeButton("إلغاء", null)
+            .setNegativeButton(tr("إلغاء", "Cancel"), null)
             .show()
     }
 
     // =========================================================================
-    // REAL-TIME 500ms STREET ROUTE SIMULATOR ENGINE
+    // REAL-TIME 500ms 2-POINT STREET ROUTE SIMULATOR ENGINE (Variable Speeds + Custom Speed)
     // =========================================================================
+    private fun computeInstantSimulationSpeedKmh(segIdx: Int): Float {
+        if (!isVariableSpeedMode) {
+            return routeSimSpeedKmh.coerceIn(2.0f, 240.0f)
+        }
+        val minS = routeSimMinSpeedKmh.coerceIn(2.0f, 220.0f)
+        val maxS = routeSimMaxSpeedKmh.coerceIn(minS, 240.0f)
+        if (maxS - minS < 1.0f) return minS
+
+        // Check upcoming street turn angle to decelerate realistically at corners
+        var turnAngleDeg = 0.0f
+        if (segIdx + 2 < routeWaypoints.size) {
+            val a = routeWaypoints[segIdx]
+            val b = routeWaypoints[segIdx + 1]
+            val c = routeWaypoints[segIdx + 2]
+            val brg1 = computeCompassBearing(a.first, a.second, b.first, b.second)
+            val brg2 = computeCompassBearing(b.first, b.second, c.first, c.second)
+            var diff = kotlin.math.abs(brg2 - brg1)
+            if (diff > 180.0f) diff = 360.0f - diff
+            turnAngleDeg = diff
+        }
+
+        // Smooth organic oscillation + turn slowdown
+        val wave = (kotlin.math.sin(routeTickCounter * 0.18) + 1.0) * 0.5 // 0.0 .. 1.0
+        val jitter = ((System.nanoTime() % 1000L) / 1000.0 - 0.5) * 0.08
+        var factor = (wave + jitter).coerceIn(0.0, 1.0)
+        if (turnAngleDeg > 30.0f) {
+            val turnPenalty = ((turnAngleDeg - 30.0f) / 90.0f).coerceIn(0.0f, 0.85f)
+            factor *= (1.0 - turnPenalty)
+        }
+        val targetSpd = (minS + (maxS - minS) * factor).toFloat()
+        // Smooth transition from previous tick speed (realistic vehicle inertia)
+        routeSimCurrentDynamicSpeedKmh = (routeSimCurrentDynamicSpeedKmh * 0.65f + targetSpd * 0.35f).coerceIn(minS, maxS)
+        return routeSimCurrentDynamicSpeedKmh
+    }
+
     private val routeSimTickRunnable = object : Runnable {
         override fun run() {
             if (!isRouteSimRunning || isRouteSimPaused || routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
                 return
             }
+            routeTickCounter++
             val tickSec = 0.5 // 500ms tick (2 updates per second)
-            val speedMps = (routeSimSpeedKmh.coerceIn(1.0f, 220.0f) / 3.6)
+
+            // Find current segment index first to evaluate upcoming road curvature
+            var preSegIdx = 0
+            while (preSegIdx < routeCumulativeMeters.size - 2 && routeCumulativeMeters[preSegIdx + 1] < routeTraveledMeters) {
+                preSegIdx++
+            }
+            val currentSpdKmh = computeInstantSimulationSpeedKmh(preSegIdx)
+            val speedMps = (currentSpdKmh / 3.6)
             val stepMeters = speedMps * tickSec
 
             if (isRouteSimForward) {
@@ -2733,10 +3610,18 @@ class MainActivity : AppCompatActivity() {
                         )
                         isRouteSimRunning = false
                         isRouteSimPaused = false
+                        if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
+                        if (::btnStartRouteSim.isInitialized) {
+                            btnStartRouteSim.text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
+                        }
                         updateSimCoordinateInputs(lastPt.first, lastPt.second, finalBrg)
                         updateRouteSimBannerUI()
                         updateRouteMetricsUI()
-                        Toast.makeText(this@MainActivity, "🏁 وصلت إلى نهاية المسار المحدد!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@MainActivity,
+                            tr("🏁 وصلت إلى النقطة 2 (نهاية المسار المحدد)!", "🏁 Reached Point 2 (Destination)!"),
+                            Toast.LENGTH_LONG
+                        ).show()
                         return
                     }
                 }
@@ -2772,10 +3657,17 @@ class MainActivity : AppCompatActivity() {
                 this@MainActivity,
                 lat = curLat,
                 lng = curLng,
-                speedKmh = routeSimSpeedKmh,
+                speedKmh = currentSpdKmh,
                 bearing = segBearing,
                 simActive = true
             )
+            if (::btnStartRouteSim.isInitialized) {
+                btnStartRouteSim.text = if (isAr) {
+                    "🚗 يتحرك (${currentSpdKmh.toInt()} كم/س)"
+                } else {
+                    "🚗 Moving (${currentSpdKmh.toInt()} km/h)"
+                }
+            }
             updateSimCoordinateInputs(curLat, curLng, segBearing)
             updateRouteSimBannerUI()
             updateRouteMetricsUI()
@@ -2799,11 +3691,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun startOrResumeRouteSimulation() {
         if (routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
+            if (::mapWebView.isInitialized) {
+                mapWebView.evaluateJavascript(
+                    "if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, false);",
+                    null
+                )
+            }
             Toast.makeText(
                 this,
-                "⚠️ اضغط أولاً على خريطة Google لتحديد وجهة الطريق (أو اختر 📦 مسار طلب) ليتم رسم الشوارع!",
-                Toast.LENGTH_LONG
+                tr(
+                    "🛣️ جاري رسم مسار الشوارع من النقطة 1 إلى النقطة 2...",
+                    "🛣️ Building street route from Point 1 to Point 2..."
+                ),
+                Toast.LENGTH_SHORT
             ).show()
+            mainHandler.postDelayed({
+                if (routeWaypoints.size >= 2 && routeTotalMeters > 0.5) {
+                    startOrResumeRouteSimulation()
+                }
+            }, 900L)
             return
         }
         if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
@@ -2813,22 +3719,31 @@ class MainActivity : AppCompatActivity() {
             routeTraveledMeters = 0.0
             isRouteSimForward = true
         }
+        routeSimCurrentDynamicSpeedKmh = if (isVariableSpeedMode) {
+            (routeSimMinSpeedKmh + routeSimMaxSpeedKmh) / 2.0f
+        } else {
+            routeSimSpeedKmh
+        }
         isRouteSimRunning = true
         isRouteSimPaused = false
         if (::btnPauseRouteSim.isInitialized) {
             btnPauseRouteSim.visibility = View.VISIBLE
             btnPauseRouteSim.text = "⏸️"
         }
-        if (::btnStartRouteSim.isInitialized) {
-            btnStartRouteSim.text = "🚗 يتحرك (${routeSimSpeedKmh.toInt()} كم/س)"
-        }
         mainHandler.removeCallbacks(routeSimTickRunnable)
         mainHandler.post(routeSimTickRunnable)
-        Toast.makeText(
-            this,
-            "🚗 بدأت محاكاة المشي في الطريق بسرعة ${routeSimSpeedKmh.toInt()} كم/س!",
-            Toast.LENGTH_SHORT
-        ).show()
+        val toastMsg = if (isVariableSpeedMode) {
+            tr(
+                "🚗 بدأت محاكاة المسار (1 ➔ 2) بسرعات مختلفة (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} كم/س)",
+                "🚗 Started 2-Point route simulation with variable speeds (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} km/h)"
+            )
+        } else {
+            tr(
+                "🚗 بدأت محاكاة المسار (1 ➔ 2) بسرعة مخصصة ${routeSimSpeedKmh.toInt()} كم/س",
+                "🚗 Started 2-Point route simulation at custom speed ${routeSimSpeedKmh.toInt()} km/h"
+            )
+        }
+        Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
     }
 
     private fun togglePauseRouteSimulation() {
@@ -2840,11 +3755,19 @@ class MainActivity : AppCompatActivity() {
             val lng = edtLng.text.toString().toDoubleOrNull() ?: SettingsStore.getFakeLng(this)
             SettingsStore.pushLiveLocationStep(this, lat, lng, 0.0f, SettingsStore.getRouteSimBearing(this), false)
             if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.text = "▶️"
-            Toast.makeText(this, "⏸️ تم إيقاف حركة السيارة مؤقتاً في نفس النقطة", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                tr("⏸️ تم إيقاف حركة السيارة مؤقتاً في نفس النقطة", "⏸️ Vehicle movement paused at current point"),
+                Toast.LENGTH_SHORT
+            ).show()
         } else {
             if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.text = "⏸️"
             mainHandler.post(routeSimTickRunnable)
-            Toast.makeText(this, "▶️ استئناف المشي في الطريق بسرعة ${routeSimSpeedKmh.toInt()} كم/س", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                tr("▶️ تم استئناف محاكاة المسار", "▶️ Route simulation resumed"),
+                Toast.LENGTH_SHORT
+            ).show()
         }
         updateRouteSimBannerUI()
     }
@@ -2861,7 +3784,9 @@ class MainActivity : AppCompatActivity() {
             SettingsStore.pushLiveLocationStep(this, lat, lng, 0.0f, 0.0f, false)
         }
         if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
-        if (::btnStartRouteSim.isInitialized) btnStartRouteSim.text = "🚗 بدء محاكاة الطريق (تخصيص السرعة)"
+        if (::btnStartRouteSim.isInitialized) {
+            btnStartRouteSim.text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
+        }
         updateRouteSimBannerUI()
         updateRouteMetricsUI()
     }
@@ -2874,28 +3799,46 @@ class MainActivity : AppCompatActivity() {
             isRouteSimRunning && !isRouteSimPaused -> {
                 val remMeters = (routeTotalMeters - routeTraveledMeters).coerceAtLeast(0.0)
                 val remKm = remMeters / 1000.0
-                val spdMps = (routeSimSpeedKmh / 3.6).coerceAtLeast(0.5)
+                val activeSpd = if (isVariableSpeedMode) routeSimCurrentDynamicSpeedKmh else routeSimSpeedKmh
+                val spdMps = (activeSpd / 3.6).coerceAtLeast(0.5)
                 val remSec = (remMeters / spdMps).toInt()
-                tvRouteSimStatus.text = String.format(
-                    Locale.US,
-                    "🚗 يمشي في الطريق الآن بسرعة %.0f كم/س • المتبقي: %.2f كم (%d:%02d د) • 📍 %s, %s",
-                    routeSimSpeedKmh, remKm, remSec / 60, remSec % 60, lat, lng
-                )
+                tvRouteSimStatus.text = if (isAr) {
+                    String.format(
+                        Locale.US,
+                        "🚗 يتحرك من نقطة 1 إلى 2 • السرعة الآن: %.0f كم/س • المتبقي: %.2f كم (%d:%02d د) • 📍 %s, %s",
+                        activeSpd, remKm, remSec / 60, remSec % 60, lat, lng
+                    )
+                } else {
+                    String.format(
+                        Locale.US,
+                        "🚗 Moving Point 1 ➔ 2 • Current Speed: %.0f km/h • Remaining: %.2f km (%d:%02d) • 📍 %s, %s",
+                        activeSpd, remKm, remSec / 60, remSec % 60, lat, lng
+                    )
+                }
                 tvRouteSimStatus.setTextColor(Color.parseColor("#047857"))
                 tvRouteSimStatus.background = roundedBg("#ECFDF5", 12f, "#6EE7B7", 2)
             }
             isRouteSimRunning && isRouteSimPaused -> {
-                tvRouteSimStatus.text = "⏸️ محاكاة الطريق متوقفة مؤقتاً عند 📍 $lat, $lng (اضغط ▶️ للاستئناف)"
+                tvRouteSimStatus.text = tr(
+                    "⏸️ محاكاة المسار متوقفة مؤقتاً عند 📍 $lat, $lng (اضغط ▶️ للاستئناف)",
+                    "⏸️ Route simulation paused at 📍 $lat, $lng (Tap ▶️ to resume)"
+                )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#B45309"))
                 tvRouteSimStatus.background = roundedBg("#FFFBEB", 12f, "#FCD34D", 2)
             }
             SettingsStore.isFakeLocation(this) -> {
-                tvRouteSimStatus.text = "🟢 الموقع الوهمي نشط وثابت عند 📍 $lat, $lng"
+                tvRouteSimStatus.text = tr(
+                    "🟢 الموقع المزيف نشط وثابت عند 📍 $lat, $lng",
+                    "🟢 Fake location active and pinned at 📍 $lat, $lng"
+                )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#059669"))
                 tvRouteSimStatus.background = roundedBg("#F8FAFC", 12f, "#E2E8F0", 2)
             }
             else -> {
-                tvRouteSimStatus.text = "⚪ اضغط على خريطة Google لتفعيل الموقع أو رسم مسار المشي في الطريق"
+                tvRouteSimStatus.text = tr(
+                    "⚪ اضغط على الخريطة لتعيين النقطة 1 والنقطة 2 أو تثبيت موقعك",
+                    "⚪ Tap on the map to set Point 1 and Point 2 or pin your location"
+                )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#475569"))
                 tvRouteSimStatus.background = roundedBg("#F8FAFC", 12f, "#E2E8F0", 2)
             }
@@ -2904,18 +3847,43 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateRouteMetricsUI() {
         if (!::tvRouteMetricsBadge.isInitialized) return
+        val speedSummary = if (isVariableSpeedMode) {
+            if (isAr) {
+                "بسرعات مختلفة (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} كم/س)"
+            } else {
+                "Variable Speeds (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} km/h)"
+            }
+        } else {
+            if (isAr) {
+                "سرعة مخصصة (${routeSimSpeedKmh.toInt()} كم/س)"
+            } else {
+                "Custom Speed (${routeSimSpeedKmh.toInt()} km/h)"
+            }
+        }
         if (routeTotalMeters > 1.0 && routeWaypoints.size >= 2) {
             val totalKm = routeTotalMeters / 1000.0
             val remKm = ((routeTotalMeters - routeTraveledMeters).coerceAtLeast(0.0)) / 1000.0
-            val mps = (routeSimSpeedKmh / 3.6).coerceAtLeast(0.5)
+            val refSpd = if (isVariableSpeedMode) ((routeSimMinSpeedKmh + routeSimMaxSpeedKmh) / 2.0f) else routeSimSpeedKmh
+            val mps = (refSpd / 3.6).coerceAtLeast(0.5)
             val etaSec = ((routeTotalMeters - routeTraveledMeters).coerceAtLeast(0.0) / mps).toInt()
-            tvRouteMetricsBadge.text = String.format(
-                Locale.US,
-                "🛣️ مسافة الطريق: %.2f كم (المتبقي %.2f كم) • السرعة: %.0f كم/س • الوصول: %d د %d ث (اضغط لتغيير السرعة ⚡)",
-                totalKm, remKm, routeSimSpeedKmh, etaSec / 60, etaSec % 60
-            )
+            tvRouteMetricsBadge.text = if (isAr) {
+                String.format(
+                    Locale.US,
+                    "🛣️ مسار (1 ➔ 2): %.2f كم (المتبقي %.2f كم) • %s • الوصول ≈ %d د %d ث (اضغط لتعديل السرعة ⚡)",
+                    totalKm, remKm, speedSummary, etaSec / 60, etaSec % 60
+                )
+            } else {
+                String.format(
+                    Locale.US,
+                    "🛣️ Route (1 ➔ 2): %.2f km (Rem %.2f km) • %s • ETA ≈ %d m %d s (Tap to edit speed ⚡)",
+                    totalKm, remKm, speedSummary, etaSec / 60, etaSec % 60
+                )
+            }
         } else {
-            tvRouteMetricsBadge.text = "🛣️ المسار: اضغط على خريطة Google لتحديد وجهة الطريق (أو اختر 📦 مسار طلب) • السرعة: ${routeSimSpeedKmh.toInt()} كم/س"
+            tvRouteMetricsBadge.text = tr(
+                "🛣️ المسار (1 ➔ 2): حدد النقطة 1 والنقطة 2 على الخريطة • الوضع الحالي: $speedSummary",
+                "🛣️ Route (1 ➔ 2): Set Point 1 & Point 2 on the map • Current Mode: $speedSummary"
+            )
         }
     }
 
@@ -2941,13 +3909,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupGoogleMapWebView() {
-        val initialLat = edtLat.text.toString().toDoubleOrNull()?.takeIf { it != 0.0 } ?: 24.803508
-        val initialLng = edtLng.text.toString().toDoubleOrNull()?.takeIf { it != 0.0 } ?: 46.604578
         val gMapsKey = SettingsStore.getGoogleMapsApiKey(this).replace("'", "")
+        val mapLang = if (isAr) "ar" else "en"
+        val mapDir = if (isAr) "rtl" else "ltr"
+        val hudDefault = tr("خريطة المسار • اضغط لتعيين النقطة 2 ورسم الطريق 🛣️", "Route Map • Tap to set Point 2 & build route 🛣️")
+        val hudPoint1 = tr("خريطة المسار • اضغط لتعيين النقطة 1 (الانطلاق) 1️⃣", "Route Map • Tap to set Point 1 (Start) 1️⃣")
+        val hudPoint2 = tr("خريطة المسار • اضغط لتعيين النقطة 2 (الوصول) 2️⃣", "Route Map • Tap to set Point 2 (Destination) 2️⃣")
+        val hudTeleport = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
+        val hudMovingPrefix = tr("🚗 يتحرك من النقطة 1 إلى 2 (", "🚗 Moving Point 1 ➔ 2 (")
 
         val html = """
             <!DOCTYPE html>
-            <html dir="rtl" lang="ar">
+            <html dir="$mapDir" lang="$mapLang">
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -2958,7 +3931,7 @@ class MainActivity : AppCompatActivity() {
                     .gmap-badge {
                         position: absolute; bottom: 8px; left: 8px; z-index: 999;
                         background: rgba(255,255,255,0.94); color: #1a73e8;
-                        padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: bold;
+                        padding: 5px 12px; border-radius: 8px; font-size: 11px; font-weight: bold;
                         box-shadow: 0 1px 4px rgba(0,0,0,0.25); pointer-events: none;
                     }
                     .car-marker-icon {
@@ -2966,37 +3939,45 @@ class MainActivity : AppCompatActivity() {
                         width: 36px; height: 36px; border-radius: 50%;
                         background: #1a73e8; color: #fff; font-size: 19px;
                         border: 3px solid #ffffff; box-shadow: 0 2px 8px rgba(0,0,0,0.45);
-                        transition: transform 0.25s linear;
                     }
-                    .dest-marker-icon {
+                    .pt1-marker-icon {
                         display: flex; align-items: center; justify-content: center;
-                        width: 32px; height: 32px; border-radius: 50%;
-                        background: #dc2626; color: #fff; font-size: 16px;
+                        width: 30px; height: 30px; border-radius: 50%;
+                        background: #059669; color: #fff; font-size: 14px; font-weight: bold;
+                        border: 2px solid #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+                    }
+                    .pt2-marker-icon {
+                        display: flex; align-items: center; justify-content: center;
+                        width: 30px; height: 30px; border-radius: 50%;
+                        background: #dc2626; color: #fff; font-size: 14px; font-weight: bold;
                         border: 2px solid #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
                     }
                 </style>
             </head>
             <body>
                 <div id="map"></div>
-                <div class="gmap-badge" id="hudBadge">Google Maps • وضع رسم المسار 🛣️</div>
+                <div class="gmap-badge" id="hudBadge">$hudDefault</div>
                 <script>
-                    var curLat = $initialLat;
-                    var curLng = $initialLng;
-                    var clickMode = 'route';
+                    var pt1Lat = $point1Lat;
+                    var pt1Lng = $point1Lng;
+                    var pt2Lat = $point2Lat;
+                    var pt2Lng = $point2Lng;
+                    var curLat = pt1Lat;
+                    var curLng = pt1Lng;
+                    var clickMode = 'point2';
                     var googleApiKey = '$gMapsKey';
 
-                    var map = L.map('map', { zoomControl: true }).setView([curLat, curLng], 15);
+                    var map = L.map('map', { zoomControl: true }).setView([pt1Lat, pt1Lng], 14);
 
-                    // Official Google Maps Tile Servers (Roadmap, Satellite Hybrid, and Live Traffic)
-                    var googleRoadmap = L.tileLayer('https://mt1.google.com/vt/lyrs=m&hl=ar&x={x}&y={y}&z={z}', {
+                    var googleRoadmap = L.tileLayer('https://mt1.google.com/vt/lyrs=m&hl=$mapLang&x={x}&y={y}&z={z}', {
                         maxZoom: 21,
                         attribution: 'Google Maps'
                     });
-                    var googleHybrid = L.tileLayer('https://mt1.google.com/vt/lyrs=y&hl=ar&x={x}&y={y}&z={z}', {
+                    var googleHybrid = L.tileLayer('https://mt1.google.com/vt/lyrs=y&hl=$mapLang&x={x}&y={y}&z={z}', {
                         maxZoom: 21,
                         attribution: 'Google Satellite'
                     });
-                    var googleTraffic = L.tileLayer('https://mt1.google.com/vt/lyrs=m,traffic&hl=ar&x={x}&y={y}&z={z}', {
+                    var googleTraffic = L.tileLayer('https://mt1.google.com/vt/lyrs=m,traffic&hl=$mapLang&x={x}&y={y}&z={z}', {
                         maxZoom: 21,
                         attribution: 'Google Traffic'
                     });
@@ -3021,15 +4002,22 @@ class MainActivity : AppCompatActivity() {
                         iconSize: [36, 36],
                         iconAnchor: [18, 18]
                     });
-                    var destIcon = L.divIcon({
+                    var pt1Icon = L.divIcon({
                         className: '',
-                        html: '<div class="dest-marker-icon">🏁</div>',
-                        iconSize: [32, 32],
-                        iconAnchor: [16, 16]
+                        html: '<div class="pt1-marker-icon">1</div>',
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
+                    });
+                    var pt2Icon = L.divIcon({
+                        className: '',
+                        html: '<div class="pt2-marker-icon">2</div>',
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
                     });
 
-                    var driverMarker = L.marker([curLat, curLng], { icon: driverIcon, draggable: true }).addTo(map);
-                    var destMarker = null;
+                    var point1Marker = L.marker([pt1Lat, pt1Lng], { icon: pt1Icon, draggable: true }).addTo(map);
+                    var point2Marker = L.marker([pt2Lat, pt2Lng], { icon: pt2Icon, draggable: true }).addTo(map);
+                    var driverMarker = L.marker([curLat, curLng], { icon: driverIcon, draggable: true, zIndexOffset: 500 }).addTo(map);
                     var routePolyline = null;
                     var routeShadowLine = null;
 
@@ -3037,13 +4025,33 @@ class MainActivity : AppCompatActivity() {
                         clickMode = m;
                         var badge = document.getElementById('hudBadge');
                         if (badge) {
-                            badge.innerText = (m === 'route')
-                                ? 'Google Maps • اضغط على أي شارع لرسم المسار والبدء 🛣️'
-                                : 'Google Maps • اضغط على أي مكان للنقل الفوري 📍';
+                            if (m === 'point1') badge.innerText = '$hudPoint1';
+                            else if (m === 'point2') badge.innerText = '$hudPoint2';
+                            else badge.innerText = '$hudTeleport';
                         }
                     };
 
-                    driverMarker.on('dragend', function(e) {
+                    point1Marker.on('dragend', function() {
+                        var pos = point1Marker.getLatLng();
+                        pt1Lat = pos.lat;
+                        pt1Lng = pos.lng;
+                        if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                            window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                        }
+                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                    });
+
+                    point2Marker.on('dragend', function() {
+                        var pos = point2Marker.getLatLng();
+                        pt2Lat = pos.lat;
+                        pt2Lng = pos.lng;
+                        if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                            window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                        }
+                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                    });
+
+                    driverMarker.on('dragend', function() {
                         var pos = driverMarker.getLatLng();
                         curLat = pos.lat;
                         curLng = pos.lng;
@@ -3062,8 +4070,25 @@ class MainActivity : AppCompatActivity() {
                             if (window.AndroidBridge && window.AndroidBridge.onLocationMoved) {
                                 window.AndroidBridge.onLocationMoved(curLat, curLng);
                             }
+                        } else if (clickMode === 'point1') {
+                            pt1Lat = targetLat;
+                            pt1Lng = targetLng;
+                            curLat = targetLat;
+                            curLng = targetLng;
+                            point1Marker.setLatLng([pt1Lat, pt1Lng]);
+                            driverMarker.setLatLng([pt1Lat, pt1Lng]);
+                            if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                                window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
+                            }
+                            window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
                         } else {
-                            window.buildStreetRoute(curLat, curLng, targetLat, targetLng, true);
+                            pt2Lat = targetLat;
+                            pt2Lng = targetLng;
+                            point2Marker.setLatLng([pt2Lat, pt2Lng]);
+                            if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                                window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                            }
+                            window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
                         }
                     });
 
@@ -3076,21 +4101,22 @@ class MainActivity : AppCompatActivity() {
                         }
                         var badge = document.getElementById('hudBadge');
                         if (badge && pct !== undefined && pct > 0) {
-                            badge.innerText = '🚗 جاري المشي في الطريق (' + pct.toFixed(0) + '%)';
+                            badge.innerText = '$hudMovingPrefix' + pct.toFixed(0) + '%)';
                         }
                     };
 
                     window.clearSimulatedRoute = function() {
                         if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
                         if (routeShadowLine) { map.removeLayer(routeShadowLine); routeShadowLine = null; }
-                        if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
                     };
 
                     function drawRouteCoordinates(coordsLatLng, promptSpeedDialog) {
                         window.clearSimulatedRoute();
                         if (!coordsLatLng || coordsLatLng.length < 2) return;
+                        var startPt = coordsLatLng[0];
                         var endPt = coordsLatLng[coordsLatLng.length - 1];
-                        destMarker = L.marker(endPt, { icon: destIcon }).addTo(map);
+                        point1Marker.setLatLng(startPt);
+                        point2Marker.setLatLng(endPt);
                         routeShadowLine = L.polyline(coordsLatLng, { color: '#1e3a8a', weight: 9, opacity: 0.35 }).addTo(map);
                         routePolyline = L.polyline(coordsLatLng, { color: '#1a73e8', weight: 6, opacity: 0.95 }).addTo(map);
                         map.fitBounds(routePolyline.getBounds(), { padding: [35, 35] });
@@ -3100,7 +4126,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Decode Google Polyline algorithm (for Google Directions API)
                     function decodeGooglePolyline(encoded) {
                         var points = [];
                         var index = 0, len = encoded.length;
@@ -3129,11 +4154,16 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     window.buildStreetRoute = function(startLat, startLng, endLat, endLng, promptSpeedDialog) {
+                        pt1Lat = startLat;
+                        pt1Lng = startLng;
+                        pt2Lat = endLat;
+                        pt2Lng = endLng;
                         curLat = startLat;
                         curLng = startLng;
+                        point1Marker.setLatLng([startLat, startLng]);
+                        point2Marker.setLatLng([endLat, endLng]);
                         driverMarker.setLatLng([startLat, startLng]);
 
-                        // 1. If user configured a Google Maps API Key, try Google Directions API first, then fallback to OSRM Real Street Driving Router
                         if (googleApiKey && googleApiKey.length > 10) {
                             var gUrl = 'https://maps.googleapis.com/maps/api/directions/json?origin='
                                 + startLat + ',' + startLng + '&destination=' + endLat + ',' + endLng
@@ -3178,7 +4208,6 @@ class MainActivity : AppCompatActivity() {
                                 }
                             })
                             .catch(function() {
-                                // Smooth 40-segment path fallback if offline
                                 var pts = [];
                                 var steps = 40;
                                 for (var s = 0; s <= steps; s++) {
@@ -3190,10 +4219,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 drawRouteCoordinates(pts, promptSpeedDialog);
                             });
-                    };
+                    }
 
                     window.searchPlaceOnGoogleMap = function(query) {
-                        var url = 'https://nominatim.openstreetmap.org/search?format=json&accept-language=ar&limit=1&q=' + encodeURIComponent(query);
+                        var url = 'https://nominatim.openstreetmap.org/search?format=json&accept-language=$mapLang&limit=1&q=' + encodeURIComponent(query);
                         fetch(url)
                             .then(function(r) { return r.json(); })
                             .then(function(arr) {
@@ -3207,13 +4236,30 @@ class MainActivity : AppCompatActivity() {
                                         if (window.AndroidBridge && window.AndroidBridge.onLocationMoved) {
                                             window.AndroidBridge.onLocationMoved(lt, lg);
                                         }
+                                    } else if (clickMode === 'point1') {
+                                        pt1Lat = lt; pt1Lng = lg;
+                                        point1Marker.setLatLng([lt, lg]);
+                                        if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                                            window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
+                                        }
+                                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
                                     } else {
-                                        window.buildStreetRoute(curLat, curLng, lt, lg, true);
+                                        pt2Lat = lt; pt2Lng = lg;
+                                        point2Marker.setLatLng([lt, lg]);
+                                        if (window.AndroidBridge && window.AndroidBridge.onTwoPointsUpdated) {
+                                            window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                                        }
+                                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
                                     }
                                 }
                             })
                             .catch(function() {});
                     };
+
+                    // Automatically draw the initial 2-Point route on load
+                    setTimeout(function() {
+                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                    }, 350);
                 </script>
             </body>
             </html>
@@ -3228,6 +4274,28 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 stopRouteSimulation()
                 applyImmediateSpoofLocation(lat, lng, panMap = false)
+            }
+        }
+
+        @JavascriptInterface
+        fun onTwoPointsUpdated(p1Lat: Double, p1Lng: Double, p2Lat: Double, p2Lng: Double, autoSwitchToPoint2: Boolean) {
+            runOnUiThread {
+                point1Lat = p1Lat
+                point1Lng = p1Lng
+                point2Lat = p2Lat
+                point2Lng = p2Lng
+                SettingsStore.setPoint1(this@MainActivity, point1Lat, point1Lng)
+                SettingsStore.setPoint2(this@MainActivity, point2Lat, point2Lng)
+                updateTwoPointSummaryUI()
+                applyImmediateSpoofLocation(point1Lat, point1Lng, panMap = false)
+                if (autoSwitchToPoint2) {
+                    setMapTapSelectionMode("point2")
+                    Toast.makeText(
+                        this@MainActivity,
+                        tr("1️⃣ تم تحديد النقطة 1 • اضغط الآن على النقطة 2 (الوصول)", "1️⃣ Point 1 set • Now tap Point 2 (Destination)"),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
 
@@ -3260,9 +4328,15 @@ class MainActivity : AppCompatActivity() {
                     routeTotalMeters = totalM
                     routeTraveledMeters = 0.0
                     isRouteSimForward = true
-                    val dest = routeWaypoints.last()
-                    routeDestLat = dest.first
-                    routeDestLng = dest.second
+                    val startPt = routeWaypoints.first()
+                    val endPt = routeWaypoints.last()
+                    point1Lat = startPt.first
+                    point1Lng = startPt.second
+                    point2Lat = endPt.first
+                    point2Lng = endPt.second
+                    SettingsStore.setPoint1(this@MainActivity, point1Lat, point1Lng)
+                    SettingsStore.setPoint2(this@MainActivity, point2Lat, point2Lng)
+                    updateTwoPointSummaryUI()
                     updateRouteMetricsUI()
                     if (promptSpeedDialog) {
                         showRouteSpeedCustomizationDialog(startImmediately = true)
@@ -3280,7 +4354,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "⚡ Auto-Accept & Distance / Price Filters"
+            text = tr("⚡ القبول التلقائي وفلاتر المسافة والسعر", "⚡ Auto-Accept & Distance / Price Filters")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -3289,49 +4363,52 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         chkAutoAccept = CheckBox(this).apply {
-            text = "Enable Instant Auto-Accept (When order passes filters)"
+            text = tr("تفعيل القبول التلقائي الفوري للطلبات المطابقة للشروط", "Enable Instant Auto-Accept for Matching Orders")
             isChecked = SettingsStore.isAutoAccept(this@MainActivity)
         }
         layout.addView(chkAutoAccept)
 
         chkAutoReject = CheckBox(this).apply {
-            text = "Enable Auto-Reject (Automatically reject orders exceeding distance/price)"
+            text = tr("تفعيل الرفض التلقائي الفوري للطلبات المخالفة للمسافة أو السعر", "Enable Instant Auto-Reject for Orders Outside Limits")
             isChecked = SettingsStore.isAutoReject(this@MainActivity)
         }
         layout.addView(chkAutoReject)
 
         chkDryRun = CheckBox(this).apply {
-            text = "Dry-Run Mode (Log & notify orders without clicking Accept/Reject)"
+            text = tr("وضع التجربة فقط (تسجيل وإشعار بالطلبات بدون قبول أو رفض فعلي)", "Dry-Run Mode (Log & notify orders without accepting or rejecting)")
             isChecked = SettingsStore.isDryRun(this@MainActivity)
         }
         layout.addView(chkDryRun)
 
         chkStayInBackground = CheckBox(this).apply {
-            text = "Don't open Saned for orders handled for me (Stay in Background)"
+            text = tr("عدم فتح شاشة التطبيق عند معالجة الطلب تلقائياً (البقاء في الخلفية)", "Keep Target App in Background When Orders Are Handled Automatically")
             isChecked = SettingsStore.isStayInBackground(this@MainActivity)
         }
         layout.addView(chkStayInBackground)
 
         chkSilenceAlertTone = CheckBox(this).apply {
-            text = "Silence Jahez order alert tone when handled automatically"
+            text = tr("كتم صوت تنبيه الطلب المزعج عند معالجته تلقائياً", "Silence Order Alert Tone When Handled Automatically")
             isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
         }
         layout.addView(chkSilenceAlertTone)
 
         chkSoundAlert = CheckBox(this).apply {
-            text = "Play beep sound when an order is auto-accepted"
+            text = tr("تشغيل نغمة تنبيه خفيفة عند قبول الطلب تلقائياً", "Play Short Notification Beep When an Order Is Auto-Accepted")
             isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
         }
         layout.addView(chkSoundAlert)
 
         chkStrictVersionCheck = CheckBox(this).apply {
-            text = "Strict Jahez Version Check (Stop if Jahez version is not 40089/40093/40099)"
+            text = tr("التحقق الصارم من توافق إصدار التطبيق قبل التشغيل", "Strict Target App Version Verification")
             isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
         }
         layout.addView(chkStrictVersionCheck)
 
         chkShowFoodPrice = CheckBox(this).apply {
-            text = "🍔 Price Food (إظهار سعر الطعام في جميع الطلبات المقبولة والمسبقة الدفع والكاش)"
+            text = tr(
+                "🍔 إظهار سعر الطعام في جميع الطلبات المقبولة والمسبقة الدفع والنقدية",
+                "🍔 Show Food Price on All Accepted, Prepaid & Cash Orders"
+            )
             isChecked = SettingsStore.isShowFoodPrice(this@MainActivity)
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#B45309"))
@@ -3342,15 +4419,36 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkShowFoodPrice)
 
-        layout.addView(createLabel("Minimum Order Price (SAR) - Set 0 to disable limit:"))
+        layout.addView(
+            createLabel(
+                tr(
+                    "الحد الأدنى لسعر التوصيل (ضع 0 لإلغاء الشرط):",
+                    "Minimum Delivery Price (Set 0 to disable limit):"
+                )
+            )
+        )
         edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())
         layout.addView(edtMinPrice)
 
-        layout.addView(createLabel("Max Distance to Restaurant / Pickup (km) - Set 0 to disable limit:"))
+        layout.addView(
+            createLabel(
+                tr(
+                    "الحد الأقصى لبعد المطعم عنك بالكيلومتر (ضع 0 لإلغاء الشرط):",
+                    "Max Distance to Restaurant in km (Set 0 to disable limit):"
+                )
+            )
+        )
         edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).toString())
         layout.addView(edtMaxDistRest)
 
-        layout.addView(createLabel("Max Distance to Customer / Drop-off (km) - Set 0 to disable limit:"))
+        layout.addView(
+            createLabel(
+                tr(
+                    "الحد الأقصى لبعد العميل عن المطعم بالكيلومتر (ضع 0 لإلغاء الشرط):",
+                    "Max Distance to Customer in km (Set 0 to disable limit):"
+                )
+            )
+        )
         edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
         layout.addView(edtMaxDistCust)
 
@@ -3366,7 +4464,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "🌐 Active Server Polling (Background Puller)"
+            text = tr("🌐 السحب النشط للطلبات من السيرفر في الخلفية", "🌐 Active Background Server Polling")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -3375,7 +4473,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         val desc = TextView(this).apply {
-            text = "Repeatedly queries Jahez backend via OkHttp to grab unassigned orders before they appear on other drivers' screens."
+            text = tr(
+                "يفحص السيرفر بشكل متكرر لالتقاط الطلبات المتاحة فوراً قبل وصولها لبقية السائقين.",
+                "Repeatedly checks the backend server to capture available orders immediately."
+            )
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
@@ -3383,17 +4484,17 @@ class MainActivity : AppCompatActivity() {
         layout.addView(desc)
 
         chkActivePolling = CheckBox(this).apply {
-            text = "Enable Active Server Polling"
+            text = tr("تفعيل السحب النشط من السيرفر", "Enable Active Server Polling")
             isChecked = SettingsStore.isActivePolling(this@MainActivity)
             textSize = 14f
         }
         layout.addView(chkActivePolling)
 
-        layout.addView(createLabel("Poll Interval in seconds (e.g. 0.8s):"))
+        layout.addView(createLabel(tr("الفاصل الزمني للفحص بالثواني (مثال 0.8):", "Polling Interval in Seconds (e.g. 0.8):")))
         edtPollInterval = createInput(SettingsStore.getPollInterval(this).toString())
         layout.addView(edtPollInterval)
 
-        layout.addView(createLabel("Parallel Acceptance Attempts (Burst requests to win order):"))
+        layout.addView(createLabel(tr("عدد محاولات القبول المتوازية الفورية:", "Parallel Instant Acceptance Attempts:")))
         edtParallelRequests = createInput(SettingsStore.getParallelRequests(this).toString())
         layout.addView(edtParallelRequests)
 
@@ -3472,6 +4573,11 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setFakeLocation(this, fakeLoc)
         SettingsStore.setFakeLat(this, lat)
         SettingsStore.setFakeLng(this, lng)
+        SettingsStore.setPoint1(this, point1Lat, point1Lng)
+        SettingsStore.setPoint2(this, point2Lat, point2Lng)
+        SettingsStore.setVariableSpeedEnabled(this, isVariableSpeedMode)
+        SettingsStore.setRouteSimMinSpeedKmh(this, routeSimMinSpeedKmh)
+        SettingsStore.setRouteSimMaxSpeedKmh(this, routeSimMaxSpeedKmh)
 
         SettingsStore.setAutoAccept(this, autoAccept)
         SettingsStore.setAutoReject(this, autoReject)
@@ -3492,18 +4598,18 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setParallelRequests(this, parallelReqs)
 
         if (::chkHookEarlyCloaker.isInitialized) {
-  SettingsStore.setHookEarlyCloaker(this, chkHookEarlyCloaker.isChecked)
-  SettingsStore.setHookSecCloaker(this, chkHookSecCloaker.isChecked)
-  SettingsStore.setHookLocation(this, chkHookLocation.isChecked)
-  SettingsStore.setHookDeviceSpoofer(this, chkHookDeviceSpoofer.isChecked)
-  SettingsStore.setHookOrders(this, chkHookOrders.isChecked)
-  SettingsStore.setHookBootstrapLoop(this, chkHookBootstrapLoop.isChecked)
+            SettingsStore.setHookEarlyCloaker(this, chkHookEarlyCloaker.isChecked)
+            SettingsStore.setHookSecCloaker(this, chkHookSecCloaker.isChecked)
+            SettingsStore.setHookLocation(this, chkHookLocation.isChecked)
+            SettingsStore.setHookDeviceSpoofer(this, chkHookDeviceSpoofer.isChecked)
+            SettingsStore.setHookOrders(this, chkHookOrders.isChecked)
+            SettingsStore.setHookBootstrapLoop(this, chkHookBootstrapLoop.isChecked)
         }
 
         refreshOrdersLogUI()
         Toast.makeText(
             this,
-            "✅ Settings saved & applied immediately!",
+            tr("✅ تم حفظ وتطبيق جميع الإعدادات فوراً", "✅ All settings saved & applied immediately"),
             Toast.LENGTH_SHORT
         ).show()
     }
@@ -3513,11 +4619,11 @@ class MainActivity : AppCompatActivity() {
             val action = intent?.action ?: return
             when (action) {
                 "dev.saned.assistant.UI_REFRESH_ORDERS" -> {
-          refreshOrdersLogUI()
-      }
-      "dev.saned.assistant.UI_REFRESH_LOGS", "dev.saned.assistant.ACTION_DIAG_LOG" -> {
-          refreshDiagLogsUI()
-      }
+                    refreshOrdersLogUI()
+                }
+                "dev.saned.assistant.UI_REFRESH_LOGS", "dev.saned.assistant.ACTION_DIAG_LOG" -> {
+                    refreshDiagLogsUI()
+                }
                 "dev.jing.sanedhook.b" -> {
                     val ordersJson = intent.getStringExtra("o")
                     if (!ordersJson.isNullOrEmpty() && context != null) {
@@ -3550,23 +4656,39 @@ class MainActivity : AppCompatActivity() {
         val ordersCount = intent.getIntExtra("orders_count", 0)
         val httpCount = intent.getIntExtra("http_requests_count", 0)
         val pollCount = intent.getIntExtra("polling_hits", 0)
-        val lastUrl = intent.getStringExtra("last_http_url") ?: "None yet"
+        val lastUrl = intent.getStringExtra("last_http_url") ?: tr("لا يوجد بعد", "None yet")
         val lastCode = intent.getIntExtra("last_http_code", 0)
-        val lastEvent = intent.getStringExtra("last_order_event") ?: "Ready"
+        val lastEvent = intent.getStringExtra("last_order_event") ?: tr("جاهز", "Ready")
 
         runOnUiThread {
             if (::tvPingStatus.isInitialized) {
-                tvPingStatus.text = "Connected to Jahez Fleets (Ping: ${latency} ms) 🟢"
+                tvPingStatus.text = tr(
+                    "متصل بالتطبيق مباشرة (الاستجابة: ${latency} ملي ثانية) 🟢",
+                    "Connected to Target App (Ping: ${latency} ms) 🟢"
+                )
                 tvPingStatus.setTextColor(Color.parseColor("#059669"))
-                val tokenLabel = if (hasToken) "Token Cached ✅" else "Waiting for Login ⏳"
-                tvPingDetails.text = "Hook: Active  •  Auth: $tokenLabel  •  Orders Logged: $ordersCount"
+                val tokenLabel = if (hasToken) {
+                    tr("الجلسة متصلة ✅", "Token Cached ✅")
+                } else {
+                    tr("بانتظار تسجيل الدخول ⏳", "Waiting for Login ⏳")
+                }
+                tvPingDetails.text = tr(
+                    "النظام: نشط  •  المصادقة: $tokenLabel  •  الطلبات المسجلة: $ordersCount",
+                    "Hook: Active  •  Auth: $tokenLabel  •  Orders Logged: $ordersCount"
+                )
             }
 
             if (::tvHttpRequestsCount.isInitialized) {
-                tvHttpRequestsCount.text = "Total Captured HTTP Requests: $httpCount"
-                tvPollingHits.text = "Active Server Polling Hits: $pollCount"
-                tvLastHttpUrl.text = "Last Request: $lastUrl" + (if (lastCode > 0) " (HTTP $lastCode)" else "")
-                tvLastOrderEvent.text = "Last Event: $lastEvent"
+                tvHttpRequestsCount.text = tr(
+                    "إجمالي طلبات الشبكة الملتقطة: $httpCount",
+                    "Total Captured Network Requests: $httpCount"
+                )
+                tvPollingHits.text = tr(
+                    "عمليات فحص السيرفر في الخلفية: $pollCount",
+                    "Background Server Polling Hits: $pollCount"
+                )
+                tvLastHttpUrl.text = tr("آخر طلب: $lastUrl", "Last Request: $lastUrl") + (if (lastCode > 0) " (HTTP $lastCode)" else "")
+                tvLastOrderEvent.text = tr("آخر حدث: $lastEvent", "Last Event: $lastEvent")
             }
         }
     }
@@ -3579,20 +4701,35 @@ class MainActivity : AppCompatActivity() {
         val hasToken = intent.getBooleanExtra("has_token", false)
 
         runOnUiThread {
-            val tokenStr = if (hasToken) "Attached ✅" else "Missing ❌"
-            val message = """
+            val tokenStr = if (hasToken) {
+                tr("موجود ومرفق ✅", "Attached ✅")
+            } else {
+                tr("غير متوفر ❌", "Missing ❌")
+            }
+            val message = if (isAr) {
+                """
+                رمز الاستجابة: HTTP $code (${latency} ملي ثانية)
+                رمز الجلسة: $tokenStr
+                الرابط: $url
+                
+                معاينة الرد:
+                $body
+                """.trimIndent()
+            } else {
+                """
                 Status Code: HTTP $code (${latency}ms)
                 Auth Token: $tokenStr
                 Target URL: $url
                 
                 Response Preview:
                 $body
-            """.trimIndent()
+                """.trimIndent()
+            }
 
             AlertDialog.Builder(this)
-                .setTitle("🧪 Jahez API Probe Result")
+                .setTitle(tr("🧪 نتيجة فحص اتصال السيرفر", "🧪 Server API Probe Result"))
                 .setMessage(message)
-                .setPositiveButton("OK", null)
+                .setPositiveButton(tr("حسناً", "OK"), null)
                 .show()
         }
     }
