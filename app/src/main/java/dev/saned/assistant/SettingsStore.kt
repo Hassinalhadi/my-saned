@@ -21,9 +21,9 @@ object SettingsStore {
 
     fun setMasterRunning(context: Context, value: Boolean) {
         getPrefs(context).edit()
-  .putBoolean("master_running", value)
-  .putBoolean("enabled", value)
-  .apply()
+            .putBoolean("master_running", value)
+            .putBoolean("enabled", value)
+            .apply()
         broadcastSettings(context)
     }
 
@@ -62,6 +62,24 @@ object SettingsStore {
     fun setStrictVersionCheck(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("strict_version_check", value).apply()
         broadcastSettings(context)
+    }
+
+    // Extra Order Toggle (طلب إضافي / Extra Order): OFF = 2 orders (default), ON = 3 orders
+    fun isExtraOrderEnabled(context: Context): Boolean = getPrefs(context).getBoolean("extra_order_enabled", false)
+    fun setExtraOrderEnabled(context: Context, value: Boolean) {
+        val ordersCount = if (value) 3 else 2
+        getPrefs(context).edit()
+            .putBoolean("extra_order_enabled", value)
+            .putInt("max_orders_limit", ordersCount)
+            .putString("max_orders_limit_str", ordersCount.toString())
+            .apply()
+        broadcastSettings(context)
+    }
+
+    fun getMaxOrdersLimit(context: Context): Int = if (isExtraOrderEnabled(context)) 3 else 2
+    fun setMaxOrdersLimit(context: Context, value: Int) {
+        val isExtra = value >= 3
+        setExtraOrderEnabled(context, isExtra)
     }
 
     // Hook Group Isolation Toggles (Default TRUE)
@@ -105,30 +123,30 @@ object SettingsStore {
     fun getDiagLogs(context: Context): String {
         val spLogs = XposedProvider.getDiagLogs(context)
         val fileLogs = try {
-  val f = File("/data/local/tmp/saned_diag.log")
-  if (f.exists()) f.readText() else ""
+            val f = File("/data/local/tmp/saned_diag.log")
+            if (f.exists()) f.readText() else ""
         } catch (_: Throwable) { "" }
         return when {
-  spLogs.isNotEmpty() && fileLogs.isNotEmpty() -> {
-      val seen = LinkedHashSet<String>()
-      for (line in spLogs.lines()) if (line.isNotBlank()) seen.add(line)
-      for (line in fileLogs.lines()) if (line.isNotBlank()) seen.add(line)
-      seen.joinToString("\n")
-  }
-  spLogs.isNotEmpty() -> spLogs
-  else -> fileLogs
+            spLogs.isNotEmpty() && fileLogs.isNotEmpty() -> {
+                val seen = LinkedHashSet<String>()
+                for (line in spLogs.lines()) if (line.isNotBlank()) seen.add(line)
+                for (line in fileLogs.lines()) if (line.isNotBlank()) seen.add(line)
+                seen.joinToString("\n")
+            }
+            spLogs.isNotEmpty() -> spLogs
+            else -> fileLogs
         }
     }
 
     fun clearDiagLogs(context: Context) {
         XposedProvider.clearDiagLogs(context)
         try {
-  val f = File("/data/local/tmp/saned_diag.log")
-  if (f.exists()) f.writeText("")
+            val f = File("/data/local/tmp/saned_diag.log")
+            if (f.exists()) f.writeText("")
         } catch (_: Throwable) {}
     }
 
-    // Active Server Polling & Parallel Acceptance (Original Assistant Features)
+    // Active Server Polling & Parallel Acceptance
     fun isActivePolling(context: Context): Boolean = getPrefs(context).getBoolean("active_polling", true)
     fun setActivePolling(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("active_polling", value).apply()
@@ -152,10 +170,10 @@ object SettingsStore {
 
     fun setMinPrice(context: Context, value: Double) {
         getPrefs(context).edit()
-  .putString("min_price", value.toString())
-  .putString("min_order_price", value.toString())
-  .putBoolean("price_gate_enabled", value > 0.0)
-  .apply()
+            .putString("min_price", value.toString())
+            .putString("min_order_price", value.toString())
+            .putBoolean("price_gate_enabled", value > 0.0)
+            .apply()
         broadcastSettings(context)
     }
 
@@ -164,10 +182,10 @@ object SettingsStore {
 
     fun setMaxDistRest(context: Context, value: Double) {
         getPrefs(context).edit()
-  .putString("max_dist_rest", value.toString())
-  .putString("max_dist_to_restaurant", value.toString())
-  .putBoolean("restaurant_gate_enabled", value > 0.0)
-  .apply()
+            .putString("max_dist_rest", value.toString())
+            .putString("max_dist_to_restaurant", value.toString())
+            .putBoolean("restaurant_gate_enabled", value > 0.0)
+            .apply()
         broadcastSettings(context)
     }
 
@@ -176,10 +194,10 @@ object SettingsStore {
 
     fun setMaxDistCust(context: Context, value: Double) {
         getPrefs(context).edit()
-  .putString("max_dist_cust", value.toString())
-  .putString("max_dist_restaurant_to_customer", value.toString())
-  .putBoolean("customer_gate_enabled", value > 0.0)
-  .apply()
+            .putString("max_dist_cust", value.toString())
+            .putString("max_dist_restaurant_to_customer", value.toString())
+            .putBoolean("customer_gate_enabled", value > 0.0)
+            .apply()
         broadcastSettings(context)
     }
 
@@ -318,9 +336,10 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    fun isShowFoodPrice(context: Context): Boolean = getPrefs(context).getBoolean("show_food_price", true)
+    // Food Price is ALWAYS enabled by default and hidden from Settings UI
+    fun isShowFoodPrice(context: Context): Boolean = true
     fun setShowFoodPrice(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("show_food_price", value).apply()
+        getPrefs(context).edit().putBoolean("show_food_price", true).apply()
         broadcastSettings(context)
     }
 
@@ -329,8 +348,8 @@ object SettingsStore {
     fun clearOrdersLog(context: Context) {
         getPrefs(context).edit().putString("orders_log_json", "[]").apply()
         try {
-  val f = File("/data/local/tmp/saned_orders.json")
-  if (f.exists()) f.writeText("[]")
+            val f = File("/data/local/tmp/saned_orders.json")
+            if (f.exists()) f.writeText("[]")
         } catch (_: Throwable) {}
     }
 
@@ -346,6 +365,8 @@ object SettingsStore {
         val activePolling = isActivePolling(context)
         val pollInterval = getPollInterval(context)
         val parallelReqs = getParallelRequests(context)
+        val extraOrder = isExtraOrderEnabled(context)
+        val maxOrdersLim = getMaxOrdersLimit(context)
         val minPrice = getMinPrice(context)
         val maxRest = getMaxDistRest(context)
         val maxCust = getMaxDistCust(context)
@@ -357,115 +378,121 @@ object SettingsStore {
         val hBoot = isHookBootstrapLoop(context)
 
         try {
-  val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-      setPackage("net.jahez.fleets")
-      putExtra("master_running", master)
-      putExtra("auto_accept", autoAccept)
-      putExtra("auto_reject", autoReject)
-      putExtra("dry_run", dryRun)
-      putExtra("stay_in_background_v2", stayBg)
-      putExtra("silence_alert_tone", silenceTone)
-      putExtra("strict_version_check", strictVer)
-      putExtra("active_polling", activePolling)
-      putExtra("poll_interval_sec", pollInterval)
-      putExtra("parallel_requests", parallelReqs)
-      putExtra("min_price", minPrice)
-      putExtra("max_dist_rest", maxRest)
-      putExtra("max_dist_cust", maxCust)
-      putExtra("spoof_android_id", isSpoofAndroidId(context))
-      putExtra("spoofed_android_id", getSpoofedAndroidId(context))
-      putExtra("fix_location_unknown", isFixLocation(context))
-      putExtra("fake_location_enabled", isFakeLocation(context))
-      putExtra("fake_lat", getFakeLat(context))
-      putExtra("fake_lng", getFakeLng(context))
-      putExtra("route_sim_active", isRouteSimActive(context))
-      putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
-      putExtra("route_sim_bearing", getRouteSimBearing(context))
-      putExtra("sound_enabled", isSoundEnabled(context))
-      putExtra("show_toasts", isShowToasts(context))
-      putExtra("show_food_price", isShowFoodPrice(context))
-      putExtra("hook_early_cloaker", hEarly)
-      putExtra("hook_sec_cloaker", hSec)
-      putExtra("hook_location", hLoc)
-      putExtra("hook_device_spoofer", hDev)
-      putExtra("hook_orders", hOrd)
-      putExtra("hook_bootstrap_loop", hBoot)
-  }
-  context.sendBroadcast(intent)
+            val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
+                setPackage("net.jahez.fleets")
+                putExtra("master_running", master)
+                putExtra("auto_accept", autoAccept)
+                putExtra("auto_reject", autoReject)
+                putExtra("dry_run", dryRun)
+                putExtra("stay_in_background_v2", stayBg)
+                putExtra("silence_alert_tone", silenceTone)
+                putExtra("strict_version_check", strictVer)
+                putExtra("active_polling", activePolling)
+                putExtra("poll_interval_sec", pollInterval)
+                putExtra("parallel_requests", parallelReqs)
+                putExtra("extra_order_enabled", extraOrder)
+                putExtra("max_orders_limit", maxOrdersLim)
+                putExtra("min_price", minPrice)
+                putExtra("max_dist_rest", maxRest)
+                putExtra("max_dist_cust", maxCust)
+                putExtra("spoof_android_id", isSpoofAndroidId(context))
+                putExtra("spoofed_android_id", getSpoofedAndroidId(context))
+                putExtra("fix_location_unknown", isFixLocation(context))
+                putExtra("fake_location_enabled", isFakeLocation(context))
+                putExtra("fake_lat", getFakeLat(context))
+                putExtra("fake_lng", getFakeLng(context))
+                putExtra("route_sim_active", isRouteSimActive(context))
+                putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
+                putExtra("route_sim_bearing", getRouteSimBearing(context))
+                putExtra("sound_enabled", isSoundEnabled(context))
+                putExtra("show_toasts", isShowToasts(context))
+                putExtra("show_food_price", true)
+                putExtra("hook_early_cloaker", hEarly)
+                putExtra("hook_sec_cloaker", hSec)
+                putExtra("hook_location", hLoc)
+                putExtra("hook_device_spoofer", hDev)
+                putExtra("hook_orders", hOrd)
+                putExtra("hook_bootstrap_loop", hBoot)
+            }
+            context.sendBroadcast(intent)
         } catch (_: Throwable) {}
 
         try {
-  val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-      putExtra("master_running", master)
-      putExtra("auto_accept", autoAccept)
-      putExtra("auto_reject", autoReject)
-      putExtra("dry_run", dryRun)
-      putExtra("stay_in_background_v2", stayBg)
-      putExtra("silence_alert_tone", silenceTone)
-      putExtra("strict_version_check", strictVer)
-      putExtra("active_polling", activePolling)
-      putExtra("poll_interval_sec", pollInterval)
-      putExtra("parallel_requests", parallelReqs)
-      putExtra("min_price", minPrice)
-      putExtra("max_dist_rest", maxRest)
-      putExtra("max_dist_cust", maxCust)
-      putExtra("fix_location_unknown", isFixLocation(context))
-      putExtra("fake_location_enabled", isFakeLocation(context))
-      putExtra("fake_lat", getFakeLat(context))
-      putExtra("fake_lng", getFakeLng(context))
-      putExtra("route_sim_active", isRouteSimActive(context))
-      putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
-      putExtra("route_sim_bearing", getRouteSimBearing(context))
-      putExtra("sound_enabled", isSoundEnabled(context))
-      putExtra("show_toasts", isShowToasts(context))
-      putExtra("show_food_price", isShowFoodPrice(context))
-      putExtra("hook_early_cloaker", hEarly)
-      putExtra("hook_sec_cloaker", hSec)
-      putExtra("hook_location", hLoc)
-      putExtra("hook_device_spoofer", hDev)
-      putExtra("hook_orders", hOrd)
-      putExtra("hook_bootstrap_loop", hBoot)
-  }
-  context.sendBroadcast(gIntent)
+            val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
+                putExtra("master_running", master)
+                putExtra("auto_accept", autoAccept)
+                putExtra("auto_reject", autoReject)
+                putExtra("dry_run", dryRun)
+                putExtra("stay_in_background_v2", stayBg)
+                putExtra("silence_alert_tone", silenceTone)
+                putExtra("strict_version_check", strictVer)
+                putExtra("active_polling", activePolling)
+                putExtra("poll_interval_sec", pollInterval)
+                putExtra("parallel_requests", parallelReqs)
+                putExtra("extra_order_enabled", extraOrder)
+                putExtra("max_orders_limit", maxOrdersLim)
+                putExtra("min_price", minPrice)
+                putExtra("max_dist_rest", maxRest)
+                putExtra("max_dist_cust", maxCust)
+                putExtra("fix_location_unknown", isFixLocation(context))
+                putExtra("fake_location_enabled", isFakeLocation(context))
+                putExtra("fake_lat", getFakeLat(context))
+                putExtra("fake_lng", getFakeLng(context))
+                putExtra("route_sim_active", isRouteSimActive(context))
+                putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
+                putExtra("route_sim_bearing", getRouteSimBearing(context))
+                putExtra("sound_enabled", isSoundEnabled(context))
+                putExtra("show_toasts", isShowToasts(context))
+                putExtra("show_food_price", true)
+                putExtra("hook_early_cloaker", hEarly)
+                putExtra("hook_sec_cloaker", hSec)
+                putExtra("hook_location", hLoc)
+                putExtra("hook_device_spoofer", hDev)
+                putExtra("hook_orders", hOrd)
+                putExtra("hook_bootstrap_loop", hBoot)
+            }
+            context.sendBroadcast(gIntent)
         } catch (_: Throwable) {}
 
         try {
-  val json = JSONObject().apply {
-      put("master_running", master)
-      put("enabled", master)
-      put("auto_accept", autoAccept)
-      put("auto_reject", autoReject)
-      put("dry_run", dryRun)
-      put("stay_in_background_v2", stayBg)
-      put("silence_alert_tone", silenceTone)
-      put("strict_version_check", strictVer)
-      put("active_polling", activePolling)
-      put("poll_interval_sec", pollInterval.toDouble())
-      put("parallel_requests", parallelReqs)
-      put("min_price", minPrice)
-      put("max_dist_rest", maxRest)
-      put("max_dist_cust", maxCust)
-      put("spoof_android_id", isSpoofAndroidId(context))
-      put("spoofed_android_id", getSpoofedAndroidId(context))
-      put("fix_location_unknown", isFixLocation(context))
-      put("fake_location_enabled", isFakeLocation(context))
-      put("fake_lat", getFakeLat(context))
-      put("fake_lng", getFakeLng(context))
-      put("route_sim_active", isRouteSimActive(context))
-      put("route_sim_speed_kmh", getRouteSimSpeedKmh(context).toDouble())
-      put("route_sim_bearing", getRouteSimBearing(context).toDouble())
-      put("hook_early_cloaker", hEarly)
-      put("hook_sec_cloaker", hSec)
-      put("hook_location", hLoc)
-      put("hook_device_spoofer", hDev)
-      put("hook_orders", hOrd)
-      put("hook_bootstrap_loop", hBoot)
-      put("show_food_price", isShowFoodPrice(context))
-  }
-  val file = File("/data/local/tmp/saned_config.json")
-  file.writeText(json.toString())
-  file.setReadable(true, false)
-  file.setWritable(true, false)
+            val json = JSONObject().apply {
+                put("master_running", master)
+                put("enabled", master)
+                put("auto_accept", autoAccept)
+                put("auto_reject", autoReject)
+                put("dry_run", dryRun)
+                put("stay_in_background_v2", stayBg)
+                put("silence_alert_tone", silenceTone)
+                put("strict_version_check", strictVer)
+                put("active_polling", activePolling)
+                put("poll_interval_sec", pollInterval.toDouble())
+                put("parallel_requests", parallelReqs)
+                put("extra_order_enabled", extraOrder)
+                put("max_orders_limit", maxOrdersLim)
+                put("min_price", minPrice)
+                put("max_dist_rest", maxRest)
+                put("max_dist_cust", maxCust)
+                put("spoof_android_id", isSpoofAndroidId(context))
+                put("spoofed_android_id", getSpoofedAndroidId(context))
+                put("fix_location_unknown", isFixLocation(context))
+                put("fake_location_enabled", isFakeLocation(context))
+                put("fake_lat", getFakeLat(context))
+                put("fake_lng", getFakeLng(context))
+                put("route_sim_active", isRouteSimActive(context))
+                put("route_sim_speed_kmh", getRouteSimSpeedKmh(context).toDouble())
+                put("route_sim_bearing", getRouteSimBearing(context).toDouble())
+                put("hook_early_cloaker", hEarly)
+                put("hook_sec_cloaker", hSec)
+                put("hook_location", hLoc)
+                put("hook_device_spoofer", hDev)
+                put("hook_orders", hOrd)
+                put("hook_bootstrap_loop", hBoot)
+                put("show_food_price", true)
+            }
+            val file = File("/data/local/tmp/saned_config.json")
+            file.writeText(json.toString())
+            file.setReadable(true, false)
+            file.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 }

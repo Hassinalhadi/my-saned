@@ -145,10 +145,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chkSilenceAlertTone: CheckBox
     private lateinit var chkSoundAlert: CheckBox
     private lateinit var chkStrictVersionCheck: CheckBox
-    private lateinit var chkShowFoodPrice: CheckBox
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
+    private lateinit var btnExtraOrder: Button
+    private var isExtraOrderEnabled: Boolean = false
 
     // Active Server Polling & Parallel Acceptance
     private lateinit var chkActivePolling: CheckBox
@@ -1054,11 +1055,11 @@ class MainActivity : AppCompatActivity() {
             val maxRest = SettingsStore.getMaxDistRest(this)
             val maxCust = SettingsStore.getMaxDistCust(this)
             val minP = SettingsStore.getMinPrice(this)
-            val showFood = SettingsStore.isShowFoodPrice(this)
+            val maxOrdCount = SettingsStore.getMaxOrdersLimit(this)
             tvOrdersSubStatus.text = if (isRun) {
                 tr(
-                    "🟢 نشط • القبول: ${if (isAcc) "مفعل" else "متوقف"} • الرفض: ${if (isRej) "مفعل" else "متوقف"} • المطعم≤${maxRest}كم • العميل≤${maxCust}كم • الأدنى≥${minP} • سعر الطعام: ${if (showFood) "مفعل" else "متوقف"}",
-                    "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Food Price: ${if (showFood) "ON" else "OFF"}"
+                    "🟢 نشط • القبول: ${if (isAcc) "مفعل" else "متوقف"} • الرفض: ${if (isRej) "مفعل" else "متوقف"} • الطلبات: $maxOrdCount • المطعم≤${maxRest}كم • العميل≤${maxCust}كم • الأدنى≥${minP}",
+                    "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Orders: $maxOrdCount • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP}"
                 )
             } else {
                 tr(
@@ -4404,21 +4405,6 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkStrictVersionCheck)
 
-        chkShowFoodPrice = CheckBox(this).apply {
-            text = tr(
-                "🍔 إظهار سعر الطعام في جميع الطلبات المقبولة والمسبقة الدفع والنقدية",
-                "🍔 Show Food Price on All Accepted, Prepaid & Cash Orders"
-            )
-            isChecked = SettingsStore.isShowFoodPrice(this@MainActivity)
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#B45309"))
-            setOnCheckedChangeListener { _, isChecked ->
-                SettingsStore.setShowFoodPrice(this@MainActivity, isChecked)
-                refreshOrdersLogUI()
-            }
-        }
-        layout.addView(chkShowFoodPrice)
-
         layout.addView(
             createLabel(
                 tr(
@@ -4452,8 +4438,56 @@ class MainActivity : AppCompatActivity() {
         edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
         layout.addView(edtMaxDistCust)
 
+        isExtraOrderEnabled = SettingsStore.isExtraOrderEnabled(this)
+        layout.addView(
+            createLabel(
+                tr(
+                    "عدد الطلبات المسموح بها (مغلق = 2 طلبات • مفعل = 3 طلبات):",
+                    "Allowed Orders Count (OFF = 2 Orders • ON = 3 Orders):"
+                )
+            )
+        )
+        btnExtraOrder = Button(this).apply {
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(24, 22, 24, 22)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 6, 0, 4)
+            }
+            setOnClickListener {
+                isExtraOrderEnabled = !isExtraOrderEnabled
+                SettingsStore.setExtraOrderEnabled(this@MainActivity, isExtraOrderEnabled)
+                updateExtraOrderButtonUI()
+                refreshOrdersLogUI()
+                val msg = if (isExtraOrderEnabled) {
+                    tr("✅ تم تفعيل طلب إضافي (عدد الطلبات الآن: 3)", "✅ Extra Order enabled (Orders count is now: 3)")
+                } else {
+                    tr("⚪ تم إغلاق طلب إضافي (العدد الافتراضي للطلبات: 2)", "⚪ Extra Order disabled (Default orders count: 2)")
+                }
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+        updateExtraOrderButtonUI()
+        layout.addView(btnExtraOrder)
+
         card.addView(layout)
         return card
+    }
+
+    private fun updateExtraOrderButtonUI() {
+        if (!::btnExtraOrder.isInitialized) return
+        if (isExtraOrderEnabled) {
+            btnExtraOrder.text = tr("➕ طلب إضافي: مفعل ✅ (عدد الطلبات: 3)", "➕ Extra Order: ON ✅ (Orders: 3)")
+            btnExtraOrder.setBackgroundColor(Color.parseColor("#059669"))
+            btnExtraOrder.setTextColor(Color.WHITE)
+        } else {
+            btnExtraOrder.text = tr("➕ طلب إضافي: مغلق (عدد الطلبات: 2)", "➕ Extra Order: OFF (Orders: 2)")
+            btnExtraOrder.setBackgroundColor(Color.parseColor("#475569"))
+            btnExtraOrder.setTextColor(Color.WHITE)
+        }
     }
 
     private fun createPollingCard(): CardView {
@@ -4586,9 +4620,8 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
         SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
         SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)
-        if (::chkShowFoodPrice.isInitialized) {
-            SettingsStore.setShowFoodPrice(this, chkShowFoodPrice.isChecked)
-        }
+        SettingsStore.setShowFoodPrice(this, true)
+        SettingsStore.setExtraOrderEnabled(this, isExtraOrderEnabled)
         SettingsStore.setMinPrice(this, minPrice)
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)

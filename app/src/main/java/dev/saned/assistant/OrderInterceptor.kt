@@ -98,6 +98,8 @@ object OrderInterceptor {
     @Volatile var minOrderPrice: Double = 0.0
     @Volatile var maxDistToRestaurant: Double = 0.0
     @Volatile var maxDistCustomer: Double = 0.0
+    @Volatile var isExtraOrderEnabled: Boolean = false
+    @Volatile var maxOrdersLimit: Int = 2
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
 
@@ -1056,6 +1058,8 @@ object OrderInterceptor {
         minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
         maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
+        isExtraOrderEnabled = intent.getBooleanExtra("extra_order_enabled", isExtraOrderEnabled)
+        maxOrdersLimit = if (isExtraOrderEnabled) 3 else intent.getIntExtra("max_orders_limit", 2).coerceIn(2, 3)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
         isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
         LocationEngine.isMasterRunning = isMasterRunning
@@ -1090,6 +1094,8 @@ object OrderInterceptor {
                 minOrderPrice = json.optDouble("min_price", minOrderPrice)
                 maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
                 maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
+                isExtraOrderEnabled = json.optBoolean("extra_order_enabled", isExtraOrderEnabled)
+                maxOrdersLimit = if (isExtraOrderEnabled) 3 else json.optInt("max_orders_limit", 2).coerceIn(2, 3)
             }
         } catch (_: Throwable) {}
     }
@@ -1126,6 +1132,8 @@ object OrderInterceptor {
                     minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
                     maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
                     maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
+                    isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", isExtraOrderEnabled)
+                    maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
                 }
@@ -1149,6 +1157,8 @@ object OrderInterceptor {
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
+            isExtraOrderEnabled = p.getBoolean("extra_order_enabled", isExtraOrderEnabled)
+            maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
@@ -2995,9 +3005,29 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
+    fun countCurrentActiveOrders(): Int {
+        var count = 0
+        synchronized(syncedOrdersCache) {
+            for (obj in syncedOrdersCache.values) {
+                val st = obj.optString("status", "").uppercase(Locale.US)
+                val isMissed = obj.optBoolean("isMissedOrRejected", false)
+                if (!isMissed && (st.contains("ACCEPT") || st.contains("DISPATCH") || st.contains("PICKED") || st.contains("ARRIV") || st.contains("PROGRESS"))) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
         if (!isMasterRunning) {
             return "MANUAL" to "Master switch off"
+        }
+
+        val effectiveMaxOrders = if (isExtraOrderEnabled) 3 else 2
+        val currentActive = countCurrentActiveOrders()
+        if (currentActive >= effectiveMaxOrders) {
+            return "MANUAL" to "Reached max orders limit ($currentActive / $effectiveMaxOrders)"
         }
 
         val failedReasons = mutableListOf<String>()
