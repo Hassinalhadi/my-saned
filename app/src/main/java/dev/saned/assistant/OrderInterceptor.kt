@@ -564,6 +564,10 @@ object OrderInterceptor {
                 "dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {
                     clearPersistedToken()
                 }
+                "dev.saned.assistant.ACTION_CLEAR_ORDERS" -> {
+                    synchronized(syncedOrdersCache) { syncedOrdersCache.clear() }
+                    liveActiveOrderMap.clear()
+                }
                 "dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS" -> {
                     val oid = intent.getStringExtra("order_id") ?: ""
                     val oref = intent.getStringExtra("reference") ?: ""
@@ -607,6 +611,7 @@ object OrderInterceptor {
         val pingTimestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
 
         CoroutineScope(Dispatchers.IO).launch {
+            try { syncSettings(app.contentResolver) } catch (_: Throwable) {}
             val nowRt = SystemClock.elapsedRealtime()
             if (nowRt - lastPingDbScanRealtime > 6000L) {
                 lastPingDbScanRealtime = nowRt
@@ -911,6 +916,7 @@ object OrderInterceptor {
               if (appContext == null) {
                   try { initAppContext(ctx) } catch (_: Throwable) {}
               }
+              try { syncSettings(ctx.contentResolver) } catch (_: Throwable) {}
               readExactJahezEncryptedPrefs(ctx)
               val nowRt = SystemClock.elapsedRealtime()
               if ((nowRt - lastSocketTouchRealtime) >= 18_000L) {
@@ -1016,6 +1022,7 @@ object OrderInterceptor {
       addAction("dev.saned.assistant.ACTION_TEST_API")
       addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
       addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
+      addAction("dev.saned.assistant.ACTION_CLEAR_ORDERS")
       addAction("dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS")
   }
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1027,7 +1034,7 @@ object OrderInterceptor {
   DiagnosticLogger.logError("initAppContext", "Failed registering settingsReceiver", t)
         }
 
-        loadFallbackConfigFile()
+        syncSettings(app.contentResolver)
         LocationEngine.syncLocationSettings()
         DeviceSpoofer.syncSettings()
         LocationEngine.seedLocationManager(app)
@@ -1138,8 +1145,9 @@ object OrderInterceptor {
                     minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
                     maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
                     maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-                    isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", isExtraOrderEnabled)
-                    maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
+                    val bMax = bundle.getString("max_orders_limit_str", null)?.toIntOrNull() ?: bundle.getInt("max_orders_limit", 0)
+                    isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", bMax >= 3)
+                    maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
                 }
@@ -1163,8 +1171,9 @@ object OrderInterceptor {
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-            isExtraOrderEnabled = p.getBoolean("extra_order_enabled", isExtraOrderEnabled)
-            maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
+            val pMax = p.getString("max_orders_limit_str", null)?.toIntOrNull() ?: p.getInt("max_orders_limit", 0)
+            isExtraOrderEnabled = p.getBoolean("extra_order_enabled", pMax >= 3)
+            maxOrdersLimit = if (isExtraOrderEnabled || pMax >= 3) 3 else 2
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
@@ -2078,6 +2087,10 @@ object OrderInterceptor {
 
         val uSt = rawStatus.uppercase(Locale.US)
         val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
+        if (isCompleteOrOld) {
+            removeOrderLiveActive(idStr)
+            removeOrderLiveActive(refStr)
+        }
         if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
@@ -2705,6 +2718,7 @@ object OrderInterceptor {
               if (ctx != null) readExactJahezEncryptedPrefs(ctx)
           } else if (code in 200..299 && body.isNotEmpty()) {
               failedPollingCount = 0
+              reconcileLiveActiveOrdersFromServer(body)
               findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
               return
           }
@@ -3069,18 +3083,72 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
-    fun countCurrentActiveOrders(): Int {
-        var count = 0
-        synchronized(syncedOrdersCache) {
-            for (obj in syncedOrdersCache.values) {
-                val st = obj.optString("status", "").uppercase(Locale.US)
-                val isMissed = obj.optBoolean("isMissedOrRejected", false)
-                if (!isMissed && (st.contains("ACCEPT") || st.contains("DISPATCH") || st.contains("PICKED") || st.contains("ARRIV") || st.contains("PROGRESS"))) {
-                    count++
+    // Tracks only genuinely active live orders (orderId -> elapsedRealtimeMs when confirmed active),
+    // automatically pruning completed/delivered orders and entries older than 12 minutes so stale cache entries NEVER block new orders!
+    private val liveActiveOrderMap = ConcurrentHashMap<String, Long>()
+
+    fun markOrderLiveActive(orderIdOrRef: String) {
+        val clean = orderIdOrRef.replace("#", "").trim()
+        if (clean.isEmpty() || clean == "0") return
+        liveActiveOrderMap[clean] = SystemClock.elapsedRealtime()
+    }
+
+    fun removeOrderLiveActive(orderIdOrRef: String) {
+        val clean = orderIdOrRef.replace("#", "").trim()
+        if (clean.isEmpty()) return
+        liveActiveOrderMap.remove(clean)
+    }
+
+    fun reconcileLiveActiveOrdersFromServer(rawJson: String) {
+        try {
+            val trimmed = rawJson.trim()
+            val arr = when {
+                trimmed.startsWith("[") -> JSONArray(trimmed)
+                trimmed.startsWith("{") -> {
+                    val obj = JSONObject(trimmed)
+                    obj.optJSONArray("data") ?: obj.optJSONArray("dispatches") ?: obj.optJSONArray("orders") ?: return
+                }
+                else -> return
+            }
+            val now = SystemClock.elapsedRealtime()
+            val serverActiveIds = HashSet<String>()
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val st = (item.optString("status", "") + " " + item.optString("dispatchStatus", "")).uppercase(Locale.US)
+                val isAssignedActive = st.contains("ACCEPT") || st.contains("PICKED") || st.contains("ARRIV") || st.contains("PROGRESS") || st.contains("COLLECT")
+                if (isAssignedActive) {
+                    val idVal = item.optInt("requestId", item.optInt("dispatchId", item.optInt("id", 0)))
+                    if (idVal > 0) {
+                        val key = idVal.toString()
+                        serverActiveIds.add(key)
+                        liveActiveOrderMap[key] = now
+                    }
                 }
             }
+            // Remove any entry in liveActiveOrderMap that was accepted > 20s ago if the server says it is no longer active
+            val iter = liveActiveOrderMap.entries.iterator()
+            while (iter.hasNext()) {
+                val e = iter.next()
+                if (!serverActiveIds.contains(e.key) && (now - e.value) > 20_000L) {
+                    iter.remove()
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    fun countCurrentActiveOrders(): Int {
+        val now = SystemClock.elapsedRealtime()
+        val iter = liveActiveOrderMap.entries.iterator()
+        var activeCount = 0
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (now - entry.value > 12 * 60_000L) {
+                iter.remove()
+            } else {
+                activeCount++
+            }
         }
-        return count
+        return activeCount
     }
 
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
@@ -3088,7 +3156,7 @@ object OrderInterceptor {
             return "MANUAL" to "Master switch off"
         }
 
-        val effectiveMaxOrders = if (isExtraOrderEnabled) 3 else 2
+        val effectiveMaxOrders = if (isExtraOrderEnabled || maxOrdersLimit >= 3) 3 else 2
         val currentActive = countCurrentActiveOrders()
         if (currentActive >= effectiveMaxOrders) {
             return "MANUAL" to "Reached max orders limit ($currentActive / $effectiveMaxOrders)"
@@ -3360,6 +3428,7 @@ object OrderInterceptor {
                             winBodyStr = bodyStr
                             if (isAccept && orderIdInt != 0) {
                                 apiConfirmedAcceptIds.add(orderIdInt)
+                    if (orderIdInt > 0) markOrderLiveActive(orderIdInt.toString())
                                 verifiedAcceptMethod = "PUT"
                                 verifiedAcceptUrlTemplate = "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/{id}"
                             }

@@ -69,6 +69,15 @@ class XposedProvider : ContentProvider() {
         }
 
         @Synchronized
+        fun clearCachedOrders(ctx: Context) {
+            try {
+                lastSavedOrdersJson = "[]"
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                prefs.edit().putString("orders_log_json", "[]").apply()
+            } catch (_: Throwable) {}
+        }
+
+        @Synchronized
         fun clearDiagLogs(ctx: Context) {
             try {
                 cachedDiagLogText = ""

@@ -346,10 +346,20 @@ object SettingsStore {
     fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
     fun clearOrdersLog(context: Context) {
         getPrefs(context).edit().putString("orders_log_json", "[]").apply()
+        val appCtx = context.applicationContext ?: context
         bgSyncExecutor.execute {
+            try {
+                io.github.libxposed.service.XposedProvider.clearCachedOrders(appCtx)
+            } catch (_: Throwable) {}
             try {
                 val f = File("/data/local/tmp/saned_orders.json")
                 if (f.exists()) f.writeText("[]")
+            } catch (_: Throwable) {}
+            try {
+                appCtx.sendBroadcast(Intent("dev.saned.assistant.ACTION_CLEAR_ORDERS").apply {
+                    setPackage("net.jahez.fleets")
+                })
+                appCtx.sendBroadcast(Intent("dev.saned.assistant.ACTION_CLEAR_ORDERS"))
             } catch (_: Throwable) {}
         }
     }
