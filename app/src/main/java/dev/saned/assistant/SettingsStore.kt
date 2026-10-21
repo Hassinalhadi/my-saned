@@ -208,6 +208,48 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
+    // Route Simulator & Google Maps API Key
+    fun isRouteSimActive(context: Context): Boolean = getPrefs(context).getBoolean("route_sim_active", false)
+    fun setRouteSimActive(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("route_sim_active", value).apply()
+        broadcastSettings(context)
+    }
+
+    fun getRouteSimSpeedKmh(context: Context): Float = getPrefs(context).getFloat("route_sim_speed_kmh", 45.0f)
+    fun setRouteSimSpeedKmh(context: Context, value: Float) {
+        getPrefs(context).edit().putFloat("route_sim_speed_kmh", value.coerceIn(1.0f, 220.0f)).apply()
+        broadcastSettings(context)
+    }
+
+    fun getRouteSimBearing(context: Context): Float = getPrefs(context).getFloat("route_sim_bearing", 0.0f)
+    fun setRouteSimBearing(context: Context, value: Float) {
+        getPrefs(context).edit().putFloat("route_sim_bearing", value).apply()
+    }
+
+    fun getGoogleMapsApiKey(context: Context): String = getPrefs(context).getString("google_maps_api_key", "") ?: ""
+    fun setGoogleMapsApiKey(context: Context, value: String) {
+        getPrefs(context).edit().putString("google_maps_api_key", value.trim()).apply()
+    }
+
+    fun pushLiveLocationStep(
+        context: Context,
+        lat: Double,
+        lng: Double,
+        speedKmh: Float,
+        bearing: Float,
+        simActive: Boolean
+    ) {
+        getPrefs(context).edit()
+            .putBoolean("fake_location_enabled", true)
+            .putString("fake_lat", lat.toString())
+            .putString("fake_lng", lng.toString())
+            .putBoolean("route_sim_active", simActive)
+            .putFloat("route_sim_speed_kmh", speedKmh.coerceIn(1.0f, 220.0f))
+            .putFloat("route_sim_bearing", bearing)
+            .apply()
+        broadcastSettings(context)
+    }
+
     // Android ID
     fun isSpoofAndroidId(context: Context): Boolean = getPrefs(context).getBoolean("spoof_android_id", false)
     fun setSpoofAndroidId(context: Context, value: Boolean) {
@@ -294,6 +336,9 @@ object SettingsStore {
       putExtra("fake_location_enabled", isFakeLocation(context))
       putExtra("fake_lat", getFakeLat(context))
       putExtra("fake_lng", getFakeLng(context))
+      putExtra("route_sim_active", isRouteSimActive(context))
+      putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
+      putExtra("route_sim_bearing", getRouteSimBearing(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
       putExtra("show_food_price", isShowFoodPrice(context))
@@ -326,6 +371,9 @@ object SettingsStore {
       putExtra("fake_location_enabled", isFakeLocation(context))
       putExtra("fake_lat", getFakeLat(context))
       putExtra("fake_lng", getFakeLng(context))
+      putExtra("route_sim_active", isRouteSimActive(context))
+      putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
+      putExtra("route_sim_bearing", getRouteSimBearing(context))
       putExtra("sound_enabled", isSoundEnabled(context))
       putExtra("show_toasts", isShowToasts(context))
       putExtra("show_food_price", isShowFoodPrice(context))
@@ -361,6 +409,9 @@ object SettingsStore {
       put("fake_location_enabled", isFakeLocation(context))
       put("fake_lat", getFakeLat(context))
       put("fake_lng", getFakeLng(context))
+      put("route_sim_active", isRouteSimActive(context))
+      put("route_sim_speed_kmh", getRouteSimSpeedKmh(context).toDouble())
+      put("route_sim_bearing", getRouteSimBearing(context).toDouble())
       put("hook_early_cloaker", hEarly)
       put("hook_sec_cloaker", hSec)
       put("hook_location", hLoc)
