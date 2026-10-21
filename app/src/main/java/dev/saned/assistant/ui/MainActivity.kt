@@ -83,6 +83,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvPingDetails: TextView
     private var lastPongTimestamp: Long = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val uiBgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "Saned-UI-Worker").apply { isDaemon = true }
+    }
+    private var lastRenderedOrdersSignature: String = ""
+    private var lastRenderedLogsSignature: String = ""
+    private var lastReceivedBatchHash: Int = 0
 
     // OkHttp & Diagnostics UI
     private lateinit var tvOkHttpHookStatus: TextView
@@ -241,8 +247,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(20, 10, 20, 10)
             setOnClickListener {
                 SettingsStore.clearOrdersLog(this@MainActivity)
-                try { File("/data/local/tmp/saned_orders.json").delete() } catch (_: Throwable) {}
-                refreshOrdersLogUI()
+                lastRenderedOrdersSignature = ""
+                refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
                     this@MainActivity,
                     tr("تم مسح قائمة الطلبات", "Orders list cleared"),
@@ -258,7 +264,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(20, 10, 10, 10)
             setOnClickListener {
                 sendPing()
-                refreshOrdersLogUI()
+                lastRenderedOrdersSignature = ""
+                refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
                     this@MainActivity,
                     tr("تم تحديث الطلبات وحالة الاتصال", "Orders & connection refreshed"),
@@ -428,7 +435,7 @@ class MainActivity : AppCompatActivity() {
         navMapLabel.setTextColor(Color.parseColor(if (tabIndex == 3) "#4C1D95" else "#64748B"))
 
         if (tabIndex == 0) refreshOrdersLogUI()
-        if (tabIndex == 2) refreshDiagLogsUI()
+        if (tabIndex == 2) refreshDiagLogsUI(force = true)
         if (tabIndex == 3 && ::mapWebView.isInitialized) {
             mapWebView.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)
         }
@@ -498,7 +505,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     tr("🔎 عرض كل السجلات", "🔎 Show All Logs")
                 }
-                refreshDiagLogsUI()
+                refreshDiagLogsUI(force = true)
             }
         }
         btnRow1.addView(btnFilterToggle)
@@ -662,9 +669,13 @@ class MainActivity : AppCompatActivity() {
         return scroll
     }
 
-    private fun refreshDiagLogsUI() {
+    private fun refreshDiagLogsUI(force: Boolean = false) {
         if (!::tvDiagLogConsole.isInitialized) return
+        if (!force && currentTab != 2) return
         val rawLogs = SettingsStore.getDiagLogs(this)
+        val logSig = "${rawLogs.hashCode()}:${rawLogs.length}:$filterErrorsOnly:$isAr"
+        if (!force && logSig == lastRenderedLogsSignature) return
+        lastRenderedLogsSignature = logSig
         if (rawLogs.isBlank()) {
             tvDiagLogSummary.text = tr(
                 "🟢 لا توجد أخطاء مسجلة — افتح تطبيق ساند لبدء التسجيل المباشر",
@@ -1045,7 +1056,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshOrdersLogUI() {
+    private fun refreshOrdersLogUI(forceRebuild: Boolean = false) {
         if (!::activeOrdersContainer.isInitialized) return
 
         if (::tvOrdersSubStatus.isInitialized) {
@@ -1070,24 +1081,17 @@ class MainActivity : AppCompatActivity() {
             tvOrdersSubStatus.setTextColor(if (isRun) Color.parseColor("#059669") else Color.parseColor("#D97706"))
         }
 
+        val jsonStr = SettingsStore.getOrdersLog(this)
+        val currentSig = "$isAr:${jsonStr.hashCode()}:${jsonStr.length}"
+        if (!forceRebuild && currentSig == lastRenderedOrdersSignature) {
+            return
+        }
+        lastRenderedOrdersSignature = currentSig
+
         activeOrdersContainer.removeAllViews()
         missedOrdersContainer.removeAllViews()
 
-        val jsonStr = SettingsStore.getOrdersLog(this)
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
-
-        try {
-            val f = File("/data/local/tmp/saned_orders.json")
-            if (f.exists()) {
-                val fArray = JSONArray(f.readText())
-                for (jdx in 0 until fArray.length()) {
-                    val fItm = fArray.optJSONObject(jdx)
-                    if (fItm != null) {
-                        array.put(fItm)
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
 
         if (array.length() == 0) {
             tvOrdersEmptyState.visibility = View.VISIBLE
@@ -2615,6 +2619,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         mapWebView = WebView(this).apply {
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.databaseEnabled = true
@@ -4660,9 +4665,13 @@ class MainActivity : AppCompatActivity() {
                 "dev.jing.sanedhook.b" -> {
                     val ordersJson = intent.getStringExtra("o")
                     if (!ordersJson.isNullOrEmpty() && context != null) {
-                        io.github.libxposed.service.XposedProvider.saveOrdersBatch(context, ordersJson)
+                        val appCtx = context.applicationContext ?: context
+                        uiBgExecutor.execute {
+                            io.github.libxposed.service.XposedProvider.saveOrdersBatch(appCtx, ordersJson)
+                        }
+                    } else {
+                        refreshOrdersLogUI()
                     }
-                    refreshOrdersLogUI()
                 }
                 "dev.saned.assistant.UI_PONG_RECEIVED", "dev.saned.assistant.ACTION_PONG" -> {
                     handlePongResponse(intent)
@@ -4677,8 +4686,14 @@ class MainActivity : AppCompatActivity() {
     private fun handlePongResponse(intent: Intent) {
         val batchJson = intent.getStringExtra("orders_batch_json")
         if (!batchJson.isNullOrEmpty() && batchJson != "[]") {
-            io.github.libxposed.service.XposedProvider.saveOrdersBatch(this, batchJson)
-            runOnUiThread { refreshOrdersLogUI() }
+            val bHash = batchJson.hashCode()
+            if (bHash != lastReceivedBatchHash) {
+                lastReceivedBatchHash = bHash
+                val appCtx = applicationContext ?: this
+                uiBgExecutor.execute {
+                    io.github.libxposed.service.XposedProvider.saveOrdersBatch(appCtx, batchJson)
+                }
+            }
         }
         val pingTime = intent.getLongExtra("ping_timestamp", 0L)
         val now = System.currentTimeMillis()

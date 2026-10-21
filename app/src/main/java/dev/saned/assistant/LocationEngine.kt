@@ -14,7 +14,9 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import org.json.JSONObject
 import java.io.File
+import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
@@ -41,6 +43,19 @@ object LocationEngine {
     @Volatile private var isSeeded = false
     private val isActivePusherRunning = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Cached reflection fields & methods (resolved ONCE to eliminate reflection overhead & GC pauses on the UI thread)
+    private val cachedMockField1: Field? by lazy {
+        try { Location::class.java.getDeclaredField("mIsFromMockProvider").apply { isAccessible = true } } catch (_: Throwable) { null }
+    }
+    private val cachedMockField2: Field? by lazy {
+        try { Location::class.java.getDeclaredField("mMock").apply { isAccessible = true } } catch (_: Throwable) { null }
+    }
+    private val cachedFieldsMaskField: Field? by lazy {
+        try { Location::class.java.getDeclaredField("mFieldsMask").apply { isAccessible = true } } catch (_: Throwable) { null }
+    }
+    private val gmsListenerMethodCache = ConcurrentHashMap<Class<*>, Method>()
+    private val gmsCallbackMethodCache = ConcurrentHashMap<Class<*>, Method>()
 
     // Captured Android LocationListeners & Google Play Services FusedLocation callbacks inside net.jahez.fleets
     private val capturedLocationListeners = CopyOnWriteArraySet<LocationListener>()
@@ -182,7 +197,6 @@ object LocationEngine {
                 loc.speed = 0.0f
                 loc.bearing = currentBearing
             }
-            // Strip any mock provider flag via reflection so Location.isFromMockProvider() & isMock() are false
             stripMockFlagOnLocation(loc)
         } catch (_: Throwable) {
         } finally {
@@ -193,21 +207,12 @@ object LocationEngine {
 
     private fun stripMockFlagOnLocation(loc: Location) {
         try {
-            for (fName in listOf("mIsFromMockProvider", "mMock")) {
-                try {
-                    val f = Location::class.java.getDeclaredField(fName)
-                    f.isAccessible = true
-                    f.setBoolean(loc, false)
-                } catch (_: Throwable) {}
-            }
-            try {
-                val fFields = Location::class.java.getDeclaredField("mFieldsMask")
-                fFields.isAccessible = true
+            cachedMockField1?.setBoolean(loc, false)
+            cachedMockField2?.setBoolean(loc, false)
+            cachedFieldsMaskField?.let { fFields ->
                 val mask = fFields.getInt(loc)
-                // Bit 4 (0x10) or Bit 8 in older/newer AOSP is mock provider mask; also hooked via method interceptor below
                 fFields.setInt(loc, mask and 0xFFFFFFEF.toInt())
-            } catch (_: Throwable) {}
-            loc.extras?.remove("mockLocation")
+            }
         } catch (_: Throwable) {}
     }
 
@@ -237,7 +242,7 @@ object LocationEngine {
                         pushSpoofedLocationToAllCallbacks()
                     }
                 } catch (_: Throwable) {}
-                val intervalMs = if (isTripSimulationActive) 500L else 1200L
+                val intervalMs = if (isTripSimulationActive) 500L else 2500L
                 mainHandler.postDelayed(this, intervalMs)
             }
         }
@@ -246,6 +251,7 @@ object LocationEngine {
 
     fun pushSpoofedLocationToAllCallbacks() {
         if (!isMasterRunning || !isFakeLocationEnabled || currentLat == 0.0 || currentLng == 0.0) return
+        if (capturedLocationListeners.isEmpty() && capturedGmsLocationListeners.isEmpty() && capturedGmsLocationCallbacks.isEmpty()) return
         mainHandler.post {
             try {
                 val gpsLoc = buildSpoofedLocation("gps")
@@ -258,15 +264,18 @@ object LocationEngine {
                     } catch (_: Throwable) {}
                 }
 
-                // 2. Push to all captured Google Play Services FusedLocation Listeners
+                // 2. Push to all captured Google Play Services FusedLocation Listeners (using cached Method)
                 for (gmsListener in capturedGmsLocationListeners) {
                     try {
-                        val m = gmsListener.javaClass.getMethod("onLocationChanged", Location::class.java)
+                        val cls = gmsListener.javaClass
+                        val m = gmsListenerMethodCache[cls] ?: cls.getMethod("onLocationChanged", Location::class.java).also {
+                            gmsListenerMethodCache[cls] = it
+                        }
                         m.invoke(gmsListener, fusedLoc)
                     } catch (_: Throwable) {}
                 }
 
-                // 3. Push to all captured Google Play Services FusedLocation LocationCallbacks
+                // 3. Push to all captured Google Play Services FusedLocation LocationCallbacks (using cached Method)
                 if (capturedGmsLocationCallbacks.isNotEmpty()) {
                     for (cb in capturedGmsLocationCallbacks) {
                         try {
@@ -276,7 +285,10 @@ object LocationEngine {
                             }
                             val locResult = createMethod.invoke(null, listOf(fusedLoc))
                             if (locResult != null) {
-                                val mOnRes = cb.javaClass.getMethod("onLocationResult", locResult.javaClass)
+                                val cbCls = cb.javaClass
+                                val mOnRes = gmsCallbackMethodCache[cbCls] ?: cbCls.getMethod("onLocationResult", locResult.javaClass).also {
+                                    gmsCallbackMethodCache[cbCls] = it
+                                }
                                 mOnRes.invoke(cb, locResult)
                             }
                         } catch (_: Throwable) {}
@@ -324,7 +336,7 @@ object LocationEngine {
                     override fun onProviderDisabled(provider: String) {}
                 }
                 try {
-                    lm.requestLocationUpdates("passive", 1000L, 0f, passiveListener, Looper.getMainLooper())
+                    lm.requestLocationUpdates("passive", 2000L, 0f, passiveListener, Looper.getMainLooper())
                 } catch (_: Throwable) {}
 
                 if (isMasterRunning && isFixLocationUnknownEnabled && enabledProviders.isNotEmpty()) {
@@ -338,7 +350,7 @@ object LocationEngine {
                     }
                     for (prov in enabledProviders) {
                         try {
-                            lm.requestLocationUpdates(prov, 2000L, 0f, activeListener, Looper.getMainLooper())
+                            lm.requestLocationUpdates(prov, 3000L, 0f, activeListener, Looper.getMainLooper())
                         } catch (_: Throwable) {}
                     }
                 }
@@ -501,7 +513,7 @@ object LocationEngine {
             }
         } catch (_: Throwable) {}
 
-        // 5. Hook Google Play Services FusedLocationProviderClient & LocationResult so Saned's internal map & tracking receive live simulated route!
+        // 5. Hook Google Play Services FusedLocationProviderClient & LocationResult
         try {
             val lrCls = Class.forName("com.google.android.gms.location.LocationResult", false, classLoader)
             for (m in lrCls.declaredMethods) {

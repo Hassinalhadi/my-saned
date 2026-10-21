@@ -600,67 +600,73 @@ object OrderInterceptor {
         return arr.toString()
     }
 
+    private var lastPingDbScanRealtime: Long = 0L
+
     private fun respondToPing(intent: Intent) {
         val app = resolveApplicationContext() ?: currentActivity ?: return
         val pingTimestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
 
         CoroutineScope(Dispatchers.IO).launch {
-            try { scanJahezDatabases(app) } catch (_: Throwable) {}
-        }
+            val nowRt = SystemClock.elapsedRealtime()
+            if (nowRt - lastPingDbScanRealtime > 6000L) {
+                lastPingDbScanRealtime = nowRt
+                try { scanJahezDatabases(app) } catch (_: Throwable) {}
+            }
 
-        if (cachedAuthToken.isEmpty()) {
-            readPersistedToken()
             if (cachedAuthToken.isEmpty()) {
-                scanAllSharedPreferencesForTokens(app)
+                readPersistedToken()
+                if (cachedAuthToken.isEmpty()) {
+                    scanAllSharedPreferencesForTokens(app)
+                }
             }
+            if (cachedApiHost.isEmpty()) {
+                readPersistedHost()
+            }
+
+            val batchStr = getSyncedOrdersBatchJson()
+            val totalOrders = synchronized(syncedOrdersCache) { syncedOrdersCache.size }.coerceAtLeast(loggedOrderIds.size)
+
+            try {
+                val pongIntent = Intent("dev.saned.assistant.ACTION_PONG").apply {
+                    component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+                    addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
+                    putExtra("ping_timestamp", pingTimestamp)
+                    putExtra("pong_timestamp", System.currentTimeMillis())
+                    putExtra("hook_active", true)
+                    putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
+                    putExtra("orders_count", totalOrders)
+                    putExtra("orders_batch_json", batchStr)
+                    putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
+                    putExtra("http_requests_count", httpRequestsCount.get())
+                    putExtra("polling_hits", pollingHits.get())
+                    putExtra("last_http_url", lastInterceptedUrl)
+                    putExtra("last_http_code", lastHttpResponseCode)
+                    putExtra("last_order_event", lastOrderEvent)
+                    putExtra("okhttp_hooked", isOkHttpHooked)
+                }
+                app.sendBroadcast(pongIntent)
+            } catch (_: Throwable) {}
+
+            try {
+                val gPong = Intent("dev.saned.assistant.ACTION_PONG").apply {
+                    addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
+                    putExtra("ping_timestamp", pingTimestamp)
+                    putExtra("pong_timestamp", System.currentTimeMillis())
+                    putExtra("hook_active", true)
+                    putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
+                    putExtra("orders_count", totalOrders)
+                    putExtra("orders_batch_json", batchStr)
+                    putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
+                    putExtra("http_requests_count", httpRequestsCount.get())
+                    putExtra("polling_hits", pollingHits.get())
+                    putExtra("last_http_url", lastInterceptedUrl)
+                    putExtra("last_http_code", lastHttpResponseCode)
+                    putExtra("last_order_event", lastOrderEvent)
+                    putExtra("okhttp_hooked", isOkHttpHooked)
+                }
+                app.sendBroadcast(gPong)
+            } catch (_: Throwable) {}
         }
-        if (cachedApiHost.isEmpty()) {
-            readPersistedHost()
-        }
-
-        val batchStr = getSyncedOrdersBatchJson()
-        val totalOrders = synchronized(syncedOrdersCache) { syncedOrdersCache.size }.coerceAtLeast(loggedOrderIds.size)
-
-        try {
-            val pongIntent = Intent("dev.saned.assistant.ACTION_PONG").apply {
-                component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
-                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
-                putExtra("ping_timestamp", pingTimestamp)
-                putExtra("pong_timestamp", System.currentTimeMillis())
-                putExtra("hook_active", true)
-                putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
-                putExtra("orders_count", totalOrders)
-                putExtra("orders_batch_json", batchStr)
-                putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
-                putExtra("http_requests_count", httpRequestsCount.get())
-                putExtra("polling_hits", pollingHits.get())
-                putExtra("last_http_url", lastInterceptedUrl)
-                putExtra("last_http_code", lastHttpResponseCode)
-                putExtra("last_order_event", lastOrderEvent)
-                putExtra("okhttp_hooked", isOkHttpHooked)
-            }
-            app.sendBroadcast(pongIntent)
-        } catch (_: Throwable) {}
-
-        try {
-            val gPong = Intent("dev.saned.assistant.ACTION_PONG").apply {
-                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
-                putExtra("ping_timestamp", pingTimestamp)
-                putExtra("pong_timestamp", System.currentTimeMillis())
-                putExtra("hook_active", true)
-                putExtra("has_auth_token", cachedAuthToken.isNotEmpty())
-                putExtra("orders_count", totalOrders)
-                putExtra("orders_batch_json", batchStr)
-                putExtra("api_host", if (cachedApiHost.isNotEmpty()) cachedApiHost else "Auto-Detecting")
-                putExtra("http_requests_count", httpRequestsCount.get())
-                putExtra("polling_hits", pollingHits.get())
-                putExtra("last_http_url", lastInterceptedUrl)
-                putExtra("last_http_code", lastHttpResponseCode)
-                putExtra("last_order_event", lastOrderEvent)
-                putExtra("okhttp_hooked", isOkHttpHooked)
-            }
-            app.sendBroadcast(gPong)
-        } catch (_: Throwable) {}
     }
 
     private fun performLiveApiProbe() {
@@ -2436,18 +2442,50 @@ object OrderInterceptor {
         }
     }
 
+    private val isInsideJsonHook = object : ThreadLocal<Boolean>() {
+        override fun initialValue(): Boolean = false
+    }
+    private val recentMemoryJsonHashes = java.util.Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+    private var lastUiResumeSyncRealtime: Long = 0L
+    private val cachedWmgInstance: Any? by lazy {
+        try {
+            val wmgClass = Class.forName("android.view.WindowManagerGlobal")
+            wmgClass.getMethod("getInstance").invoke(null)
+        } catch (_: Throwable) { null }
+    }
+    private val cachedWmgViewsField: java.lang.reflect.Field? by lazy {
+        try {
+            Class.forName("android.view.WindowManagerGlobal").getDeclaredField("mViews").apply { isAccessible = true }
+        } catch (_: Throwable) { null }
+    }
+
     private fun hookJsonConstructors(module: XposedModule) {
         try {
             val jsonConst = JSONObject::class.java.getConstructor(String::class.java)
             module.hook(jsonConst).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val res = chain.proceed()
-                    val str = chain.args.getOrNull(0) as? String
-                    if (!str.isNullOrEmpty()) {
-                        val lower = str.lowercase()
-                        if ((lower.contains("order") || lower.contains("trip") || lower.contains("dispatch") || lower.contains("delivery")) &&
-                            (lower.contains("id") || lower.contains("price") || lower.contains("status"))) {
-                            findAndParseEmbeddedJson(str, "Memory JSON 🧠")
+                    if (isInsideJsonHook.get() == true) return res
+                    val str = chain.args.getOrNull(0) as? String ?: return res
+                    if (str.length in 25..65536) {
+                        val hasOrderKeyword = str.contains("dispatch", ignoreCase = true) ||
+                            str.contains("order", ignoreCase = true) ||
+                            str.contains("pickup", ignoreCase = true) ||
+                            str.contains("referenceId", ignoreCase = true)
+                        if (hasOrderKeyword) {
+                            val h = str.hashCode()
+                            if (recentMemoryJsonHashes.size > 400) recentMemoryJsonHashes.clear()
+                            if (recentMemoryJsonHashes.add(h)) {
+                                CoroutineScope(Dispatchers.Default).launch {
+                                    isInsideJsonHook.set(true)
+                                    try {
+                                        findAndParseEmbeddedJson(str, "Memory JSON 🧠")
+                                    } catch (_: Throwable) {
+                                    } finally {
+                                        isInsideJsonHook.set(false)
+                                    }
+                                }
+                            }
                         }
                     }
                     return res
@@ -2480,6 +2518,32 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
+    private fun onTargetActivityActive(act: Activity) {
+        currentActivity = act
+        val appCtx = act.applicationContext ?: act
+        initAppContext(appCtx)
+        startScreenWatcher()
+        startActiveServerPolling()
+
+        val actName = act.javaClass.name
+        if (actName.contains("Dispatch", ignoreCase = true) || actName.contains("Order", ignoreCase = true)) {
+            scanAllRoots()
+        }
+
+        val nowRt = SystemClock.elapsedRealtime()
+        if (nowRt - lastUiResumeSyncRealtime > 6000L) {
+            lastUiResumeSyncRealtime = nowRt
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    if (cachedAuthToken.isEmpty()) {
+                        scanAllSharedPreferencesForTokens(appCtx)
+                    }
+                    requestSettingsFromAssistant()
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
     private fun hookUI(module: XposedModule, classLoader: ClassLoader) {
         try {
             val mResume = Activity::class.java.getDeclaredMethod("onResume")
@@ -2488,13 +2552,7 @@ object OrderInterceptor {
                     val result = chain.proceed()
                     val act = chain.thisObject as? Activity
                     if (act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
-                        currentActivity = act
-                        initAppContext(act.applicationContext)
-                        scanAllSharedPreferencesForTokens(act.applicationContext)
-                        requestSettingsFromAssistant()
-                        startScreenWatcher()
-                        startActiveServerPolling()
-                        scanAllRoots()
+                        onTargetActivityActive(act)
                     }
                     return result
                 }
@@ -2509,13 +2567,7 @@ object OrderInterceptor {
                     val hasFocus = chain.args[0] as? Boolean ?: false
                     val act = chain.thisObject as? Activity
                     if (hasFocus && act != null && (act.packageName == "net.jahez.fleets" || act.packageName.contains("jahez"))) {
-                        currentActivity = act
-                        initAppContext(act.applicationContext)
-                        scanAllSharedPreferencesForTokens(act.applicationContext)
-                        requestSettingsFromAssistant()
-                        startScreenWatcher()
-                        startActiveServerPolling()
-                        scanAllRoots()
+                        onTargetActivityActive(act)
                     }
                     return result
                 }
@@ -2526,17 +2578,16 @@ object OrderInterceptor {
     fun getAllRootViews(): List<View> {
         val result = mutableListOf<View>()
         try {
-            val wmgClass = Class.forName("android.view.WindowManagerGlobal")
-            val getInstance = wmgClass.getMethod("getInstance")
-            val wmg = getInstance.invoke(null)
-            val mViewsField = wmgClass.getDeclaredField("mViews")
-            mViewsField.isAccessible = true
-            val list = mViewsField.get(wmg) as? List<*>
-            if (list != null) {
-                synchronized(list) {
-                    for (item in list) {
-                        if (item is View) {
-                            result.add(item)
+            val wmg = cachedWmgInstance
+            val fViews = cachedWmgViewsField
+            if (wmg != null && fViews != null) {
+                val list = fViews.get(wmg) as? List<*>
+                if (list != null) {
+                    synchronized(list) {
+                        for (item in list) {
+                            if (item is View) {
+                                result.add(item)
+                            }
                         }
                     }
                 }
@@ -2555,20 +2606,33 @@ object OrderInterceptor {
 
         mainHandler.post(object : Runnable {
             override fun run() {
+                var nextDelayMs = 1200L
                 try {
-                    if (isMasterRunning) {
-                        scanAllRoots()
+                    val act = currentActivity
+                    if (isMasterRunning && act != null && !act.isFinishing && !act.isDestroyed) {
+                        val actName = act.javaClass.name
+                        val isOrderScreen = actName.contains("Dispatch", ignoreCase = true) || actName.contains("Order", ignoreCase = true)
+                        if (isOrderScreen) {
+                            nextDelayMs = 180L
+                            scanAllRoots()
+                        } else {
+                            val roots = getAllRootViews()
+                            if (roots.size > 1) {
+                                nextDelayMs = 350L
+                                scanAllRoots(roots)
+                            }
+                        }
                     }
                 } catch (_: Throwable) {}
-                mainHandler.postDelayed(this, 250)
+                mainHandler.postDelayed(this, nextDelayMs)
             }
         })
     }
 
-    fun scanAllRoots() {
+    fun scanAllRoots(preFetchedRoots: List<View>? = null) {
         val act = currentActivity ?: return
         if (act.isFinishing || act.isDestroyed) return
-        val roots = getAllRootViews()
+        val roots = preFetchedRoots ?: getAllRootViews()
         val startTime = System.currentTimeMillis()
 
         for (root in roots.reversed()) {

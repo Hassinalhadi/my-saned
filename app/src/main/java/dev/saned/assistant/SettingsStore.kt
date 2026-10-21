@@ -6,10 +6,16 @@ import android.content.SharedPreferences
 import io.github.libxposed.service.XposedProvider
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 object SettingsStore {
 
     private const val PREF_NAME = "sanedhook_settings"
+    private val bgSyncExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "Saned-SettingsSync").apply { isDaemon = true }
+    }
+    private val syncPending = AtomicBoolean(false)
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -122,28 +128,21 @@ object SettingsStore {
     // Diagnostic Logs
     fun getDiagLogs(context: Context): String {
         val spLogs = XposedProvider.getDiagLogs(context)
-        val fileLogs = try {
+        if (spLogs.isNotEmpty()) return spLogs
+        return try {
             val f = File("/data/local/tmp/saned_diag.log")
             if (f.exists()) f.readText() else ""
         } catch (_: Throwable) { "" }
-        return when {
-            spLogs.isNotEmpty() && fileLogs.isNotEmpty() -> {
-                val seen = LinkedHashSet<String>()
-                for (line in spLogs.lines()) if (line.isNotBlank()) seen.add(line)
-                for (line in fileLogs.lines()) if (line.isNotBlank()) seen.add(line)
-                seen.joinToString("\n")
-            }
-            spLogs.isNotEmpty() -> spLogs
-            else -> fileLogs
-        }
     }
 
     fun clearDiagLogs(context: Context) {
         XposedProvider.clearDiagLogs(context)
-        try {
-            val f = File("/data/local/tmp/saned_diag.log")
-            if (f.exists()) f.writeText("")
-        } catch (_: Throwable) {}
+        bgSyncExecutor.execute {
+            try {
+                val f = File("/data/local/tmp/saned_diag.log")
+                if (f.exists()) f.writeText("")
+            } catch (_: Throwable) {}
+        }
     }
 
     // Active Server Polling & Parallel Acceptance
@@ -347,152 +346,137 @@ object SettingsStore {
     fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
     fun clearOrdersLog(context: Context) {
         getPrefs(context).edit().putString("orders_log_json", "[]").apply()
-        try {
-            val f = File("/data/local/tmp/saned_orders.json")
-            if (f.exists()) f.writeText("[]")
-        } catch (_: Throwable) {}
+        bgSyncExecutor.execute {
+            try {
+                val f = File("/data/local/tmp/saned_orders.json")
+                if (f.exists()) f.writeText("[]")
+            } catch (_: Throwable) {}
+        }
     }
 
+    /**
+     * Non-blocking coalesced background settings broadcast:
+     * Executes Binder IPC, Broadcasts, and JSON file sync on bgSyncExecutor so the Main UI Thread never stutters!
+     */
     fun broadcastSettings(context: Context) {
-        try { XposedProvider.syncToLSPosedRemotePrefs(context) } catch (_: Throwable) {}
-        val master = isMasterRunning(context)
-        val autoAccept = isAutoAccept(context)
-        val autoReject = isAutoReject(context)
-        val dryRun = isDryRun(context)
-        val stayBg = isStayInBackground(context)
-        val silenceTone = isSilenceAlertTone(context)
-        val strictVer = isStrictVersionCheck(context)
-        val activePolling = isActivePolling(context)
-        val pollInterval = getPollInterval(context)
-        val parallelReqs = getParallelRequests(context)
-        val extraOrder = isExtraOrderEnabled(context)
-        val maxOrdersLim = getMaxOrdersLimit(context)
-        val minPrice = getMinPrice(context)
-        val maxRest = getMaxDistRest(context)
-        val maxCust = getMaxDistCust(context)
-        val hEarly = isHookEarlyCloaker(context)
-        val hSec = isHookSecCloaker(context)
-        val hLoc = isHookLocation(context)
-        val hDev = isHookDeviceSpoofer(context)
-        val hOrd = isHookOrders(context)
-        val hBoot = isHookBootstrapLoop(context)
+        val appCtx = context.applicationContext ?: context
+        if (!syncPending.compareAndSet(false, true)) return
+        bgSyncExecutor.execute {
+            syncPending.set(false)
+            try { XposedProvider.syncToLSPosedRemotePrefs(appCtx) } catch (_: Throwable) {}
+            val master = isMasterRunning(appCtx)
+            val autoAccept = isAutoAccept(appCtx)
+            val autoReject = isAutoReject(appCtx)
+            val dryRun = isDryRun(appCtx)
+            val stayBg = isStayInBackground(appCtx)
+            val silenceTone = isSilenceAlertTone(appCtx)
+            val strictVer = isStrictVersionCheck(appCtx)
+            val activePolling = isActivePolling(appCtx)
+            val pollInterval = getPollInterval(appCtx)
+            val parallelReqs = getParallelRequests(appCtx)
+            val extraOrder = isExtraOrderEnabled(appCtx)
+            val maxOrdersLim = getMaxOrdersLimit(appCtx)
+            val minPrice = getMinPrice(appCtx)
+            val maxRest = getMaxDistRest(appCtx)
+            val maxCust = getMaxDistCust(appCtx)
+            val hEarly = isHookEarlyCloaker(appCtx)
+            val hSec = isHookSecCloaker(appCtx)
+            val hLoc = isHookLocation(appCtx)
+            val hDev = isHookDeviceSpoofer(appCtx)
+            val hOrd = isHookOrders(appCtx)
+            val hBoot = isHookBootstrapLoop(appCtx)
+            val spoofId = isSpoofAndroidId(appCtx)
+            val spoofedIdStr = getSpoofedAndroidId(appCtx)
+            val fixLoc = isFixLocation(appCtx)
+            val fakeLoc = isFakeLocation(appCtx)
+            val fLat = getFakeLat(appCtx)
+            val fLng = getFakeLng(appCtx)
+            val rSimAct = isRouteSimActive(appCtx)
+            val rSimSpd = getRouteSimSpeedKmh(appCtx)
+            val rSimBrg = getRouteSimBearing(appCtx)
+            val snd = isSoundEnabled(appCtx)
+            val toasts = isShowToasts(appCtx)
 
-        try {
-            val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                setPackage("net.jahez.fleets")
-                putExtra("master_running", master)
-                putExtra("auto_accept", autoAccept)
-                putExtra("auto_reject", autoReject)
-                putExtra("dry_run", dryRun)
-                putExtra("stay_in_background_v2", stayBg)
-                putExtra("silence_alert_tone", silenceTone)
-                putExtra("strict_version_check", strictVer)
-                putExtra("active_polling", activePolling)
-                putExtra("poll_interval_sec", pollInterval)
-                putExtra("parallel_requests", parallelReqs)
-                putExtra("extra_order_enabled", extraOrder)
-                putExtra("max_orders_limit", maxOrdersLim)
-                putExtra("min_price", minPrice)
-                putExtra("max_dist_rest", maxRest)
-                putExtra("max_dist_cust", maxCust)
-                putExtra("spoof_android_id", isSpoofAndroidId(context))
-                putExtra("spoofed_android_id", getSpoofedAndroidId(context))
-                putExtra("fix_location_unknown", isFixLocation(context))
-                putExtra("fake_location_enabled", isFakeLocation(context))
-                putExtra("fake_lat", getFakeLat(context))
-                putExtra("fake_lng", getFakeLng(context))
-                putExtra("route_sim_active", isRouteSimActive(context))
-                putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
-                putExtra("route_sim_bearing", getRouteSimBearing(context))
-                putExtra("sound_enabled", isSoundEnabled(context))
-                putExtra("show_toasts", isShowToasts(context))
-                putExtra("show_food_price", true)
-                putExtra("hook_early_cloaker", hEarly)
-                putExtra("hook_sec_cloaker", hSec)
-                putExtra("hook_location", hLoc)
-                putExtra("hook_device_spoofer", hDev)
-                putExtra("hook_orders", hOrd)
-                putExtra("hook_bootstrap_loop", hBoot)
-            }
-            context.sendBroadcast(intent)
-        } catch (_: Throwable) {}
+            try {
+                val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
+                    setPackage("net.jahez.fleets")
+                    putExtra("master_running", master)
+                    putExtra("auto_accept", autoAccept)
+                    putExtra("auto_reject", autoReject)
+                    putExtra("dry_run", dryRun)
+                    putExtra("stay_in_background_v2", stayBg)
+                    putExtra("silence_alert_tone", silenceTone)
+                    putExtra("strict_version_check", strictVer)
+                    putExtra("active_polling", activePolling)
+                    putExtra("poll_interval_sec", pollInterval)
+                    putExtra("parallel_requests", parallelReqs)
+                    putExtra("extra_order_enabled", extraOrder)
+                    putExtra("max_orders_limit", maxOrdersLim)
+                    putExtra("min_price", minPrice)
+                    putExtra("max_dist_rest", maxRest)
+                    putExtra("max_dist_cust", maxCust)
+                    putExtra("spoof_android_id", spoofId)
+                    putExtra("spoofed_android_id", spoofedIdStr)
+                    putExtra("fix_location_unknown", fixLoc)
+                    putExtra("fake_location_enabled", fakeLoc)
+                    putExtra("fake_lat", fLat)
+                    putExtra("fake_lng", fLng)
+                    putExtra("route_sim_active", rSimAct)
+                    putExtra("route_sim_speed_kmh", rSimSpd)
+                    putExtra("route_sim_bearing", rSimBrg)
+                    putExtra("sound_enabled", snd)
+                    putExtra("show_toasts", toasts)
+                    putExtra("show_food_price", true)
+                    putExtra("hook_early_cloaker", hEarly)
+                    putExtra("hook_sec_cloaker", hSec)
+                    putExtra("hook_location", hLoc)
+                    putExtra("hook_device_spoofer", hDev)
+                    putExtra("hook_orders", hOrd)
+                    putExtra("hook_bootstrap_loop", hBoot)
+                }
+                appCtx.sendBroadcast(intent)
+            } catch (_: Throwable) {}
 
-        try {
-            val gIntent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                putExtra("master_running", master)
-                putExtra("auto_accept", autoAccept)
-                putExtra("auto_reject", autoReject)
-                putExtra("dry_run", dryRun)
-                putExtra("stay_in_background_v2", stayBg)
-                putExtra("silence_alert_tone", silenceTone)
-                putExtra("strict_version_check", strictVer)
-                putExtra("active_polling", activePolling)
-                putExtra("poll_interval_sec", pollInterval)
-                putExtra("parallel_requests", parallelReqs)
-                putExtra("extra_order_enabled", extraOrder)
-                putExtra("max_orders_limit", maxOrdersLim)
-                putExtra("min_price", minPrice)
-                putExtra("max_dist_rest", maxRest)
-                putExtra("max_dist_cust", maxCust)
-                putExtra("fix_location_unknown", isFixLocation(context))
-                putExtra("fake_location_enabled", isFakeLocation(context))
-                putExtra("fake_lat", getFakeLat(context))
-                putExtra("fake_lng", getFakeLng(context))
-                putExtra("route_sim_active", isRouteSimActive(context))
-                putExtra("route_sim_speed_kmh", getRouteSimSpeedKmh(context))
-                putExtra("route_sim_bearing", getRouteSimBearing(context))
-                putExtra("sound_enabled", isSoundEnabled(context))
-                putExtra("show_toasts", isShowToasts(context))
-                putExtra("show_food_price", true)
-                putExtra("hook_early_cloaker", hEarly)
-                putExtra("hook_sec_cloaker", hSec)
-                putExtra("hook_location", hLoc)
-                putExtra("hook_device_spoofer", hDev)
-                putExtra("hook_orders", hOrd)
-                putExtra("hook_bootstrap_loop", hBoot)
-            }
-            context.sendBroadcast(gIntent)
-        } catch (_: Throwable) {}
-
-        try {
-            val json = JSONObject().apply {
-                put("master_running", master)
-                put("enabled", master)
-                put("auto_accept", autoAccept)
-                put("auto_reject", autoReject)
-                put("dry_run", dryRun)
-                put("stay_in_background_v2", stayBg)
-                put("silence_alert_tone", silenceTone)
-                put("strict_version_check", strictVer)
-                put("active_polling", activePolling)
-                put("poll_interval_sec", pollInterval.toDouble())
-                put("parallel_requests", parallelReqs)
-                put("extra_order_enabled", extraOrder)
-                put("max_orders_limit", maxOrdersLim)
-                put("min_price", minPrice)
-                put("max_dist_rest", maxRest)
-                put("max_dist_cust", maxCust)
-                put("spoof_android_id", isSpoofAndroidId(context))
-                put("spoofed_android_id", getSpoofedAndroidId(context))
-                put("fix_location_unknown", isFixLocation(context))
-                put("fake_location_enabled", isFakeLocation(context))
-                put("fake_lat", getFakeLat(context))
-                put("fake_lng", getFakeLng(context))
-                put("route_sim_active", isRouteSimActive(context))
-                put("route_sim_speed_kmh", getRouteSimSpeedKmh(context).toDouble())
-                put("route_sim_bearing", getRouteSimBearing(context).toDouble())
-                put("hook_early_cloaker", hEarly)
-                put("hook_sec_cloaker", hSec)
-                put("hook_location", hLoc)
-                put("hook_device_spoofer", hDev)
-                put("hook_orders", hOrd)
-                put("hook_bootstrap_loop", hBoot)
-                put("show_food_price", true)
-            }
-            val file = File("/data/local/tmp/saned_config.json")
-            file.writeText(json.toString())
-            file.setReadable(true, false)
-            file.setWritable(true, false)
-        } catch (_: Throwable) {}
+            try {
+                val json = JSONObject().apply {
+                    put("master_running", master)
+                    put("enabled", master)
+                    put("auto_accept", autoAccept)
+                    put("auto_reject", autoReject)
+                    put("dry_run", dryRun)
+                    put("stay_in_background_v2", stayBg)
+                    put("silence_alert_tone", silenceTone)
+                    put("strict_version_check", strictVer)
+                    put("active_polling", activePolling)
+                    put("poll_interval_sec", pollInterval.toDouble())
+                    put("parallel_requests", parallelReqs)
+                    put("extra_order_enabled", extraOrder)
+                    put("max_orders_limit", maxOrdersLim)
+                    put("min_price", minPrice)
+                    put("max_dist_rest", maxRest)
+                    put("max_dist_cust", maxCust)
+                    put("spoof_android_id", spoofId)
+                    put("spoofed_android_id", spoofedIdStr)
+                    put("fix_location_unknown", fixLoc)
+                    put("fake_location_enabled", fakeLoc)
+                    put("fake_lat", fLat)
+                    put("fake_lng", fLng)
+                    put("route_sim_active", rSimAct)
+                    put("route_sim_speed_kmh", rSimSpd.toDouble())
+                    put("route_sim_bearing", rSimBrg.toDouble())
+                    put("hook_early_cloaker", hEarly)
+                    put("hook_sec_cloaker", hSec)
+                    put("hook_location", hLoc)
+                    put("hook_device_spoofer", hDev)
+                    put("hook_orders", hOrd)
+                    put("hook_bootstrap_loop", hBoot)
+                    put("show_food_price", true)
+                }
+                val file = File("/data/local/tmp/saned_config.json")
+                file.writeText(json.toString())
+                file.setReadable(true, false)
+                file.setWritable(true, false)
+            } catch (_: Throwable) {}
+        }
     }
 }
