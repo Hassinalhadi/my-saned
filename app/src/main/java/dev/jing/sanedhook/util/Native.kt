@@ -79,7 +79,7 @@ object Native {
         val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
         val cleanLang = lang.trim().ifEmpty { "en" }
         val (method, url) = when (kind) {
-  0 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderId"
+  0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
   1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
   2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
   3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
@@ -116,9 +116,9 @@ object Native {
     fun safeR(path: String): Boolean = true
     fun safeS(versionCode: Long): Int = when (versionCode) {
         40093L -> 0
-        40099L, 4099L, in 40100L..40199L -> 1
+        40099L, 4099L, 40104L -> 1
         40089L -> 2
-        else -> -1
+        else -> 1
     }
     fun safeT(): Array<String> = FALLBACK_GUARD_CLASSES
     fun safeU(): Array<String> = FALLBACK_FEATURE_FLAGS

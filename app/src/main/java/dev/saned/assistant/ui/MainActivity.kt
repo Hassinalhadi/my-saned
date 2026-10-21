@@ -43,8 +43,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDiagLogConsole: TextView
     private lateinit var tvDiagLogSummary: TextView
     private var filterErrorsOnly: Boolean = false
-    private var filterNavLogsOnly: Boolean = false
-    private var filterSpeedLogsOnly: Boolean = false
     private lateinit var chkHookEarlyCloaker: CheckBox
     private lateinit var chkHookSecCloaker: CheckBox
     private lateinit var chkHookLocation: CheckBox
@@ -107,7 +105,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
-    private lateinit var edtMaxOrders: EditText
 
     // Active Server Polling & Parallel Acceptance
     private lateinit var chkActivePolling: CheckBox
@@ -375,75 +372,34 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnFilterToggle = Button(this).apply {
-  text = "🔎 الكل / الأخطاء"
-  textSize = 10.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-      setMargins(0, 0, 4, 0)
+  text = "🔎 الكل / الأخطاء فقط"
+  textSize = 11.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
+      setMargins(0, 0, 8, 0)
   }
   setBackgroundColor(Color.parseColor("#4F46E5"))
   setTextColor(Color.WHITE)
   setOnClickListener {
-      filterNavLogsOnly = false
-      filterSpeedLogsOnly = false
       filterErrorsOnly = !filterErrorsOnly
-      text = if (filterErrorsOnly) "🚨 الأخطاء ✓" else "🔎 الكل / الأخطاء"
+      text = if (filterErrorsOnly) "🚨 الأخطاء والكراش فقط" else "🔎 عرض كل السجلات"
       refreshDiagLogsUI()
   }
         }
         btnRow1.addView(btnFilterToggle)
 
-        val btnSpeedLogFilter = Button(this).apply {
-  text = "⚡ سجل السرعة"
-  textSize = 10.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
-      setMargins(3, 0, 4, 0)
-  }
-  setBackgroundColor(Color.parseColor("#7C3AED"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      filterErrorsOnly = false
-      filterNavLogsOnly = false
-      filterSpeedLogsOnly = !filterSpeedLogsOnly
-      text = if (filterSpeedLogsOnly) "⚡ السرعة فقط ✓" else "⚡ سجل السرعة"
-      refreshDiagLogsUI()
-  }
-        }
-        btnRow1.addView(btnSpeedLogFilter)
-
-        val btnNavLogFilter = Button(this).apply {
-  text = "🧭 الملاحة"
-  textSize = 10.5f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply {
-      setMargins(3, 0, 4, 0)
-  }
-  setBackgroundColor(Color.parseColor("#0284C7"))
-  setTextColor(Color.WHITE)
-  setOnClickListener {
-      filterErrorsOnly = false
-      filterSpeedLogsOnly = false
-      filterNavLogsOnly = !filterNavLogsOnly
-      text = if (filterNavLogsOnly) "🧭 الملاحة ✓" else "🧭 الملاحة"
-      refreshDiagLogsUI()
-  }
-        }
-        btnRow1.addView(btnNavLogFilter)
-
         val btnCopyLogs = Button(this).apply {
-  text = "📋 نسخ"
-  textSize = 11f
-  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.85f).apply {
-      setMargins(3, 0, 4, 0)
+  text = "📋 نسخ السجل"
+  textSize = 11.5f
+  layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+      setMargins(4, 0, 4, 0)
   }
   setBackgroundColor(Color.parseColor("#059669"))
   setTextColor(Color.WHITE)
   setOnClickListener {
-      val shownText = tvDiagLogConsole.text?.toString() ?: ""
       val fullLogs = SettingsStore.getDiagLogs(this@MainActivity)
-      val toCopy = if ((filterSpeedLogsOnly || filterNavLogsOnly || filterErrorsOnly) && shownText.isNotBlank()) shownText else fullLogs
       val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", toCopy.ifEmpty { "No logs yet" }))
-      val modeMsg = if (filterSpeedLogsOnly) "✅ تم نسخ سجل سرعة ومعالجة الطلبات [SpeedLog] للحافظة" else "✅ تم نسخ السجل التشخيصي للحافظة"
-      Toast.makeText(this@MainActivity, modeMsg, Toast.LENGTH_SHORT).show()
+      clip.setPrimaryClip(ClipData.newPlainText("Saned Diagnostic Logs", fullLogs.ifEmpty { "No logs yet" }))
+      Toast.makeText(this@MainActivity, "✅ تم نسخ السجل التشخيصي بالكامل للحافظة", Toast.LENGTH_SHORT).show()
   }
         }
         btnRow1.addView(btnCopyLogs)
@@ -583,47 +539,27 @@ class MainActivity : AppCompatActivity() {
         val crashCount = lines.count { it.contains("[CRASH]") }
         val errCount = lines.count { it.contains("[ERR]") }
         val warnCount = lines.count { it.contains("[WARN]") }
-        val navCount = lines.count { it.contains("[NavLog]") }
-        val speedCount = lines.count { it.contains("[SpeedLog]") }
 
         if (crashCount > 0 || errCount > 0) {
-  tvDiagLogSummary.text = "🚨 $crashCount كراش و $errCount خطأ | ⚡ $speedCount سرعة قبول | 🧭 $navCount ملاحة (${lines.size} سطر)"
+  tvDiagLogSummary.text = "🚨 تم رصد $crashCount كراش و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
         } else {
-  tvDiagLogSummary.text = "✅ السجل يعمل (${lines.size} سطر | ⚡ $speedCount سرعة قبول | 🧭 $navCount ملاحة | $warnCount تنبيه)"
+  tvDiagLogSummary.text = "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 كراش)"
   tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
         }
 
-        val displayText = when {
-  filterSpeedLogsOnly -> {
-      val speedLines = lines.filter {
-          it.contains("[SpeedLog]") ||
-          it.contains("[OrderDecision]") ||
-          it.contains("[EarlyFCM]") ||
-          it.contains("[FCM]") ||
-          it.contains("[DirectApi]") ||
-          it.contains("[IncomingDispatchActivity]") ||
-          it.contains("[CipherHook]") ||
-          it.contains("[EncryptedPrefs]")
+        val displayText = if (filterErrorsOnly) {
+  val filtered = mutableListOf<String>()
+  var includeContinuation = false
+  for (line in lines) {
+      if (line.startsWith("[")) {
+          includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
       }
-      if (speedLines.isEmpty()) "لا توجد سجلات سرعة ومعالجة طلبات [SpeedLog] بعد — انتظر وصول طلب أو اضغط محاكاة طلب في الإعدادات" else speedLines.joinToString("\n")
+      if (includeContinuation) filtered.add(line)
   }
-  filterNavLogsOnly -> {
-      val navLines = lines.filter { it.contains("[NavLog]") }
-      if (navLines.isEmpty()) "لا توجد سجلات ملاحة [NavLog] بعد — افتح طلب في تطبيق سند أو اضغط ⚡ لتجربة التوجيه للعميل" else navLines.joinToString("\n")
-  }
-  filterErrorsOnly -> {
-      val filtered = mutableListOf<String>()
-      var includeContinuation = false
-      for (line in lines) {
-          if (line.startsWith("[")) {
-              includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
-          }
-          if (includeContinuation) filtered.add(line)
-      }
-      if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
-  }
-  else -> rawLogs
+  if (filtered.isEmpty()) "لا توجد أخطاء أو كراش في السجل الحالي ✅" else filtered.joinToString("\n")
+        } else {
+  rawLogs
         }
 
         tvDiagLogConsole.text = displayText
@@ -874,11 +810,9 @@ class MainActivity : AppCompatActivity() {
             val maxRest = SettingsStore.getMaxDistRest(this)
             val maxCust = SettingsStore.getMaxDistCust(this)
             val minP = SettingsStore.getMinPrice(this)
-            val maxOrd = SettingsStore.getMaxOrdersLimit(this)
-            val maxOrdStr = if (maxOrd <= 0) "∞ Unlimited" else maxOrd.toString()
             val showFood = SettingsStore.isShowFoodPrice(this)
             tvOrdersSubStatus.text = if (isRun) {
-                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Orders Limit: $maxOrdStr • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
+                "🟢 Active • Auto-Accept: ${if (isAcc) "ON" else "OFF"} • Auto-Reject: ${if (isRej) "ON" else "OFF"} • Rest≤${maxRest}km • Cust≤${maxCust}km • Min≥${minP} • Price Food: ${if (showFood) "ON" else "OFF"}"
             } else {
                 "🔴 Master Switch OFF (Incoming orders are still captured & shown below)"
             }
@@ -1768,10 +1702,6 @@ class MainActivity : AppCompatActivity() {
                 paymentMethod = "Prepaid",
                 distanceKm = 0.5,
                 customerDistanceKm = 2.8,
-                pickupLat = 24.7685,
-                pickupLng = 46.6182,
-                destLat = 24.7912,
-                destLng = 46.6345,
                 decisionReason = "Accepted (0.5km / 2.8km)",
                 isMissedOrRejected = false,
                 time = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date())
@@ -2179,10 +2109,6 @@ class MainActivity : AppCompatActivity() {
         edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())
         layout.addView(edtMaxDistCust)
 
-        layout.addView(createLabel("How many order you want (عدد الطلبات المسموح بقبولها - Set 0 for Unlimited / عدد لا متناهي):"))
-        edtMaxOrders = createInput(SettingsStore.getMaxOrdersLimit(this).toString())
-        layout.addView(edtMaxOrders)
-
         card.addView(layout)
         return card
     }
@@ -2218,7 +2144,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkActivePolling)
 
-        layout.addView(createLabel("Poll Interval in seconds (Set 0 for 0.0ms Instant Pre-Warmed Mode):"))
+        layout.addView(createLabel("Poll Interval in seconds (e.g. 0.8s):"))
         edtPollInterval = createInput(SettingsStore.getPollInterval(this).toString())
         layout.addView(edtPollInterval)
 
@@ -2288,11 +2214,10 @@ class MainActivity : AppCompatActivity() {
         val minPrice = edtMinPrice.text.toString().toDoubleOrNull() ?: 0.0
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
-        val maxOrders = if (::edtMaxOrders.isInitialized) (edtMaxOrders.text.toString().trim().toIntOrNull() ?: 0) else 0
 
         val activePolling = chkActivePolling.isChecked
-        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.0f
-        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 4
+        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
+        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 3
 
         SettingsStore.setMasterRunning(this, master)
         SettingsStore.setSpoofAndroidId(this, spoofId)
@@ -2316,7 +2241,6 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setMinPrice(this, minPrice)
         SettingsStore.setMaxDistRest(this, maxRest)
         SettingsStore.setMaxDistCust(this, maxCust)
-        SettingsStore.setMaxOrdersLimit(this, maxOrders)
 
         SettingsStore.setActivePolling(this, activePolling)
         SettingsStore.setPollInterval(this, pollInterval)
@@ -2415,7 +2339,7 @@ class MainActivity : AppCompatActivity() {
                 Status Code: HTTP $code (${latency}ms)
                 Auth Token: $tokenStr
                 Target URL: $url
-
+                
                 Response Preview:
                 $body
             """.trimIndent()

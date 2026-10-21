@@ -98,40 +98,13 @@ object OrderInterceptor {
     @Volatile var minOrderPrice: Double = 0.0
     @Volatile var maxDistToRestaurant: Double = 0.0
     @Volatile var maxDistCustomer: Double = 0.0
-    @Volatile var maxOrdersLimit: Int = 0 // 0 = Unlimited (عدد لا متناهي), > 0 = custom target count
-    val acceptedSessionOrdersCount = AtomicInteger(0)
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = true
 
-    data class PendingMaxOrderRetry(
-        val orderIdNum: String,
-        val orderIdInt: Int,
-        val price: Double,
-        val dist: Double,
-        val restaurant: String,
-        val custDist: Double,
-        val pickupAddr: String,
-        val custAddr: String,
-        val custName: String,
-        val custPhone: String,
-        val cashAmt: Double,
-        val decisionReason: String,
-        val pickupLat: Double,
-        val pickupLng: Double,
-        val destLat: Double,
-        val destLng: Double,
-        val foodPrice: Double,
-        val paymentMethod: String,
-        val reference: String,
-        val enqueuedAtRealtime: Long = SystemClock.elapsedRealtime()
-    )
-    val pendingMaxLimitOrders = ConcurrentHashMap<Int, PendingMaxOrderRetry>()
-    private val isRetryLoopActive = AtomicBoolean(false)
-
-    // Active Server Polling & Parallel Acceptance (0.0ms Instant Mode)
+    // Active Server Polling & Parallel Acceptance
     @Volatile var isActivePolling: Boolean = true
-    @Volatile var pollIntervalSec: Float = 0.0f
-    @Volatile var parallelRequests: Int = 4
+    @Volatile var pollIntervalSec: Float = 0.8f
+    @Volatile var parallelRequests: Int = 3
     @Volatile var lastOrdersListUrl: String = ""
     private val isPollingRunning = AtomicBoolean(false)
 
@@ -197,117 +170,9 @@ object OrderInterceptor {
         }
     }
 
-    // Dual independent pre-warmed HTTP/2 OkHttpClient instances (Primary + Secondary)
-    // Eliminates single-socket TCP Head-of-Line blocking while keeping both TLS 1.3 / HTTP/2 sockets & 4G/5G radio 100% hot!
-    private val singleWarmHttpClient: OkHttpClient by lazy {
+    // Resilient SSL-Bypassing OkHttpClient for direct Jahez API calls
+    private val httpClient: OkHttpClient by lazy {
         createUnsafeOkHttpClient()
-    }
-
-    private val secondaryWarmHttpClient: OkHttpClient by lazy {
-        createUnsafeOkHttpClient()
-    }
-
-    private val tertiaryWarmHttpClient: OkHttpClient by lazy {
-        createUnsafeOkHttpClient()
-    }
-
-    // Separate client for background polling/details so the 3 Accept sockets remain 100% idle (connPool=1/1) at all times!
-    private val pollingHttpClient: OkHttpClient by lazy {
-        createUnsafeOkHttpClient()
-    }
-
-    private val httpClientPool: Array<OkHttpClient> by lazy {
-        arrayOf(singleWarmHttpClient, secondaryWarmHttpClient, tertiaryWarmHttpClient)
-    }
-
-    private val httpClient: OkHttpClient
-        get() = singleWarmHttpClient
-
-    val activeAcceptCallsCount = AtomicInteger(0)
-
-    // Dedicated pre-started real-time thread pool (-19 THREAD_PRIORITY_URGENT_AUDIO) for 0.0ms instant order acceptance
-    private val fastAcceptExecutor: java.util.concurrent.ThreadPoolExecutor by lazy {
-        java.util.concurrent.ThreadPoolExecutor(
-            8,
-            16,
-            60L,
-            TimeUnit.SECONDS,
-            java.util.concurrent.LinkedBlockingQueue(),
-            java.util.concurrent.ThreadFactory { r ->
-                Thread {
-                    try {
-                        Process.setThreadPriority(-19)
-                    } catch (_: Throwable) {
-                        try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
-                    }
-                    r.run()
-                }.apply {
-                    isDaemon = true
-                    priority = Thread.MAX_PRIORITY
-                    name = "Saned-ZeroMs-Accept"
-                }
-            }
-        ).apply {
-            prestartAllCoreThreads()
-        }
-    }
-
-    @Volatile private var lastPrewarmRealtime: Long = 0L
-    val orderArrivalNanoMap = ConcurrentHashMap<Int, Long>()
-
-    fun prewarmGatewayConnection(force: Boolean = false) {
-        if (activeAcceptCallsCount.get() > 0) return
-        val now = SystemClock.elapsedRealtime()
-        // Keep HTTP/2 sockets warm every 45 seconds (prevents Cloudflare HTTP 429 Error 1015 rate-limiting while keeping H2 pool 1/1 IDLE!)
-        if (!force && (now - lastPrewarmRealtime) < 45_000L) return
-        lastPrewarmRealtime = now
-        val tok = cachedAuthToken
-        val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
-        if (rawTok.isEmpty()) return
-        fastAcceptExecutor.execute {
-            try {
-                if (activeAcceptCallsCount.get() > 0) return@execute
-                val t0 = System.nanoTime()
-                val rb = Request.Builder()
-                    .url("https://gateway.saned.io/api/v1/dispatch/active")
-                    .get()
-                    .header("User-Agent", "okhttp/5.1.0")
-                    .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
-                    .header("Authorization", "Bearer $rawTok")
-                if (capturedDriverCipherB64.isNotEmpty()) {
-                    rb.header("x-unique-Identifier", capturedDriverCipherB64)
-                }
-                val req = rb.build()
-                val resp = singleWarmHttpClient.newCall(req).execute()
-                val rttMs = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
-                val proto = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
-                val code = resp.code
-                resp.close()
-                // Prewarm secondary & tertiary HTTP/2 sockets with a 150ms stagger so they never collide on the radio
-                CoroutineScope(Dispatchers.IO).launch {
-                    try {
-                        delay(150L)
-                        if (activeAcceptCallsCount.get() == 0) {
-                            secondaryWarmHttpClient.newCall(req).execute().close()
-                        }
-                        delay(150L)
-                        if (activeAcceptCallsCount.get() == 0) {
-                            tertiaryWarmHttpClient.newCall(req).execute().close()
-                        }
-                    } catch (_: Throwable) {}
-                }
-                if (force) {
-                    val idle = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
-                    val total = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
-                    val secIdle = try { secondaryWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
-                    val terIdle = try { tertiaryWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
-                    DiagnosticLogger.logStep(
-                        "SpeedLog",
-                        "🔌 [SOCKET WARMUP] gateway.saned.io warmed -> HTTP $code proto=$proto rtt=${rttMs}ms pool=$idle/$total(sec=$secIdle,ter=$terIdle) cipher=${capturedDriverCipherB64.isNotEmpty()}"
-                    )
-                }
-            } catch (_: Throwable) {}
-        }
     }
 
     private val isAccepting = AtomicBoolean(false)
@@ -317,24 +182,21 @@ object OrderInterceptor {
     @Volatile var currentActivity: Activity? = null
     private var isScreenWatcherActive = false
     val loggedOrderIds = ConcurrentHashMap.newKeySet<String>()
-    val knownDbOrderIds = ConcurrentHashMap.newKeySet<String>()
-    val activeDbOrderIds = ConcurrentHashMap.newKeySet<String>()
-    val recentConfirmedAcceptTimestamps = ConcurrentHashMap<Int, Long>()
     @Volatile private var lastHandledOrderSignature = ""
     @Volatile private var lastHandledTimestamp = 0L
 
     fun onActivityPreCreated(activity: Activity): Int {
         currentActivity = activity
         return try {
-            val intent = activity.intent
-            if (intent != null) {
-                val exactId = extractExactOrderIdFromIntent(intent)
-                extractAndProcessOrderFromIntent(intent, activity)
-                exactId
-            } else 0
+  val intent = activity.intent
+  if (intent != null) {
+      val exactId = extractExactOrderIdFromIntent(intent)
+      extractAndProcessOrderFromIntent(intent, activity)
+      exactId
+  } else 0
         } catch (t: Throwable) {
-            DiagnosticLogger.logError("onActivityPreCreated", "Error inspecting activity intent", t)
-            0
+  DiagnosticLogger.logError("onActivityPreCreated", "Error inspecting activity intent", t)
+  0
         }
     }
 
@@ -350,94 +212,42 @@ object OrderInterceptor {
     } catch (_: Throwable) { 0 }
 
     val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
-    val apiConfirmedTakenIds = ConcurrentHashMap.newKeySet<Int>()
-
-    private fun triggerUiAutoAcceptBackupOnActivity(activity: Activity, orderIdInt: Int, tag: String) {
-        if (activity.isFinishing || activity.isDestroyed) return
-        if (orderIdInt != 0 && (apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt))) {
-            val entry = handledOrdersMap[orderIdInt]
-            closeDispatchActivitySafely(activity, entry?.wasInBackground ?: false)
-            return
-        }
-        try {
-            val decor = activity.window?.decorView ?: return
-            DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt triggering UI auto-accept backup ($tag)")
-            var clickedDirect = false
-            fun scanForAcceptViews(v: View) {
-                val idName = try {
-                    if (v.id != View.NO_ID) activity.resources.getResourceEntryName(v.id).lowercase(Locale.US) else ""
-                } catch (_: Throwable) { "" }
-                val txt = (v as? TextView)?.text?.toString()?.trim()?.lowercase(Locale.US) ?: ""
-                val desc = v.contentDescription?.toString()?.trim()?.lowercase(Locale.US) ?: ""
-                val combined = "$idName $txt $desc"
-                val isReject = combined.contains("reject") || combined.contains("رفض") || combined.contains("cancel") || combined.contains("ignore")
-                val isAccept = !isReject && (
-                    idName.contains("accept") || idName.contains("approve") || idName.contains("confirm") || idName.contains("slide") ||
-                    txt.contains("accept") || txt.contains("قبول") || txt.contains("موافق") || txt.contains("اسحب") ||
-                    desc.contains("accept") || desc.contains("قبول")
-                )
-                if (isAccept && v.isShown) {
-                    triggerClick(v)
-                    simulateSwipe(v, decor, activity)
-                    clickedDirect = true
-                }
-                if (v is ViewGroup) {
-                    for (i in 0 until v.childCount) {
-                        scanForAcceptViews(v.getChildAt(i))
-                    }
-                }
-            }
-            scanForAcceptViews(decor)
-            if (!clickedDirect) {
-                findAndTriggerOrder(decor, activity, System.currentTimeMillis())
-            }
-        } catch (_: Throwable) {}
-    }
 
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
         if (orderIdInt == 0) return
         val entry = handledOrdersMap[orderIdInt] ?: return
         if ((entry.decision != "ACCEPT" && entry.decision != "REJECT") || isDryRun) return
         if (isSilenceAlertTone) {
-            try {
-                for (field in activity.javaClass.declaredFields) {
-                    if (MediaPlayer::class.java.isAssignableFrom(field.type)) {
-                        field.isAccessible = true
-                        (field.get(activity) as? MediaPlayer)?.setVolume(0f, 0f)
-                    }
-                }
-            } catch (_: Throwable) {}
+  try {
+      for (field in activity.javaClass.declaredFields) {
+          if (MediaPlayer::class.java.isAssignableFrom(field.type)) {
+              field.isAccessible = true
+              (field.get(activity) as? MediaPlayer)?.setVolume(0f, 0f)
+          }
+      }
+  } catch (_: Throwable) {}
         }
-        if (entry.decision == "REJECT") {
-            closeDispatchActivitySafely(activity, entry.wasInBackground)
-            return
+        // If decision is ACCEPT, only finish IncomingDispatchActivity if API accept already succeeded (200..299).
+        // Otherwise, trigger UI auto-accept on IncomingDispatchActivity as backup so the order is never lost!
+        if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
+  DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending/failed -> triggering UI auto-accept backup")
+  for (delayMs in listOf(120L, 300L, 600L)) {
+      mainHandler.postDelayed({
+          try {
+              if (apiConfirmedAcceptIds.contains(orderIdInt)) {
+                  closeDispatchActivitySafely(activity, entry.wasInBackground)
+              } else if (!activity.isFinishing && !activity.isDestroyed) {
+                  val decor = activity.window?.decorView
+                  if (decor != null) {
+                      findAndTriggerOrder(decor, activity, System.currentTimeMillis())
+                  }
+              }
+          } catch (_: Throwable) {}
+      }, delayMs)
+  }
+  return
         }
-        // Decision is ACCEPT:
-        // 1. If DirectApi ALREADY confirmed HTTP 200 acceptance OR confirmed order was already taken (HTTP 400), close IncomingDispatchActivity immediately.
-        if (apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt)) {
-            closeDispatchActivitySafely(activity, entry.wasInBackground)
-            return
-        }
-        // 2. If Auth Token is empty (or DirectApi already finished without confirming), trigger UI Auto-Accept Backup immediately!
-        if (cachedAuthToken.isEmpty() || activeAcceptCallsCount.get() <= 0) {
-            for (delayMs in listOf(15L, 70L, 160L, 320L)) {
-                mainHandler.postDelayed({
-                    triggerUiAutoAcceptBackupOnActivity(activity, orderIdInt, "immediate-${delayMs}ms")
-                }, delayMs)
-            }
-            return
-        }
-        // 3. DirectApi HTTP/2 burst is currently in flight: give it 175ms of 0% UI interference,
-        // then either close the activity if HTTP 200 succeeded, or fire UI Auto-Accept Backup as a safety net!
-        for (delayMs in listOf(175L, 320L, 520L)) {
-            mainHandler.postDelayed({
-                if (apiConfirmedAcceptIds.contains(orderIdInt)) {
-                    closeDispatchActivitySafely(activity, entry.wasInBackground)
-                } else {
-                    triggerUiAutoAcceptBackupOnActivity(activity, orderIdInt, "fallback-${delayMs}ms")
-                }
-            }, delayMs)
-        }
+        closeDispatchActivitySafely(activity, entry.wasInBackground)
     }
 
     private fun closeDispatchActivitySafely(activity: Activity, wasInBackground: Boolean) {
@@ -559,6 +369,7 @@ object OrderInterceptor {
                             destLng = dLng,
                             sourceChannel = "SCREEN"
                         )
+                        handlePostOrderActivityCreate(activity, reqId)
                         return
                     }
                 }
@@ -643,43 +454,41 @@ object OrderInterceptor {
                 }
             }
 
-            // Extract coordinates and compute Haversine distances (matching Lqz.a & Ls20.e)
-            var pLat = 0.0
-            var pLng = 0.0
-            var dLat = 0.0
-            var dLng = 0.0
-            for (k in extras.keySet()) {
-                val lk = k.lowercase()
-                val v = extras.get(k) ?: continue
-                val d = (v as? Number)?.toDouble() ?: v.toString().toDoubleOrNull() ?: continue
-                if (d in 15.0..35.0) {
-                    if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLat == 0.0) {
-                        if (pLat == 0.0) pLat = d else if (dLat == 0.0) dLat = d
-                    } else if (dLat == 0.0) {
-                        dLat = d
-                    }
-                } else if (d in 34.0..56.0) {
-                    if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLng == 0.0) {
-                        if (pLng == 0.0) pLng = d else if (dLng == 0.0) dLng = d
-                    } else if (dLng == 0.0) {
-                        dLng = d
+            // Compute Haversine distances from coordinates if direct distance extra is 0.0 (matching Lqz.a & Ls20.e)
+            if (foundDist == 0.0) {
+                var pLat = 0.0
+                var pLng = 0.0
+                var dLat = 0.0
+                var dLng = 0.0
+                for (k in extras.keySet()) {
+                    val lk = k.lowercase()
+                    val v = extras.get(k) ?: continue
+                    val d = (v as? Number)?.toDouble() ?: v.toString().toDoubleOrNull() ?: continue
+                    if (d in 15.0..35.0) {
+                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLat == 0.0) {
+                            if (pLat == 0.0) pLat = d else if (dLat == 0.0) dLat = d
+                        } else if (dLat == 0.0) {
+                            dLat = d
+                        }
+                    } else if (d in 34.0..56.0) {
+                        if (lk.contains("pickup") || lk.contains("store") || lk.contains("branch") || lk.contains("rest") || pLng == 0.0) {
+                            if (pLng == 0.0) pLng = d else if (dLng == 0.0) dLng = d
+                        } else if (dLng == 0.0) {
+                            dLng = d
+                        }
                     }
                 }
-            }
-            val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-            val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
-            if (foundDist == 0.0 && pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
-                foundDist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
-            }
-            if (foundCustDist == 0.0 && pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) {
-                foundCustDist = LocationEngine.calculateDistance(pLat, pLng, dLat, dLng)
+                val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
+                val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
+                    foundDist = LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
+                }
+                if (foundCustDist == 0.0 && pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) {
+                    foundCustDist = LocationEngine.calculateDistance(pLat, pLng, dLat, dLng)
+                }
             }
 
             if (foundId.isNotEmpty() && (foundPrice > 0.0 || foundDist > 0.0 || foundStore.isNotEmpty())) {
-                cacheOrderCoords(foundId, pLat, pLng, dLat, dLng)
-                if (pLat != 0.0 || dLat != 0.0) {
-                    DiagnosticLogger.logStep("NavLog", "Activity Intent $foundId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) custDist=${String.format(Locale.US, "%.2f", foundCustDist)}km")
-                }
                 val cleanPrice = String.format(Locale.US, "%.2f", foundPrice).toDoubleOrNull() ?: foundPrice
                 lastOrderEvent = "Order $foundId detected via Activity Intent"
                 handleOrderViaApi(
@@ -691,11 +500,7 @@ object OrderInterceptor {
                     custAddr = foundAddress,
                     custName = foundCustomer,
                     custPhone = foundPhone,
-                    cashAmt = foundCash,
-                    pickupLat = pLat,
-                    pickupLng = pLng,
-                    destLat = dLat,
-                    destLng = dLng
+                    cashAmt = foundCash
                 )
             }
         } catch (_: Throwable) {}
@@ -899,49 +704,49 @@ object OrderInterceptor {
         val testNum = (100000..999999).random()
         val testRef = "JH-$testNum"
         val testId = "#$testNum"
-        val testPrice = if (minOrderPrice > 0.0) (minOrderPrice + 5.0) else 24.50
-        val testDist = if (maxDistToRestaurant > 0.0) (maxDistToRestaurant * 0.5).coerceIn(0.3, 1.5) else 0.85
+        val testPrice = 24.50
+        val testDist = 2.8
         val testStore = "شاورما كلاسك (Al Classic Shawarma)"
         val testCustomer = "محمد العتيبي (Mohammed)"
         val testPhone = "0501234567"
         val testAddress = "حي الياسمين، شارع أنس بن مالك، الرياض"
         val testCash = 55.00
+        val testStatus = "Accepted (Auto-Accept ⚡)"
 
-        val baseLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else if (LocationEngine.lastRealLat != 0.0) LocationEngine.lastRealLat else 24.8615
-        val baseLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else if (LocationEngine.lastRealLng != 0.0) LocationEngine.lastRealLng else 46.6450
-        val simPLat = baseLat + 0.0045
-        val simPLng = baseLng + 0.0035
-        val simDLat = simPLat + 0.0065
-        val simDLng = simPLng + 0.0055
-        val simCustDist = if (maxDistCustomer > 0.0) (maxDistCustomer * 0.6).coerceIn(0.5, 1.8) else LocationEngine.calculateDistance(simPLat, simPLng, simDLat, simDLng)
-        cacheOrderCoords(testId, simPLat, simPLng, simDLat, simDLng)
-        cacheOrderCoords(testRef, simPLat, simPLng, simDLat, simDLng)
-        DiagnosticLogger.logStep("NavLog", "Simulated Order $testId: pickup=($simPLat,$simPLng) -> customer=($simDLat,$simDLng) restDist=${String.format(Locale.US, "%.2f", testDist)}km custDist=${String.format(Locale.US, "%.2f", simCustDist)}km")
+        val simPLat = 24.8105
+        val simPLng = 46.6251
+        val simDLat = 24.8264
+        val simDLng = 46.6412
+        val simCustDist = LocationEngine.calculateDistance(simPLat, simPLng, simDLat, simDLng)
+
         lastOrderEvent = "Simulated Order $testId received"
-        playAlertSound()
-        currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
-
-        handleOrderViaApi(
+        sendOrderToLog(
             orderId = testId,
             price = testPrice,
             dist = testDist,
             restaurant = testStore,
-            custDist = simCustDist,
-            custAddr = testAddress,
-            custName = testCustomer,
-            custPhone = testPhone,
-            cashAmt = testCash,
+            status = testStatus,
+            customerName = testCustomer,
+            customerPhone = testPhone,
+            address = testAddress,
+            cashAmount = testCash,
             foodPrice = 65.00,
             paymentMethod = "CASH",
+            currency = "SAR",
             reference = testRef,
+            customerDistanceKm = simCustDist,
             pickupLat = simPLat,
             pickupLng = simPLng,
             destLat = simDLat,
             destLng = simDLng
         )
+        playAlertSound()
+        currentActivity?.let { showToast(it, "🧪 Simulated Order $testId: Processing auto-accept pipeline...") }
+
+        handleOrderViaApi(testId, testPrice, testDist, testStore)
     }
 
-
+    
     private var wakeLock: PowerManager.WakeLock? = null
 
     /**
@@ -972,93 +777,43 @@ object OrderInterceptor {
     // Caches [pickupLat, pickupLng, destLat, destLng] per orderId / referenceId (matching Luf1 h,i,j,k)
     private val coordsCache = ConcurrentHashMap<String, DoubleArray>()
 
-    private val isPaymentDiskLoaded = AtomicBoolean(false)
-
-    private fun loadPersistedPaymentCacheIfNeeded() {
-        if (!isPaymentDiskLoaded.compareAndSet(false, true)) return
-        try {
-            val f = File("/data/local/tmp/saned_payment_cache.json")
-            if (f.exists()) {
-                val root = JSONObject(f.readText())
-                val fpObj = root.optJSONObject("food")
-                if (fpObj != null) {
-                    val it = fpObj.keys()
-                    while (it.hasNext()) {
-                        val k = it.next()
-                        val v = fpObj.optDouble(k, 0.0)
-                        if (v > 0.0) foodPriceCache[k] = v
-                    }
-                }
-                val pmObj = root.optJSONObject("method")
-                if (pmObj != null) {
-                    val it = pmObj.keys()
-                    while (it.hasNext()) {
-                        val k = it.next()
-                        val v = pmObj.optString(k, "")
-                        if (v.isNotEmpty()) paymentMethodCache[k] = v
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
-    private fun savePersistedPaymentCache() {
-        try {
-            val root = JSONObject()
-            val fpObj = JSONObject()
-            for ((k, v) in foodPriceCache) if (v > 0.0) fpObj.put(k, v)
-            val pmObj = JSONObject()
-            for ((k, v) in paymentMethodCache) if (v.isNotEmpty()) pmObj.put(k, v)
-            root.put("food", fpObj)
-            root.put("method", pmObj)
-            val f = File("/data/local/tmp/saned_payment_cache.json")
-            f.writeText(root.toString())
-            f.setReadable(true, false)
-            f.setWritable(true, false)
-        } catch (_: Throwable) {}
-    }
-
     fun cacheOrderPayment(idOrRef: String, foodPrice: Double, cashAmt: Double = 0.0, payMethod: String = "") {
-        loadPersistedPaymentCacheIfNeeded()
         val key = idOrRef.replace("#", "").trim()
         if (key.isEmpty() || key == "0") return
-        var changed = false
         val effFood = if (!foodPrice.isNaN() && foodPrice > 0.0) foodPrice else if (!cashAmt.isNaN() && cashAmt > 0.0) cashAmt else 0.0
         if (effFood > 0.0) {
             val prev = foodPriceCache[key] ?: 0.0
-            if (effFood > prev) {
-                foodPriceCache[key] = effFood
-                changed = true
-            }
+            if (effFood >= prev) foodPriceCache[key] = effFood
         }
         if (payMethod.isNotEmpty() && payMethod != "null") {
-            if (paymentMethodCache[key] != payMethod) {
-                paymentMethodCache[key] = payMethod
-                changed = true
-            }
+            paymentMethodCache[key] = payMethod
         }
-        if (changed) savePersistedPaymentCache()
     }
+    private val knownDbOrderIds = ConcurrentHashMap.newKeySet<String>()
     private val loggedNavOrderKeys = ConcurrentHashMap.newKeySet<String>()
     private val loggedLocationSchema = AtomicBoolean(false)
 
     fun cacheOrderCoords(idOrRef: String, pLat: Double, pLng: Double, dLat: Double, dLng: Double) {
         val key = idOrRef.replace("#", "").trim()
-        if (key.isEmpty()) return
-        if (pLat == 0.0 && pLng == 0.0 && dLat == 0.0 && dLng == 0.0) return
+        if (key.isEmpty() || key == "0") return
+        val cleanPLat = if (pLat.isNaN() || pLat.isInfinite()) 0.0 else pLat
+        val cleanPLng = if (pLng.isNaN() || pLng.isInfinite()) 0.0 else pLng
+        val cleanDLat = if (dLat.isNaN() || dLat.isInfinite()) 0.0 else dLat
+        val cleanDLng = if (dLng.isNaN() || dLng.isInfinite()) 0.0 else dLng
+        if (cleanPLat == 0.0 && cleanPLng == 0.0 && cleanDLat == 0.0 && cleanDLng == 0.0) return
         val prev = coordsCache[key]
         val merged = doubleArrayOf(
-            if (pLat != 0.0 && !pLat.isNaN()) pLat else (prev?.getOrNull(0) ?: 0.0),
-            if (pLng != 0.0 && !pLng.isNaN()) pLng else (prev?.getOrNull(1) ?: 0.0),
-            if (dLat != 0.0 && !dLat.isNaN()) dLat else (prev?.getOrNull(2) ?: 0.0),
-            if (dLng != 0.0 && !dLng.isNaN()) dLng else (prev?.getOrNull(3) ?: 0.0)
+            if (cleanPLat != 0.0) cleanPLat else (prev?.getOrNull(0) ?: 0.0),
+            if (cleanPLng != 0.0) cleanPLng else (prev?.getOrNull(1) ?: 0.0),
+            if (cleanDLat != 0.0) cleanDLat else (prev?.getOrNull(2) ?: 0.0),
+            if (cleanDLng != 0.0) cleanDLng else (prev?.getOrNull(3) ?: 0.0)
         )
         coordsCache[key] = merged
     }
 
     fun getCachedCoords(idOrRef: String): DoubleArray? {
         val key = idOrRef.replace("#", "").trim()
-        if (key.isEmpty()) return null
+        if (key.isEmpty() || key == "0") return null
         return coordsCache[key]
     }
 
@@ -1115,34 +870,13 @@ object OrderInterceptor {
       DiagnosticLogger.logWarn("BootstrapLoop", "Timed out waiting for currentApplication()")
   }
 
-  // Immediately load persisted token & driverId cipher at 0ms and prewarm HTTP/2 socket BEFORE sleeping!
-  try {
-      readPersistedToken()
-      readPersistedDriverCipher()
-      fastAcceptExecutor.execute {}
-      val earlyCtx = resolvedApp ?: resolveApplicationContext()
-      if (earlyCtx != null) {
-          readExactJahezEncryptedPrefs(earlyCtx)
-      }
-      if (cachedAuthToken.isNotEmpty()) {
-          prewarmGatewayConnection(force = true)
-      }
-  } catch (_: Throwable) {}
-
-  try { Thread.sleep(1200) } catch (_: Throwable) {}
-  try {
-      val initCtx = resolveApplicationContext()
-      if (initCtx != null) {
-          readExactJahezEncryptedPrefs(initCtx)
-          prewarmGatewayConnection(force = true)
-          scanJahezDatabases(initCtx)
-      }
-  } catch (_: Throwable) {}
+  // Wait 3000ms matching Lb11$b delay(3000L) in SanedAssistant-98 so Jahez finishes initializing Tink EncryptedSharedPreferences & Room DB
+  try { Thread.sleep(3000) } catch (_: Throwable) {}
   if (DiagnosticLogger.hookBootstrapLoop) {
       startActiveServerPolling()
   }
 
-  // Calm background token & SQLite sync loop (every 6 seconds so it never congests HTTP/2 socket)
+  // Continuous background SQLite + EncryptedSharedPreferences token sync loop matching Lb11$b in SanedAssistant-98
   while (true) {
       try {
           val ctx = resolveApplicationContext()
@@ -1156,7 +890,7 @@ object OrderInterceptor {
       } catch (t: Throwable) {
           DiagnosticLogger.logError("BootstrapLoop", "Error in background loop iteration", t)
       }
-      try { Thread.sleep(6000) } catch (_: Throwable) { break }
+      try { Thread.sleep(2500) } catch (_: Throwable) { break }
   }
         }.apply {
   isDaemon = true
@@ -1256,8 +990,6 @@ object OrderInterceptor {
   DiagnosticLogger.logError("initAppContext", "Failed registering settingsReceiver", t)
         }
 
-        readPersistedToken()
-        readPersistedDriverCipher()
         loadFallbackConfigFile()
         LocationEngine.syncLocationSettings()
         DeviceSpoofer.syncSettings()
@@ -1295,7 +1027,6 @@ object OrderInterceptor {
         minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
         maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
-        maxOrdersLimit = intent.getIntExtra("max_orders_limit", maxOrdersLimit).coerceAtLeast(0)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
         isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
         LocationEngine.isMasterRunning = isMasterRunning
@@ -1328,7 +1059,6 @@ object OrderInterceptor {
                 minOrderPrice = json.optDouble("min_price", minOrderPrice)
                 maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
                 maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
-                maxOrdersLimit = json.optInt("max_orders_limit", maxOrdersLimit).coerceAtLeast(0)
             }
         } catch (_: Throwable) {}
     }
@@ -1365,7 +1095,6 @@ object OrderInterceptor {
                     minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
                     maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
                     maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-                    maxOrdersLimit = bundle.getString("max_orders_limit_str", null)?.toIntOrNull() ?: bundle.getInt("max_orders_limit", maxOrdersLimit)
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
                 }
@@ -1389,45 +1118,22 @@ object OrderInterceptor {
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-            maxOrdersLimit = p.getString("max_orders_limit_str", null)?.toIntOrNull() ?: p.getInt("max_orders_limit", maxOrdersLimit)
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = p.getBoolean("show_toasts", isShowToasts)
         }
     }
 
     fun persistToken(token: String) {
-        val clean = token.trim()
-        if (clean.isEmpty()) return
-        try {
-            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
-            if (ctx != null) {
-                File(ctx.filesDir, "saned_auth_token.txt").writeText(clean)
-            }
-        } catch (_: Throwable) {}
+        if (token.isEmpty()) return
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
-            f.writeText(clean)
+            f.writeText(token.trim())
             f.setReadable(true, false)
             f.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 
     fun readPersistedToken(): String {
-        try {
-            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
-            if (ctx != null) {
-                val pf = File(ctx.filesDir, "saned_auth_token.txt")
-                if (pf.exists()) {
-                    val t = pf.readText().trim()
-                    if (t.isNotEmpty()) {
-                        cachedAuthToken = t
-                        cachedHeaders["Authorization"] = t
-                        extractHostFromJwt(t)
-                        return t
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
             if (f.exists()) {
@@ -1437,50 +1143,6 @@ object OrderInterceptor {
                     cachedHeaders["Authorization"] = t
                     extractHostFromJwt(t)
                     return t
-                }
-            }
-        } catch (_: Throwable) {}
-        return ""
-    }
-
-    fun persistDriverCipher(cipherB64: String) {
-        val clean = cipherB64.trim()
-        if (clean.isEmpty()) return
-        try {
-            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
-            if (ctx != null) {
-                File(ctx.filesDir, "saned_driver_cipher.txt").writeText(clean)
-            }
-        } catch (_: Throwable) {}
-        try {
-            val f = File("/data/local/tmp/saned_driver_cipher.txt")
-            f.writeText(clean)
-            f.setReadable(true, false)
-            f.setWritable(true, false)
-        } catch (_: Throwable) {}
-    }
-
-    fun readPersistedDriverCipher(): String {
-        try {
-            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
-            if (ctx != null) {
-                val pf = File(ctx.filesDir, "saned_driver_cipher.txt")
-                if (pf.exists()) {
-                    val c = pf.readText().trim()
-                    if (c.isNotEmpty()) {
-                        capturedDriverCipherB64 = c
-                        return c
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
-        try {
-            val f = File("/data/local/tmp/saned_driver_cipher.txt")
-            if (f.exists()) {
-                val c = f.readText().trim()
-                if (c.isNotEmpty()) {
-                    capturedDriverCipherB64 = c
-                    return c
                 }
             }
         } catch (_: Throwable) {}
@@ -1549,67 +1211,31 @@ object OrderInterceptor {
 
     @Volatile var cachedLanguage: String = "en"
     @Volatile private var cachedEncPrefs: SharedPreferences? = null
-    private val jwtRegex = Regex("eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}")
-    private val loggedEmptyEncPrefsOnce = AtomicBoolean(false)
-
-    private fun extractJwtFromAnyString(raw: String, sourceKey: String): Boolean {
-        val m = jwtRegex.find(raw)
-        if (m != null) {
-            val jwt = m.value
-            val normNew = "Bearer $jwt"
-            if (cachedAuthToken != normNew) {
-                DiagnosticLogger.logStep("EncryptedPrefs", "Auth JWT extracted from $sourceKey (len=${jwt.length})")
-            }
-            checkAndSetToken(jwt, sourceKey)
-            return cachedAuthToken.isNotEmpty()
-        }
-        return false
-    }
 
     fun readExactJahezEncryptedPrefs(context: Context) {
         try {
-            val prefs = cachedEncPrefs ?: synchronized(this) {
-                cachedEncPrefs ?: run {
-                    val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-                    EncryptedSharedPreferences.create(
-                        context, Native.safeH(), masterKey,
-                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                    ).also { cachedEncPrefs = it }
-                }
-            }
-            val tok = prefs.getString(Native.safeI(), "") ?: ""
-            if (tok.isNotEmpty()) {
-                val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
-                if (cachedAuthToken != normNew) {
-                    DiagnosticLogger.logStep("EncryptedPrefs", "Auth token refreshed from EncryptedPrefs (len=${tok.length})")
-                }
-                checkAndSetToken(tok, Native.safeI())
-            } else {
-                // Fallback 1: Scan all keys inside ENCRYPTED_SANED_PREFERENCES in case vCode=40104 renamed the token key or embedded it in JSON
-                try {
-                    val allEntries = prefs.all
-                    for ((k, v) in allEntries) {
-                        val s = v?.toString()?.trim() ?: continue
-                        if (s.length > 30) {
-                            if (extractJwtFromAnyString(s, "EncPrefs[$k]")) break
-                            checkAndSetToken(s, k)
-                            if (cachedAuthToken.isNotEmpty()) break
-                        }
-                    }
-                    if (cachedAuthToken.isEmpty() && loggedEmptyEncPrefsOnce.compareAndSet(false, true)) {
-                        DiagnosticLogger.logStep("EncryptedPrefs", "ENCRYPTED_SANED_PREFERENCES keys=${allEntries.keys} (scanning fallback stores...)")
-                    }
-                } catch (_: Throwable) {}
-            }
-            val lang = prefs.getString(Native.safeJ(), "en") ?: "en"
-            if (lang.isNotEmpty()) cachedLanguage = lang
+  val prefs = cachedEncPrefs ?: synchronized(this) {
+      cachedEncPrefs ?: run {
+          val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+          EncryptedSharedPreferences.create(
+              context, Native.safeH(), masterKey,
+              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+          ).also { cachedEncPrefs = it }
+      }
+  }
+  val tok = prefs.getString(Native.safeI(), "") ?: ""
+  if (tok.isNotEmpty()) {
+      val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
+      if (cachedAuthToken != normNew) {
+          DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
+      }
+      checkAndSetToken(tok, Native.safeI())
+  }
+  val lang = prefs.getString(Native.safeJ(), "en") ?: "en"
+  if (lang.isNotEmpty()) cachedLanguage = lang
         } catch (t: Throwable) {
-            DiagnosticLogger.logError("EncryptedPrefs", "Could not read ENCRYPTED_SANED_PREFERENCES yet", t)
-        }
-        // Fallback 2: If still empty, scan all shared_prefs XMLs, other EncryptedSharedPreferences files, and DataStore files!
-        if (cachedAuthToken.isEmpty()) {
-            scanJahezSharedPreferencesForToken(context)
+  DiagnosticLogger.logError("EncryptedPrefs", "Could not read ENCRYPTED_SANED_PREFERENCES yet", t)
         }
     }
 
@@ -1687,23 +1313,16 @@ object OrderInterceptor {
   val mOnCreate = actCls.getDeclaredMethod("onCreate", android.os.Bundle::class.java)
   module.hook(mOnCreate).intercept(object : XposedInterface.Hooker {
       override fun intercept(chain: XposedInterface.Chain): Any? {
+          val res = chain.proceed()
           val act = chain.thisObject as? Activity
-          var reqId = 0
           if (act != null) {
               try {
                   initAppContext(act.applicationContext)
                   currentActivity = act
-                  reqId = onActivityPreCreated(act)
+                  val reqId = onActivityPreCreated(act)
+                  if (reqId != 0) handlePostOrderActivityCreate(act, reqId)
               } catch (t: Throwable) {
-                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in pre-onCreate hook", t)
-              }
-          }
-          val res = chain.proceed()
-          if (act != null && reqId != 0) {
-              try {
-                  handlePostOrderActivityCreate(act, reqId)
-              } catch (t: Throwable) {
-                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in post-onCreate hook", t)
+                  DiagnosticLogger.logError("IncomingDispatchActivity", "Error in onCreate hook", t)
               }
           }
           return res
@@ -1717,73 +1336,12 @@ object OrderInterceptor {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
+        // Matches SanedAssistant-98-7bac1ec.apk 100%: ONLY these 4 hooks (zero OkHttp/UI/SQLite/SharedPreferences hooks that crash Jahez)
         try { hookFirebase(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookFirebase", "Error", t) }
         try { hookIncomingDispatchActivity(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookIncomingDispatchActivity", "Error", t) }
         try { hookInstrumentation(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookInstrumentation", "Error", t) }
         try { hookCipher(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookCipher", "Error", t) }
-        try { hookSharedPreferences(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookSharedPreferences", "Error", t) }
-        try { hookOkHttpHeadersPassively(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookOkHttpHeadersPassively", "Error", t) }
         isOkHttpHooked = true
-    }
-
-    private val isPassiveHeadersHooked = AtomicBoolean(false)
-
-    private fun hookOkHttpHeadersPassively(module: XposedModule, classLoader: ClassLoader) {
-        if (!isPassiveHeadersHooked.compareAndSet(false, true)) return
-        val builderClasses = listOf(
-            "okhttp3.Headers\$Builder",
-            "okhttp3.Request\$Builder",
-            "java.net.URLConnection"
-        )
-        var hookedCount = 0
-        for (clsName in builderClasses) {
-            try {
-                val cls = try {
-                    Class.forName(clsName, false, classLoader)
-                } catch (_: Throwable) {
-                    Class.forName(clsName)
-                }
-                for (m in cls.declaredMethods) {
-                    val pTypes = m.parameterTypes
-                    if (pTypes.size == 2 && pTypes[0] == String::class.java && pTypes[1] == String::class.java &&
-                        (m.name == "add" || m.name == "set" || m.name == "header" || m.name == "addHeader" || m.name == "addUnsafeNonAscii" || m.name == "setRequestProperty" || m.name == "addRequestProperty")) {
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                try {
-                                    val k = chain.args.getOrNull(0) as? String
-                                    val v = chain.args.getOrNull(1) as? String
-                                    if (!k.isNullOrEmpty() && !v.isNullOrEmpty()) {
-                                        if (k.equals("Authorization", ignoreCase = true) || k.contains("token", ignoreCase = true)) {
-                                            val wasEmpty = cachedAuthToken.isEmpty()
-                                            checkAndSetToken(v, k)
-                                            if (wasEmpty && cachedAuthToken.isNotEmpty()) {
-                                                DiagnosticLogger.logStep("HeaderHook", "Captured live Authorization token (len=${cachedAuthToken.length})")
-                                                prewarmGatewayConnection(force = true)
-                                            }
-                                        } else if (k.equals("x-unique-Identifier", ignoreCase = true)) {
-                                            val cleanC = v.trim()
-                                            if (cleanC.isNotEmpty() && cleanC != capturedDriverCipherB64) {
-                                                val wasEmpty = capturedDriverCipherB64.isEmpty()
-                                                capturedDriverCipherB64 = cleanC
-                                                persistDriverCipher(cleanC)
-                                                if (wasEmpty) {
-                                                    DiagnosticLogger.logStep("HeaderHook", "Captured live x-unique-Identifier header (${cleanC.take(12)}...)")
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (_: Throwable) {}
-                                return chain.proceed()
-                            }
-                        })
-                        hookedCount++
-                    }
-                }
-            } catch (_: Throwable) {}
-        }
-        if (hookedCount > 0) {
-            DiagnosticLogger.logStep("OrderInterceptor", "Hooked passive HTTP header builders ($hookedCount methods)")
-        }
     }
 
     private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader): Int {
@@ -2114,121 +1672,6 @@ object OrderInterceptor {
                           if (intent != null) {
                               val callerObj = chain.args.getOrNull(activityIdx)
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
-                              try {
-                                  val actStr = intent.action ?: ""
-                                  val dataStr = intent.dataString ?: ""
-                                  val cmpStr = intent.component?.className ?: ""
-                                  val pkgStr = intent.`package` ?: ""
-                                  val isInternalSanedIntent = dataStr.startsWith("saned://", ignoreCase = true) ||
-                                      dataStr.contains("dispatch.assigning", ignoreCase = true) ||
-                                      pkgStr.equals("net.jahez.fleets", ignoreCase = true) ||
-                                      cmpStr.contains("jahez", ignoreCase = true) ||
-                                      cmpStr.contains("saned", ignoreCase = true) ||
-                                      orderIdInt != 0
-                                  val isNavIntent = !isInternalSanedIntent && (
-                                      dataStr.startsWith("geo:", ignoreCase = true) ||
-                                      dataStr.contains("google.navigation", ignoreCase = true) ||
-                                      dataStr.contains("maps.google", ignoreCase = true) ||
-                                      dataStr.contains("google.com/maps", ignoreCase = true) ||
-                                      dataStr.contains("maps.app.goo.gl", ignoreCase = true) ||
-                                      dataStr.contains("maps/dir", ignoreCase = true) ||
-                                      dataStr.contains("waze", ignoreCase = true) ||
-                                      pkgStr.contains("maps", ignoreCase = true) ||
-                                      pkgStr.contains("waze", ignoreCase = true)
-                                  )
-                                  if (isNavIntent && !intent.getBooleanExtra("saned_nav_bypass", false)) {
-                                      if (coordsCache.isEmpty()) {
-                                          try { resolveApplicationContext()?.let { scanJahezDatabases(it) } } catch (_: Throwable) {}
-                                      }
-                                      // Match order by pickup coordinates in URI, or fallback to latest active order in coordsCache
-                                      var matchedEntry: Map.Entry<String, DoubleArray>? = null
-                                      for (entry in coordsCache.entries) {
-                                          val pl = entry.value.getOrNull(0) ?: 0.0
-                                          val pg = entry.value.getOrNull(1) ?: 0.0
-                                          if (pl != 0.0 && pg != 0.0) {
-                                              val plPrefix = String.format(Locale.US, "%.3f", pl)
-                                              val pgPrefix = String.format(Locale.US, "%.3f", pg)
-                                              if (dataStr.contains(plPrefix) || dataStr.contains(pgPrefix)) {
-                                                  matchedEntry = entry
-                                                  break
-                                              }
-                                          }
-                                      }
-                                      if (matchedEntry == null) {
-                                          matchedEntry = coordsCache.entries.lastOrNull { (it.value.getOrNull(2) ?: 0.0) != 0.0 }
-                                              ?: coordsCache.entries.lastOrNull()
-                                      }
-                                      val ordKey = matchedEntry?.key ?: "none"
-                                      val lc = matchedEntry?.value
-                                      val pLat = lc?.getOrNull(0) ?: 0.0
-                                      val pLng = lc?.getOrNull(1) ?: 0.0
-                                      val dLat = lc?.getOrNull(2) ?: 0.0
-                                      val dLng = lc?.getOrNull(3) ?: 0.0
-                                      DiagnosticLogger.logStep(
-                                          "NavLog",
-                                          "Saned Navigate button clicked! action=$actStr uri=[$dataStr] pkg=$pkgStr caller=${callerObj?.javaClass?.simpleName ?: "App"} | order=#$ordKey pickup=($pLat,$pLng) customerDest=($dLat,$dLng)"
-                                      )
-                                      val dLatPrefix = if (dLat != 0.0) String.format(Locale.US, "%.3f", dLat) else ""
-                                      val alreadyGoingToCustomer = dLatPrefix.isNotEmpty() && dataStr.contains(dLatPrefix)
-                                      val callerAct = (callerObj as? Activity) ?: currentActivity
-                                      if (isMasterRunning && dLat != 0.0 && dLng != 0.0 && !alreadyGoingToCustomer && callerAct != null && !callerAct.isFinishing && !callerAct.isDestroyed) {
-                                          val custDistKm = if (pLat != 0.0 && pLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
-                                          val distInfo = if (custDistKm > 0.0) String.format(Locale.US, " (يبعد %.1f كم عن المطعم)", custDistKm) else ""
-                                          DiagnosticLogger.logStep("NavLog", "Showing Pre-Pickup Navigation Chooser for #$ordKey: Restaurant=($pLat,$pLng) vs Customer=($dLat,$dLng)")
-                                          callerAct.runOnUiThread {
-                                              try {
-                                                  android.app.AlertDialog.Builder(callerAct)
-                                                      .setTitle("🧭 اختر وجهة التوجيه (الطلب #$ordKey)")
-                                                      .setMessage("تم كشف موقع منزل العميل قبل استلام الطلب!\n\n🏪 المطعم: ${String.format(Locale.US, "%.5f, %.5f", pLat, pLng)}\n🏠 منزل العميل: ${String.format(Locale.US, "%.5f, %.5f", dLat, dLng)}$distInfo")
-                                                      .setPositiveButton("🏠 موقع العميل (قبل الاستلام)") { _, _ ->
-                                                          try {
-                                                              val custUrl = if (pLat != 0.0 && pLng != 0.0) {
-                                                                  "https://www.google.com/maps/dir/?api=1&origin=$pLat,$pLng&destination=$dLat,$dLng&travelmode=driving"
-                                                              } else {
-                                                                  "https://www.google.com/maps/dir/?api=1&destination=$dLat,$dLng&travelmode=driving"
-                                                              }
-                                                              DiagnosticLogger.logStep("NavLog", "Driver chose Customer Navigation before pickup: $custUrl")
-                                                              val mapsIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(custUrl)).apply {
-                                                                  setPackage("com.google.android.apps.maps")
-                                                                  putExtra("saned_nav_bypass", true)
-                                                                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                              }
-                                                              try {
-                                                                  callerAct.startActivity(mapsIntent)
-                                                              } catch (_: Throwable) {
-                                                                  val fallbackIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(custUrl)).apply {
-                                                                      putExtra("saned_nav_bypass", true)
-                                                                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                                  }
-                                                                  callerAct.startActivity(fallbackIntent)
-                                                              }
-                                                          } catch (_: Throwable) {}
-                                                      }
-                                                      .setNegativeButton("🏪 موقع المطعم") { _, _ ->
-                                                          try {
-                                                              DiagnosticLogger.logStep("NavLog", "Driver chose Restaurant Navigation: $dataStr")
-                                                              intent.putExtra("saned_nav_bypass", true)
-                                                              callerAct.startActivity(intent)
-                                                          } catch (_: Throwable) {}
-                                                      }
-                                                      .show()
-                                              } catch (_: Throwable) {
-                                                  try {
-                                                      intent.putExtra("saned_nav_bypass", true)
-                                                      callerAct.startActivity(intent)
-                                                  } catch (_: Throwable) {}
-                                              }
-                                          }
-                                          return null
-                                      }
-                                  } else if (cmpStr.contains("dispatch", ignoreCase = true) || cmpStr.contains("order", ignoreCase = true) || orderIdInt != 0) {
-                                      val extKeys = intent.extras?.keySet()?.joinToString(",") ?: "none"
-                                      DiagnosticLogger.logStep(
-                                          "NavLog",
-                                          "Saned Activity start: cmp=${cmpStr.substringAfterLast('.')} orderId=$orderIdInt extras=[$extKeys]"
-                                      )
-                                  }
-                              } catch (_: Throwable) {}
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
                                   val entry = handledOrdersMap[orderIdInt]
                                   if (entry != null && (entry.decision == "REJECT" || (entry.decision == "ACCEPT" && apiConfirmedAcceptIds.contains(orderIdInt)))) {
@@ -2261,111 +1704,7 @@ object OrderInterceptor {
      * Hooks SanedFCMNotificationHandler (Native.d()), extracts order fields via Ldy1 (Native.l()),
      * and suppresses chain.proceed() (returns null) when an order is auto-rejected (not dry-run).
      */
-    private fun extractFcmBundleAndProcessAtZeroMs(bundle: android.os.Bundle?, sourceLabel: String = "EarlyFCM"): String {
-        if (bundle == null || bundle.isEmpty) return ""
-        return try {
-            val keys = Native.safeL()
-            val reqIdKey = if (keys.isNotEmpty()) keys[0] else "requestId"
-            val map = HashMap<String, String>(24)
-            for (k in bundle.keySet()) {
-                val v = bundle.get(k) ?: continue
-                if (v is android.os.Bundle) {
-                    for (nk in v.keySet()) {
-                        val nv = v.get(nk)
-                        if (nv != null) map[nk] = nv.toString()
-                    }
-                } else {
-                    val s = v.toString().trim()
-                    map[k] = s
-                    if (s.startsWith("{") && s.endsWith("}")) {
-                        try {
-                            val j = JSONObject(s)
-                            val it = j.keys()
-                            while (it.hasNext()) {
-                                val jk = it.next()
-                                map[jk] = j.optString(jk, "")
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                }
-            }
-            val rawReqId = map[reqIdKey]?.trim()
-                ?: map["requestId"]?.trim()
-                ?: map["dispatchId"]?.trim()
-                ?: return ""
-            if (rawReqId.isEmpty() || rawReqId == "0") return ""
-            val reqIdInt = rawReqId.toIntOrNull() ?: 0
-            val alreadyHandled = reqIdInt > 0 && handledOrdersMap.containsKey(reqIdInt)
-            val res = processFcmMapWithLs90(map)
-            if (res.isNotEmpty() && !alreadyHandled) {
-                CoroutineScope(Dispatchers.IO).launch {
-                    delay(260L)
-                    DiagnosticLogger.logStep("EarlyFCM", "Intercepted Order #$rawReqId at $sourceLabel layer (0.0ms pre-handler)")
-                }
-            }
-            res
-        } catch (_: Throwable) { "" }
-    }
-
     private fun hookFirebase(module: XposedModule, classLoader: ClassLoader) {
-        // 1. ULTRA-EARLY 0.0ms HOOK: Intercept raw C2DM/FCM Broadcast, FirebaseMessagingService.handleIntent & RemoteMessage(Bundle)
-        // Uses both declaredMethods and inherited methods so CloudMessagingReceiver.onReceive is always hooked!
-        val earlyFcmReceivers = listOf(
-            "com.google.firebase.iid.FirebaseInstanceIdReceiver",
-            "com.google.android.gms.cloudmessaging.CloudMessagingReceiver",
-            "com.google.firebase.messaging.FirebaseMessagingService"
-        )
-        for (rcvName in earlyFcmReceivers) {
-            if (hookedFcmClasses.add(rcvName)) {
-                try {
-                    val rcvCls = Class.forName(rcvName, false, classLoader)
-                    val candidateMethods = (rcvCls.declaredMethods.toList() + rcvCls.methods.toList()).distinct()
-                    for (m in candidateMethods) {
-                        if ((m.name == "onReceive" && m.parameterCount == 2) ||
-                            (m.name == "onMessageReceive" && m.parameterCount == 2) ||
-                            (m.name == "handleIntent" && m.parameterCount == 1)) {
-                            val hookKey = "${m.declaringClass.name}#${m.name}(${m.parameterCount})"
-                            if (!hookedFcmClasses.add(hookKey)) continue
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? {
-                                    try {
-                                        for (arg in chain.args) {
-                                            if (arg is Context && appContext == null) {
-                                                initAppContext(arg.applicationContext)
-                                            } else if (arg is Intent) {
-                                                extractFcmBundleAndProcessAtZeroMs(arg.extras, m.name)
-                                            }
-                                        }
-                                    } catch (_: Throwable) {}
-                                    return chain.proceed()
-                                }
-                            })
-                        }
-                    }
-                } catch (_: Throwable) {}
-            }
-        }
-
-        if (hookedFcmClasses.add("com.google.firebase.messaging.RemoteMessage")) {
-            try {
-                val rmCls = Class.forName("com.google.firebase.messaging.RemoteMessage", false, classLoader)
-                for (ctor in rmCls.declaredConstructors) {
-                    if (ctor.parameterCount == 1 && ctor.parameterTypes[0] == android.os.Bundle::class.java) {
-                        module.hook(ctor).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                try {
-                                    val bundle = chain.args.getOrNull(0) as? android.os.Bundle
-                                    extractFcmBundleAndProcessAtZeroMs(bundle, "RemoteMessage.<init>")
-                                } catch (_: Throwable) {}
-                                return chain.proceed()
-                            }
-                        })
-                    }
-                }
-            } catch (_: Throwable) {}
-        }
-
-        // 2. Hook SanedFCMNotificationHandler (Native.safeD()) for full parity & auto-reject suppression
         val clsName = Native.safeD()
         if (clsName.isEmpty() || !hookedFcmClasses.add(clsName)) return
         try {
@@ -2381,7 +1720,7 @@ object OrderInterceptor {
                   var decisionAction = ""
                   try {
                       val svc = chain.thisObject as? Context
-                      if (svc != null && appContext == null) initAppContext(svc.applicationContext)
+                      if (svc != null) initAppContext(svc.applicationContext)
                       val remoteMessage = chain.args.getOrNull(0)
                       if (remoteMessage != null) {
                           val getDataMethod = remoteMessage.javaClass.methods.firstOrNull {
@@ -2396,21 +1735,13 @@ object OrderInterceptor {
                       DiagnosticLogger.logError("FCM", "Error in FCM hook", t)
                   }
                   if (decisionAction == "REJECT" && !isDryRun) return null
-                  // Give our 0.0ms HTTP/2 PUT accept streams a 120ms network head-start before allowing Jahez
-                  // to write to SQLite dispatches_db or launch IncomingDispatchActivity!
-                  if (decisionAction == "ACCEPT" && !isDryRun) {
-                      val waitStart = SystemClock.elapsedRealtime()
-                      while ((SystemClock.elapsedRealtime() - waitStart) < 120L && activeAcceptCallsCount.get() > 0) {
-                          try { Thread.sleep(4L) } catch (_: Throwable) { break }
-                      }
-                  }
                   return chain.proceed()
               }
           })
           fcmCount++
       }
   }
-  DiagnosticLogger.logStep("OrderInterceptor", "Hooked $clsName ($fcmCount methods) + Early C2DM/RemoteMessage")
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked $clsName ($fcmCount methods)")
         } catch (t: Throwable) {
   hookedFcmClasses.remove(clsName)
   DiagnosticLogger.logError("hookFirebase", "Failed hooking $clsName", t)
@@ -2422,12 +1753,6 @@ object OrderInterceptor {
         if (keys.size < 18) return ""
         val reqId = (dataMap[keys[0]] as? String)?.trim()?.toIntOrNull() ?: return ""
         if (reqId == 0) return ""
-        orderArrivalNanoMap.putIfAbsent(reqId, System.nanoTime())
-        // Fast 0.0ms deduplication: if EarlyFCM (onReceive) already fired for this reqId, return immediately without duplicate logs/IPC!
-        val existingEntry = handledOrdersMap[reqId]
-        if (existingEntry != null && (SystemClock.elapsedRealtime() - existingEntry.timestampRealtime) < 60_000L) {
-            return existingEntry.decision
-        }
         fun mapDouble(k: String): Double = (dataMap[k] as? String)?.trim()?.toDoubleOrNull() ?: 0.0
         fun mapFirstStr(vararg ks: String): String {
   for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
@@ -2449,10 +1774,14 @@ object OrderInterceptor {
         val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distVal
         val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
         cacheOrderCoords(reqId.toString(), pLat, pLng, dLat, dLng)
-        val cleanPrice = ((delivPrice + bonusAmt) * 100.0).toLong() / 100.0
-        lastOrderEvent = "Order #$reqId detected via FCM Push (0.0ms)"
-        // CRITICAL 0.0ms FAST-PATH: Fire handleOrderViaApi FIRST before any DiagnosticLogger Binder IPC or disk I/O!
-        val actionResult = handleOrderViaApi(
+        val cleanPrice = String.format(Locale.US, "%.2f", delivPrice + bonusAmt).toDoubleOrNull() ?: (delivPrice + bonusAmt)
+        lastOrderEvent = "Order #$reqId detected via FCM Push (Ls90)"
+        DiagnosticLogger.logStep("FCM", "Order #$reqId received (price=$cleanPrice, restDist=$calcRestDist)")
+        DiagnosticLogger.logStep(
+            "NavLog",
+            "FCM Push Order #$reqId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) restDist=${String.format(Locale.US, "%.2f", calcRestDist)}km custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km"
+        )
+        return handleOrderViaApi(
             orderId = "#$reqId",
             price = cleanPrice,
             dist = calcRestDist,
@@ -2467,15 +1796,6 @@ object OrderInterceptor {
             destLng = dLng,
             sourceChannel = "PUSH"
         )
-        CoroutineScope(Dispatchers.IO).launch {
-            delay(250L)
-            DiagnosticLogger.logStep("FCM", "Order #$reqId received (price=$cleanPrice, restDist=$calcRestDist) -> 0.0ms dispatch")
-            DiagnosticLogger.logStep(
-                "NavLog",
-                "FCM Push Order #$reqId: pickup=($pLat,$pLng) -> customer=($dLat,$dLng) restDist=${String.format(Locale.US, "%.2f", calcRestDist)}km custDist=${String.format(Locale.US, "%.2f", calcCustDist)}km"
-            )
-        }
-        return actionResult
     }
 
     private fun hookSQLite(module: XposedModule) {
@@ -2602,20 +1922,6 @@ object OrderInterceptor {
             !posRef.isNullOrEmpty() && posRef.any { it.isDigit() } -> posRef
             else -> return
         }
-        knownDbOrderIds.add(idStr)
-        val rawStUpper = (posStatus ?: "Delivered").uppercase(Locale.US)
-        val isRowTerminal = rawStUpper.contains("DELIVER") || rawStUpper.contains("COMPLET") || rawStUpper.contains("CANCEL") || rawStUpper.contains("REJECT") || rawStUpper.contains("FAIL") || rawStUpper.contains("EXPIRE")
-        if (isRowTerminal) {
-            activeDbOrderIds.remove(idStr)
-            if (!posRef.isNullOrEmpty()) activeDbOrderIds.remove(posRef)
-            idStr.toIntOrNull()?.let {
-                apiConfirmedAcceptIds.remove(it)
-                recentConfirmedAcceptTimestamps.remove(it)
-            }
-        } else {
-            activeDbOrderIds.add(idStr)
-            idStr.toIntOrNull()?.let { if (it > 0) apiConfirmedAcceptIds.add(it) }
-        }
         val restName = when {
             !posRestAr.isNullOrEmpty() && !posRestEn.isNullOrEmpty() && posRestAr != posRestEn -> "$posRestEn - $posRestAr"
             !posRestAr.isNullOrEmpty() -> posRestAr
@@ -2727,12 +2033,7 @@ object OrderInterceptor {
 
         val uSt = rawStatus.uppercase(Locale.US)
         val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-        if (uSt.contains("PICKED") || uSt.contains("COLLECT") || isCompleteOrOld) {
-            if (pendingMaxLimitOrders.isNotEmpty()) {
-                triggerPendingMaxLimitOrdersRetry("Order #$idStr status -> $rawStatus")
-            }
-        }
-        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld && !fetchedDetailIds.contains(idStr)) {
+        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
         }
     }
@@ -2754,7 +2055,6 @@ object OrderInterceptor {
     }
 
     fun scanJahezDatabases(context: Context) {
-        loadPersistedPaymentCacheIfNeeded()
         try {
             val exactDbName = Native.safeF()
             val exactSql = Native.safeG()
@@ -2841,8 +2141,6 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
-    private val detailFetchAttemptsMap = ConcurrentHashMap<String, Int>()
-
     private fun fetchOrderCustomerDetailsAsync(orderId: String, force: Boolean = false) {
         val cleanId = orderId.replace("#", "").trim()
         val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
@@ -2850,13 +2148,9 @@ object OrderInterceptor {
         val now = SystemClock.elapsedRealtime()
         val lastFetch = lastDetailFetchTimeMap[cleanId] ?: 0L
         val hasCachedFood = (foodPriceCache[cleanId] ?: 0.0) > 0.0
-        val hasCachedPhone = (customerDetailsCache[cleanId]?.second ?: "").isNotEmpty()
-        val attempts = detailFetchAttemptsMap[cleanId] ?: 0
-        if (!force && hasCachedFood && hasCachedPhone) return
-        if (!force && attempts >= 2 && (now - lastFetch) < 120_000L) return
-        if (!force && (now - lastFetch) < 30_000L) return
+        if (!force && fetchedDetailIds.contains(cleanId) && (hasCachedFood || (now - lastFetch) < 6000L)) return
+        if (!force && (now - lastFetch) < 2000L) return
         lastDetailFetchTimeMap[cleanId] = now
-        detailFetchAttemptsMap[cleanId] = attempts + 1
         fetchedDetailIds.add(cleanId)
 
         val ctx = resolveApplicationContext() ?: currentActivity
@@ -3066,98 +2360,40 @@ object OrderInterceptor {
         return true
     }
 
-    private fun containsEyJ(bytes: ByteArray, offset: Int, len: Int): Boolean {
-        val end = (offset + len - 3).coerceAtMost(bytes.size - 3)
-        var i = offset.coerceAtLeast(0)
-        while (i <= end) {
-            if (bytes[i] == 0x65.toByte() && bytes[i + 1] == 0x79.toByte() && bytes[i + 2] == 0x4A.toByte()) {
-                return true
-            }
-            i++
-        }
-        return false
-    }
-
-    private fun inspectCipherBytes(inBytes: ByteArray?, inOff: Int, inLen: Int, outBytes: ByteArray?, outOff: Int, outLen: Int) {
-        try {
-            if (inBytes != null && outBytes != null && inLen >= DRIVER_ID_PREFIX.size && outLen > 0) {
-                var matchPrefix = true
-                for (i in DRIVER_ID_PREFIX.indices) {
-                    if (inOff + i >= inBytes.size || inBytes[inOff + i] != DRIVER_ID_PREFIX[i]) {
-                        matchPrefix = false
-                        break
-                    }
-                }
-                if (matchPrefix && outOff >= 0 && outOff + outLen <= outBytes.size) {
-                    val newB64 = Base64.encodeToString(outBytes, outOff, outLen, Base64.NO_WRAP)
-                    if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
-                        val wasEmpty = capturedDriverCipherB64.isEmpty()
-                        capturedDriverCipherB64 = newB64
-                        persistDriverCipher(newB64)
-                        if (wasEmpty) {
-                            DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
-                        }
-                        prewarmGatewayConnection(force = wasEmpty)
-                    }
-                    return
-                }
-            }
-            // Check if output or input contains a decrypted JWT token ("eyJ...") from Tink / EncryptedSharedPreferences / DataStore
-            if (outBytes != null && outLen in 40..8192 && outOff >= 0 && outOff + outLen <= outBytes.size && containsEyJ(outBytes, outOff, outLen)) {
-                val str = String(outBytes, outOff, outLen, Charsets.UTF_8)
-                val wasEmpty = cachedAuthToken.isEmpty()
-                if (extractJwtFromAnyString(str, "Cipher.doFinal")) {
-                    if (wasEmpty) prewarmGatewayConnection(force = true)
-                }
-            } else if (inBytes != null && inLen in 40..8192 && inOff >= 0 && inOff + inLen <= inBytes.size && containsEyJ(inBytes, inOff, inLen)) {
-                val str = String(inBytes, inOff, inLen, Charsets.UTF_8)
-                val wasEmpty = cachedAuthToken.isEmpty()
-                if (extractJwtFromAnyString(str, "Cipher.doFinal.in")) {
-                    if (wasEmpty) prewarmGatewayConnection(force = true)
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
     private fun hookCipher(module: XposedModule) {
         try {
-            var count = 0
-            for (m in Cipher::class.java.declaredMethods) {
-                if (m.name != "doFinal") continue
-                val pTypes = m.parameterTypes
-                if (pTypes.isNotEmpty() && pTypes[0] == ByteArray::class.java) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val result = chain.proceed()
-                            try {
-                                val inBytes = chain.args.getOrNull(0) as? ByteArray
-                                when {
-                                    pTypes.size == 1 && result is ByteArray -> {
-                                        inspectCipherBytes(inBytes, 0, inBytes?.size ?: 0, result, 0, result.size)
-                                    }
-                                    pTypes.size == 3 && result is ByteArray -> {
-                                        val off = (chain.args.getOrNull(1) as? Int) ?: 0
-                                        val len = (chain.args.getOrNull(2) as? Int) ?: (inBytes?.size ?: 0)
-                                        inspectCipherBytes(inBytes, off, len, result, 0, result.size)
-                                    }
-                                    pTypes.size >= 4 && result is Int -> {
-                                        val inOff = (chain.args.getOrNull(1) as? Int) ?: 0
-                                        val inLen = (chain.args.getOrNull(2) as? Int) ?: (inBytes?.size ?: 0)
-                                        val outBytes = chain.args.getOrNull(3) as? ByteArray
-                                        val outOff = if (pTypes.size >= 5) ((chain.args.getOrNull(4) as? Int) ?: 0) else 0
-                                        inspectCipherBytes(inBytes, inOff, inLen, outBytes, outOff, result)
-                                    }
-                                }
-                            } catch (_: Throwable) {}
-                            return result
-                        }
-                    })
-                    count++
-                }
-            }
-            DiagnosticLogger.logStep("OrderInterceptor", "Hooked Cipher.doFinal ($count overloads)")
+  val mDoFinal = Cipher::class.java.getDeclaredMethod("doFinal", ByteArray::class.java)
+  module.hook(mDoFinal).intercept(object : XposedInterface.Hooker {
+      override fun intercept(chain: XposedInterface.Chain): Any? {
+          val result = chain.proceed()
+          val inputBytes = chain.args.getOrNull(0) as? ByteArray
+          val outputBytes = result as? ByteArray
+          if (inputBytes != null && outputBytes != null) {
+              try {
+                  if (startsWithDriverIdPrefix(inputBytes)) {
+                      val newB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
+                      if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
+                          capturedDriverCipherB64 = newB64
+                          DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
+                      }
+                  } else if (outputBytes.size in 80..4096) {
+                      val str = String(outputBytes, Charsets.UTF_8).trim()
+                      val eyIdx = str.indexOf("eyJ")
+                      if (eyIdx in 0..32) {
+                          val candidate = str.substring(eyIdx).takeWhile { !it.isWhitespace() && it != '"' && it != '\'' && it.code in 33..126 }
+                          if (candidate.count { it == '.' } >= 2 && candidate.length > 60) {
+                              checkAndSetToken(candidate, "TinkDecryptedToken")
+                          }
+                      }
+                  }
+              } catch (_: Throwable) {}
+          }
+          return result
+      }
+  })
+  DiagnosticLogger.logStep("OrderInterceptor", "Hooked Cipher.doFinal(byte[])")
         } catch (t: Throwable) {
-            DiagnosticLogger.logError("hookCipher", "Failed hooking Cipher.doFinal", t)
+  DiagnosticLogger.logError("hookCipher", "Failed hooking Cipher.doFinal", t)
         }
     }
 
@@ -3320,26 +2556,16 @@ object OrderInterceptor {
         CoroutineScope(Dispatchers.IO).launch {
             while (true) {
                 try {
-                    if (activeAcceptCallsCount.get() == 0) {
+                    if (isMasterRunning && isActivePolling) {
                         if (cachedAuthToken.isEmpty()) {
                             readPersistedToken()
                         }
                         if (cachedAuthToken.isNotEmpty()) {
-                            if (isMasterRunning && isActivePolling) {
-                                pollServerForAvailableOrders()
-                            } else {
-                                // Even if active polling is off, keep both HTTP/2 sockets & 4G/5G radio warm (preventing +270ms RRC Idle penalty)
-                                prewarmGatewayConnection(force = false)
-                            }
+                            pollServerForAvailableOrders()
                         }
                     }
                 } catch (_: Throwable) {}
-                // Matches Lb11$b in SanedAssistant-98-7bac1ec.apk (minimum 2500ms interval):
-                // Prevents Cloudflare rate-limiting (rtt=3216ms) and keeps cellular radio & Accept sockets 100% free (connPool=1/1) when FCM Push arrives!
-                val delayMs = when {
-                    !isActivePolling -> 15_000L
-                    else -> (pollIntervalSec * 1000f).toLong().coerceIn(2500L, 60_000L)
-                }
+                val delayMs = ((pollIntervalSec.coerceIn(2.0f, 10.0f)) * 1000).toLong()
                 delay(delayMs)
             }
         }
@@ -3347,204 +2573,40 @@ object OrderInterceptor {
 
     private var failedPollingCount = 0
 
-    // Exact Lb11.d + Lb11.e + Lb11.h implementation from SanedAssistant-98-7bac1ec.apk:
-    // Directly extracts every dispatch from GET /api/v1/dispatch/active and triggers 0.0ms POLL acceptance
-    // for any new order before FCM Push even arrives!
-    private fun processPolledActiveDispatchesLb11(body: String) {
-        try {
-            val trimmed = body.trim()
-            if (trimmed.isEmpty()) return
-            val fcmKeys = Native.safeL()
-            val pollKeys = Native.safeM()
-            val kDispatches = pollKeys.getOrNull(0) ?: "dispatches"
-            val kRefId = pollKeys.getOrNull(1) ?: "referenceId"
-            val kPickup = pollKeys.getOrNull(2) ?: "pickup"
-            val kCoords = pollKeys.getOrNull(3) ?: "coordinates"
-            val kDest = pollKeys.getOrNull(4) ?: "destination"
-
-            val arr: JSONArray = when {
-                trimmed.startsWith("[") -> JSONArray(trimmed)
-                trimmed.startsWith("{") -> {
-                    val root = JSONObject(trimmed)
-                    root.optJSONArray(kDispatches)
-                        ?: root.optJSONArray("data")
-                        ?: root.optJSONArray("result")
-                        ?: root.optJSONObject("data")?.optJSONArray(kDispatches)
-                        ?: JSONArray().apply {
-                            val single = root.optJSONObject("data") ?: root
-                            if (single.has("requestId") || single.has("dispatchId") || single.has("id") || single.has(kRefId)) {
-                                put(single)
-                            }
-                        }
-                }
-                else -> return
-            }
-
-            for (i in 0 until arr.length()) {
-                val item = arr.optJSONObject(i) ?: continue
-                val kReqId = fcmKeys.getOrNull(0) ?: "requestId"
-                val idFromReq = item.optInt(kReqId, 0)
-                val idFromDisp = item.optInt("dispatchId", 0)
-                val idFromId = item.optInt("id", 0)
-                val refStr = item.optString(kRefId, "").trim()
-                val orderIdInt = when {
-                    idFromReq != 0 -> idFromReq
-                    idFromDisp != 0 -> idFromDisp
-                    idFromId != 0 -> idFromId
-                    else -> refStr.toIntOrNull() ?: 0
-                }
-                if (orderIdInt <= 0) continue
-
-                // Skip if already handled or already confirmed accepted in local DB
-                if (handledOrdersMap.containsKey(orderIdInt) || apiConfirmedAcceptIds.contains(orderIdInt) || knownDbOrderIds.contains(orderIdInt.toString())) {
-                    continue
-                }
-
-                val infoObj = item.optJSONObject("dispatchInfo") ?: item.optJSONObject("dispatch_info")
-                val rawStatusField = extractFirstString(item, "status", "dispatchStatus", "state", "orderStatus")
-                    .ifEmpty { if (infoObj != null) extractFirstString(infoObj, "status", "dispatchStatus", "state") else "" }
-                    .trim().uppercase(Locale.US)
-                val st = item.optString(fcmKeys.getOrNull(6) ?: "dispatchType", rawStatusField).trim().uppercase(Locale.US)
-                val isAlreadyOurActiveOrder = st.contains("DELIVER") || st.contains("COMPLET") || st.contains("COLLECT") || st.contains("PICKED") || st.contains("CANCEL") || st.contains("REJECT") ||
-                    st.contains("DISPATCHED") || rawStatusField.contains("DISPATCHED") ||
-                    rawStatusField.contains("ACCEPT") || rawStatusField.contains("ARRIV") || rawStatusField.contains("PROGRESS") ||
-                    rawStatusField.contains("STARTED") || rawStatusField.contains("WAY") || rawStatusField.contains("VENDOR") ||
-                    rawStatusField.contains("PICK") || (item.has("vendor") && item.has("client") && !item.has("dispatchPickupLat"))
-                if (isAlreadyOurActiveOrder) {
-                    if (!st.contains("DELIVER") && !st.contains("COMPLET") && !st.contains("CANCEL") && !st.contains("REJECT") &&
-                        !rawStatusField.contains("DELIVER") && !rawStatusField.contains("COMPLET") && !rawStatusField.contains("CANCEL") && !rawStatusField.contains("REJECT")) {
-                        apiConfirmedAcceptIds.add(orderIdInt)
-                        activeDbOrderIds.add(orderIdInt.toString())
-                        knownDbOrderIds.add(orderIdInt.toString())
-                    }
-                    continue
-                }
-
-                val locObj = item.optJSONObject("location")
-                var pLat = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(1) ?: "dispatchPickupLat", "pickupLatitude", "pickupLat", "pickup_lat")
-                var pLng = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(2) ?: "dispatchPickupLng", "pickupLongitude", "pickupLng", "pickupLong", "pickup_lng")
-                var dLat = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(3) ?: "dispatchDestLat", "destinationLatitude", "destLat", "dropoffLat", "destination_lat")
-                var dLng = extractFirstDouble(locObj ?: item, fcmKeys.getOrNull(4) ?: "dispatchDestLng", "destinationLongitude", "destLng", "destLong", "dropoffLng", "destination_lng")
-
-                val pickupObj = item.optJSONObject(kPickup) ?: locObj?.optJSONObject(kPickup)
-                if (pickupObj != null) {
-                    if (pLat == 0.0) pLat = extractFirstDouble(pickupObj, "latitude", "lat")
-                    if (pLng == 0.0) pLng = extractFirstDouble(pickupObj, "longitude", "lng", "lon")
-                    val cArr = pickupObj.optJSONArray(kCoords)
-                    if (cArr != null && cArr.length() >= 2) {
-                        val c0 = cArr.optDouble(0, 0.0)
-                        val c1 = cArr.optDouble(1, 0.0)
-                        if (c1 in 15.0..35.0) { pLng = c0; pLat = c1 } else if (c0 in 15.0..35.0) { pLat = c0; pLng = c1 }
-                    }
-                }
-                val destObj = item.optJSONObject(kDest) ?: locObj?.optJSONObject(kDest) ?: item.optJSONObject("dropoff")
-                if (destObj != null) {
-                    if (dLat == 0.0) dLat = extractFirstDouble(destObj, "latitude", "lat")
-                    if (dLng == 0.0) dLng = extractFirstDouble(destObj, "longitude", "lng", "lon")
-                    val cArr = destObj.optJSONArray(kCoords)
-                    if (cArr != null && cArr.length() >= 2) {
-                        val c0 = cArr.optDouble(0, 0.0)
-                        val c1 = cArr.optDouble(1, 0.0)
-                        if (c1 in 15.0..35.0) { dLng = c0; dLat = c1 } else if (c0 in 15.0..35.0) { dLat = c0; dLng = c1 }
-                    }
-                }
-                val cleanPLat = if (pLat.isNaN() || pLat.isInfinite()) 0.0 else pLat
-                val cleanPLng = if (pLng.isNaN() || pLng.isInfinite()) 0.0 else pLng
-                val cleanDLat = if (dLat.isNaN() || dLat.isInfinite()) 0.0 else dLat
-                val cleanDLng = if (dLng.isNaN() || dLng.isInfinite()) 0.0 else dLng
-
-                val delivPrice = extractFirstDouble(item, fcmKeys.getOrNull(5) ?: "deliveryPrice", "price", "deliveryFee")
-                val bonusAmt = extractFirstDouble(item, "bonus", "bonusAmount", "extraBonus")
-                val totalPrice = ((delivPrice + bonusAmt) * 100.0).toLong() / 100.0
-                val distJson = extractFirstDouble(item, fcmKeys.getOrNull(7) ?: "distance", "distanceKm")
-                val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-                val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
-                val calcRestDist = if (cleanPLat != 0.0 && cleanPLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
-                    LocationEngine.calculateDistance(drvLat, drvLng, cleanPLat, cleanPLng)
-                } else distJson
-                val calcCustDist = if (cleanPLat != 0.0 && cleanPLng != 0.0 && cleanDLat != 0.0 && cleanDLng != 0.0) {
-                    LocationEngine.calculateDistance(cleanPLat, cleanPLng, cleanDLat, cleanDLng)
-                } else 0.0
-                val restName = extractFirstString(item, "subscriberName", "vendorName", "restaurantName", "storeName")
-
-                if (cleanPLat == 0.0 && cleanDLat == 0.0 && calcRestDist == 0.0 && calcCustDist == 0.0) {
-                    apiConfirmedAcceptIds.add(orderIdInt)
-                    knownDbOrderIds.add(orderIdInt.toString())
-                    continue
-                }
-                handleOrderViaApi(
-                    orderId = "#$orderIdInt",
-                    price = totalPrice,
-                    dist = calcRestDist,
-                    restaurant = restName,
-                    custDist = calcCustDist,
-                    reference = refStr.ifEmpty { orderIdInt.toString() },
-                    pickupLat = cleanPLat,
-                    pickupLng = cleanPLng,
-                    destLat = cleanDLat,
-                    destLng = cleanDLng,
-                    sourceChannel = "POLL"
-                )
-            }
-        } catch (_: Throwable) {}
-    }
-
-    private var lastPollDbSyncRealtime: Long = 0L
-
     private fun pollServerForAvailableOrders() {
         if (!DiagnosticLogger.hookBootstrapLoop) return
-        if (activeAcceptCallsCount.get() > 0) return
         val ctx = resolveApplicationContext() ?: currentActivity
-        if (knownDbOrderIds.isEmpty() && ctx != null) {
-            CoroutineScope(Dispatchers.IO).launch {
-                try { scanJahezDatabases(ctx) } catch (_: Throwable) {}
-            }
-        }
         if (cachedAuthToken.isEmpty() && ctx != null) readExactJahezEncryptedPrefs(ctx)
         val token = cachedAuthToken
         if (token.isEmpty()) return
-        pollingHits.incrementAndGet()
-        // Always use dedicated pollingHttpClient for background polling so singleWarmHttpClient, secondaryWarmHttpClient,
-        // and tertiaryWarmHttpClient stay 100% IDLE (connPool=1/1) for 0.0ms PUT acceptance!
-        prewarmGatewayConnection(force = false)
+        val clientToUse = httpClient
 
         if (Native.isLoaded) {
-            try {
-                val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-                val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
-                if (spec.size >= 2 && spec[1].startsWith("http")) {
-                    val rb = Request.Builder().url(spec[1]).get()
-                    var idx = 2
-                    while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
-                    val resp = pollingHttpClient.newCall(rb.build()).execute()
-                    val code = resp.code
-                    lastHttpResponseCode = code
-                    val body = resp.body?.string() ?: ""
-                    resp.close()
-                    if (code == 401 || code == 403) {
-                        cachedEncPrefs = null
-                        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
-                    } else if (code in 200..299 && body.isNotEmpty()) {
-                        failedPollingCount = 0
-                        // 1. IMMEDIATELY run Lb11 0.0ms active dispatch acceptance BEFORE any DB/UI work!
-                        processPolledActiveDispatchesLb11(body)
-                        // 2. Offload heavy JSON sync & SQLite scan to background coroutine so next 450ms poll is NEVER delayed!
-                        val nowRt = SystemClock.elapsedRealtime()
-                        if ((nowRt - lastPollDbSyncRealtime) > 4000L) {
-                            lastPollDbSyncRealtime = nowRt
-                            CoroutineScope(Dispatchers.IO).launch {
-                                try {
-                                    if (activeAcceptCallsCount.get() == 0) {
-                                        findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
-                                        if (ctx != null) scanJahezDatabases(ctx)
-                                    }
-                                } catch (_: Throwable) {}
-                            }
-                        }
-                        return
-                    }
-                }
-            } catch (_: Throwable) {}
+  try {
+      if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
+      val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+      val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+      if (spec.size >= 2 && spec[1].startsWith("http")) {
+          pollingHits.incrementAndGet()
+          val rb = Request.Builder().url(spec[1]).get()
+          var idx = 2
+          while (idx + 1 < spec.size) { rb.header(spec[idx], spec[idx + 1]); idx += 2 }
+          val resp = clientToUse.newCall(rb.build()).execute()
+          val code = resp.code
+          lastHttpResponseCode = code
+          val body = resp.body?.string() ?: ""
+          resp.close()
+          if (code == 401 || code == 403) {
+              cachedAuthToken = ""
+              cachedEncPrefs = null
+              if (ctx != null) readExactJahezEncryptedPrefs(ctx)
+          } else if (code in 200..299 && body.isNotEmpty()) {
+              failedPollingCount = 0
+              findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")
+              return
+          }
+      }
+  } catch (_: Throwable) {}
         }
     }
 
@@ -3840,11 +2902,7 @@ object OrderInterceptor {
                         else -> 0.0
                     }
                 }
-                val isPollOrPushOffer = channelSource.contains("PUSH", ignoreCase = true) &&
-                    !knownDbOrderIds.contains(rawOrderIdClean) &&
-                    !apiConfirmedAcceptIds.contains(rawOrderIdClean.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0) &&
-                    (rawStatusFromJson.isEmpty() || rawStatusFromJson.contains("NEW", ignoreCase = true) || rawStatusFromJson.contains("OFFER", ignoreCase = true))
-                if (!isPollOrPushOffer && (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean) || channelSource.contains("Active Dispatches", ignoreCase = true))) {
+                if (isFromLocalDb || isHistoricalOrActiveStatus(rawStatusFromJson) || knownDbOrderIds.contains(rawOrderIdClean) || channelSource.contains("Active Dispatches", ignoreCase = true)) {
                     val normStatus = normalizeOrderStatusDisplay(rawStatusFromJson.ifEmpty { if (isFromLocalDb) "Delivered" else status })
                     val hasCoords = (dLat != 0.0 && dLng != 0.0)
                     val dedupKey = "${orderId.replace("#", "")}:$reference:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}:${foodPrice.toInt()}:$hasCoords"
@@ -3908,37 +2966,9 @@ object OrderInterceptor {
      * Evaluates price, restaurant distance, and customer distance gates FIRST,
      * then returns ("ACCEPT", "ok"), ("REJECT", reason), ("DRY_RUN", reason), or ("MANUAL", reason).
      */
-    fun countCurrentActiveOrders(): Int {
-        val nowRt = SystemClock.elapsedRealtime()
-        val activeIds = HashSet<String>()
-        for (dbId in activeDbOrderIds) {
-            if (dbId.isNotEmpty() && !dbId.startsWith("JH-")) {
-                activeIds.add(dbId)
-            }
-        }
-        val it = recentConfirmedAcceptTimestamps.entries.iterator()
-        while (it.hasNext()) {
-            val e = it.next()
-            if ((nowRt - e.value) <= 15 * 60_000L) {
-                activeIds.add(e.key.toString())
-            } else {
-                it.remove()
-            }
-        }
-        return activeIds.size
-    }
-
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
         if (!isMasterRunning) {
             return "MANUAL" to "Master switch off"
-        }
-
-        // Check user's "How many order you want" limit (0 = Unlimited / عدد لا متناهي من الطلبات)
-        if (maxOrdersLimit > 0) {
-            val currentActive = countCurrentActiveOrders()
-            if (currentActive >= maxOrdersLimit) {
-                return "MANUAL" to "Reached your configured order limit ($currentActive / $maxOrdersLimit orders)"
-            }
         }
 
         val failedReasons = mutableListOf<String>()
@@ -3950,15 +2980,13 @@ object OrderInterceptor {
                 failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
             }
         }
-        val roundedRestKm = kotlin.math.round(distRest * 100.0) / 100.0
-        val roundedCustKm = kotlin.math.round(distCust * 100.0) / 100.0
         if (maxDistToRestaurant > 0.0) {
             if (distRest <= 0.0) {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     failedReasons.add("location unknown")
                 }
-            } else if (roundedRestKm > maxDistToRestaurant + 0.005) {
-                val fmtD = String.format(Locale.US, "%.2f", roundedRestKm)
+            } else if (distRest > maxDistToRestaurant) {
+                val fmtD = String.format(Locale.US, "%.2f", distRest)
                 failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
             }
         }
@@ -3967,8 +2995,8 @@ object OrderInterceptor {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
                 }
-            } else if (roundedCustKm > maxDistCustomer + 0.005) {
-                val fmtC = String.format(Locale.US, "%.2f", roundedCustKm)
+            } else if (distCust > maxDistCustomer) {
+                val fmtC = String.format(Locale.US, "%.2f", distCust)
                 failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
             }
         }
@@ -4028,24 +3056,16 @@ object OrderInterceptor {
 
         val normOrderId = "#$rawId"
         val orderIdInt = rawId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
-        if (orderIdInt != 0) {
-            orderArrivalNanoMap.putIfAbsent(orderIdInt, System.nanoTime())
-        }
         val nowRealtime = SystemClock.elapsedRealtime()
 
         if (orderIdInt != 0) {
-            if (apiConfirmedAcceptIds.contains(orderIdInt)) {
-                return "ACCEPT"
-            }
             val existing = handledOrdersMap[orderIdInt]
-            if (existing != null && (existing.decision == "ACCEPT" || (nowRealtime - existing.timestampRealtime) < 60_000L)) {
+            if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
                 return existing.decision
             }
         }
 
-        val evalStartNs = System.nanoTime()
         val (action, reason) = evaluateOrderDecision(price, dist, custDist)
-        val evalDurationUs = ((System.nanoTime() - evalStartNs) / 1000L).coerceAtLeast(1L)
 
         if (orderIdInt != 0) {
             val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
@@ -4058,27 +3078,7 @@ object OrderInterceptor {
             }
         }
 
-        if (action == "ACCEPT") {
-            // CRITICAL 0.0ms ZERO-LATENCY PATH: Fire executeDirectApiCall FIRST before any Binder IPC logging!
-            lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId (0.0ms)..."
-            executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
-            CoroutineScope(Dispatchers.IO).launch {
-                // Defer Binder IPC logging by 220ms so 0% of CPU/Binder/Disk is used while PUT packets are in flight!
-                delay(220L)
-                DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason) [0.0ms Instant Fire]")
-                DiagnosticLogger.logStep(
-                    "SpeedLog",
-                    "⚡ [1/4 ARRIVAL & GATES] $normOrderId ch=$sourceChannel -> ACCEPT ($reason) gateEval=${evalDurationUs}us | price=$price(min=$minOrderPrice) restDist=${String.format(Locale.US, "%.2f", dist)}km(max=$maxDistToRestaurant) custDist=${String.format(Locale.US, "%.2f", custDist)}km(max=$maxDistCustomer) active=${countCurrentActiveOrders()}/${if (maxOrdersLimit == 0) "∞" else maxOrdersLimit}"
-                )
-            }
-            return action
-        }
-
         DiagnosticLogger.logStep("OrderDecision", "Order $normOrderId [$sourceChannel] -> $action ($reason)")
-        DiagnosticLogger.logStep(
-            "SpeedLog",
-            "🛑 [1/1 FILTERED -> $action] $normOrderId ch=$sourceChannel reason=[$reason] gateEval=${evalDurationUs}us | price=$price(min=$minOrderPrice) restDist=${String.format(Locale.US, "%.2f", dist)}km(max=$maxDistToRestaurant) custDist=${String.format(Locale.US, "%.2f", custDist)}km(max=$maxDistCustomer)"
-        )
 
         when (action) {
             "REJECT" -> {
@@ -4091,6 +3091,10 @@ object OrderInterceptor {
                 lastOrderEvent = "Order $normOrderId dry-run ($reason)"
                 currentActivity?.let { act -> showToast(act, "🔍 [Dry-Run]: $normOrderId ($reason)") }
                 sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
+            }
+            "ACCEPT" -> {
+                lastOrderEvent = "⚡ جاري قبول الطلب $normOrderId..."
+                executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, reason, pickupLat, pickupLng, destLat, destLng, effFoodPrice, paymentMethod, reference)
             }
             else -> {
                 lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
@@ -4109,72 +3113,21 @@ object OrderInterceptor {
                 val xmlFiles = prefsDir.listFiles { _, name -> name.endsWith(".xml") } ?: emptyArray()
                 for (xmlFile in xmlFiles) {
                     val prefName = xmlFile.nameWithoutExtension
-                    try {
-                        val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                        var isEncryptedXml = false
-                        for ((key, value) in sp.all) {
-                            if (key.contains("androidx_security_crypto_encrypted_prefs")) {
-                                isEncryptedXml = true
-                                continue
-                            }
-                            val strVal = value?.toString()?.trim() ?: continue
-                            if (strVal.length > 30 && extractJwtFromAnyString(strVal, "$prefName:$key")) {
-                                return cachedAuthToken
-                            }
-                            if (strVal.length > 20 && (strVal.startsWith("ey") || strVal.startsWith("Bearer "))) {
-                                checkAndSetToken(strVal, key)
-                                if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
-                            } else if (key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true) || key.contains("session", ignoreCase = true)) {
-                                checkAndSetToken(strVal, key)
-                                if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
-                            }
+                    val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                    for ((key, value) in sp.all) {
+                        val strVal = value?.toString()?.trim() ?: continue
+                        if (strVal.length > 20 && (strVal.startsWith("ey") || strVal.startsWith("Bearer "))) {
+                            checkAndSetToken(strVal, key)
+                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                        } else if (key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true) || key.contains("session", ignoreCase = true)) {
+                            checkAndSetToken(strVal, key)
+                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
                         }
-                        if (isEncryptedXml && prefName != Native.safeH()) {
-                            try {
-                                val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-                                val encSp = EncryptedSharedPreferences.create(
-                                    context, prefName, masterKey,
-                                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                                )
-                                for ((ek, ev) in encSp.all) {
-                                    val es = ev?.toString()?.trim() ?: continue
-                                    if (es.length > 30 && extractJwtFromAnyString(es, "Enc[$prefName:$ek]")) {
-                                        return cachedAuthToken
-                                    }
-                                    checkAndSetToken(es, ek)
-                                    if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
-                                }
-                            } catch (_: Throwable) {}
-                        }
-                    } catch (_: Throwable) {}
-                }
-            }
-            // Also scan DataStore / filesDir / noBackupFilesDir for any binary/proto/json containing a live JWT ("eyJ...")
-            val candidateDirs = listOfNotNull(
-                context.filesDir,
-                File(context.filesDir, "datastore"),
-                context.noBackupFilesDir
-            )
-            for (dir in candidateDirs) {
-                if (!dir.exists() || !dir.isDirectory) continue
-                val files = dir.listFiles() ?: continue
-                for (f in files) {
-                    if (f.isFile && f.length() in 40..(512 * 1024) && !f.name.startsWith("saned_")) {
-                        try {
-                            val bytes = f.readBytes()
-                            if (containsEyJ(bytes, 0, bytes.size)) {
-                                val text = String(bytes, Charsets.ISO_8859_1)
-                                if (extractJwtFromAnyString(text, "File[${f.name}]")) {
-                                    return cachedAuthToken
-                                }
-                            }
-                        } catch (_: Throwable) {}
                     }
                 }
             }
         } catch (_: Throwable) {}
-        return cachedAuthToken
+        return ""
     }
 
     /**
@@ -4185,26 +3138,6 @@ object OrderInterceptor {
      */
     @Volatile var verifiedAcceptMethod: String = ""
     @Volatile var verifiedAcceptUrlTemplate: String = ""
-
-    private fun verifyOrderAcceptedByUs(orderIdInt: Int, rawTok: String, ctx: Context?): Pair<Boolean, String> {
-        if (orderIdInt <= 0) return false to ""
-        if (apiConfirmedAcceptIds.contains(orderIdInt)) return true to ""
-        val orderIdStr = orderIdInt.toString()
-        if (knownDbOrderIds.contains(orderIdStr)) return true to ""
-        synchronized(syncedOrdersCache) {
-            for (obj in syncedOrdersCache.values) {
-                val idVal = obj.optString("id", "").replace("#", "").trim()
-                val refVal = obj.optString("reference", "").replace("#", "").trim()
-                val stVal = obj.optString("status", "")
-                if ((idVal == orderIdStr || refVal == orderIdStr) &&
-                    (stVal.contains("Accepted", ignoreCase = true) || stVal.contains("Dispatched", ignoreCase = true)) &&
-                    !stVal.contains("سائق آخر")) {
-                    return true to ""
-                }
-            }
-        }
-        return false to ""
-    }
 
     private fun executeDirectApiCall(
         orderIdNum: String,
@@ -4227,278 +3160,136 @@ object OrderInterceptor {
         paymentMethod: String = "",
         reference: String = ""
     ) {
-        val dispatchStartNs = System.nanoTime()
+        val ctx = resolveApplicationContext() ?: currentActivity
+        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
+        var token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
         val isAccept = (action == "ACCEPT")
         val orderIdInt = orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
-        if (isAccept && orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
+
+        if (token.isEmpty()) {
+            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
+            if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
             return
         }
 
-        // Launch IMMEDIATELY at 0.0ms on pre-started real-time thread pool (-19 priority)
-        fastAcceptExecutor.execute {
-            val threadStartNs = System.nanoTime()
-            val queueDelayUs = ((threadStartNs - dispatchStartNs) / 1000L).coerceAtLeast(0L)
-            try { Process.setThreadPriority(-19) } catch (_: Throwable) {
-                try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
-            }
-            val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
-            // Fast in-memory token lookup (0.0ms); only read EncryptedPrefs if memory cache is empty
-            val tokenWasInRam = cachedAuthToken.isNotEmpty()
-            var token = cachedAuthToken
-            if (token.isEmpty()) {
-                if (ctx != null) readExactJahezEncryptedPrefs(ctx)
-                token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
-            }
-            val tokenPrepUs = ((System.nanoTime() - threadStartNs) / 1000L).coerceAtLeast(0L)
-            val cipherWasReady = capturedDriverCipherB64.isNotEmpty()
-            val poolIdleBefore = try { singleWarmHttpClient.connectionPool.idleConnectionCount() } catch (_: Throwable) { -1 }
-            val poolTotalBefore = try { singleWarmHttpClient.connectionPool.connectionCount() } catch (_: Throwable) { -1 }
-            if (token.isEmpty()) {
-                DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
-                DiagnosticLogger.logWarn("SpeedLog", "❌ [ABORT] #$orderIdNum cannot $action: Auth token is empty in RAM and EncryptedPrefs!")
-                if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
-                return@execute
-            }
-
+        val clientToUse = httpClient
+        CoroutineScope(Dispatchers.IO).launch {
+            val tid = Process.myTid()
+            val origPriority = try { Process.getThreadPriority(tid) } catch (_: Throwable) { 0 }
+            if (isAccept) try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
             try {
                 fun buildHeaders(tok: String): LinkedHashMap<String, String> {
                     val rawTok = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.substring(7).trim() else tok.trim()
-                    val map = LinkedHashMap<String, String>(6)
-                    map["Authorization"] = "Bearer $rawTok"
-                    map["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
-                    map["User-Agent"] = "okhttp/5.1.0"
-                    if (capturedDriverCipherB64.isNotEmpty()) {
-                        map["x-unique-Identifier"] = capturedDriverCipherB64
-                    }
-                    if (orderIdInt > 0 && Native.isLoaded) {
+                    val map = LinkedHashMap<String, String>()
+                    if (orderIdInt > 0) {
                         try {
+                            if (ctx != null) Native.safeA(ctx, "dev.jing.sanedhook")
                             val spec = Native.safeB(if (isAccept) 0 else 1, orderIdInt, rawTok, cachedLanguage, capturedDriverCipherB64)
                             var idx = 2
                             while (idx + 1 < spec.size) { map[spec[idx]] = spec[idx + 1]; idx += 2 }
                         } catch (_: Throwable) {}
+                    }
+                    if (map.isEmpty()) {
+                        map["Authorization"] = "Bearer $rawTok"
+                        map["Accept-Language"] = cachedLanguage.ifEmpty { "en" }
+                        map["User-Agent"] = "okhttp/5.1.0"
+                        if (capturedDriverCipherB64.isNotEmpty()) {
+                            map["x-unique-Identifier"] = capturedDriverCipherB64
+                        }
                     }
                     return map
                 }
 
                 var nativeHeaders = buildHeaders(token)
                 val emptyBody = "".toRequestBody(null)
-                val effectiveDesiredMax = if (maxOrdersLimit > 0) maxOrdersLimit else 999
-                val jsonAcceptBody by lazy {
-                    JSONObject().apply {
-                        if (orderIdInt > 0) {
-                            put("requestId", orderIdInt)
-                            put("dispatchId", orderIdInt)
-                        }
-                        put("order_id", orderIdNum)
-                        put("status", "ACCEPTED")
-                        put("force", true)
-                        put("forceAccept", true)
-                        put("ignoreLimit", true)
-                        put("ignoreMaxOrders", true)
-                        put("maxAcceptedOrders", effectiveDesiredMax)
-                        put("maxOrders", effectiveDesiredMax)
-                    }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val jsonAcceptBody = JSONObject().apply {
+                    if (orderIdInt > 0) put("requestId", orderIdInt)
+                    put("order_id", orderIdNum)
+                    put("status", "ACCEPTED")
+                }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+                val candidateSpecs = mutableListOf<Pair<String, String>>()
+                if (!isAccept) {
+                    candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt")
+                } else {
+                    candidateSpecs.add("PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt")
                 }
 
-                val primaryUrl = if (!isAccept) {
-                    "https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt"
-                } else {
-                    "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt"
-                }
+                var winCode: Int? = null
+                var winBodyStr = ""
+                var lastErrCode = 0
+                var lastErrBody = ""
 
-                val winCodeAtom = AtomicInteger(0)
-                val winBodyRef = java.util.concurrent.atomic.AtomicReference<String>("")
-                val lastErrCodeAtom = AtomicInteger(0)
-                val lastErrBodyRef = java.util.concurrent.atomic.AtomicReference<String>("")
+                // Execute sequentially on a single high-priority coroutine to NEVER trigger Cloudflare 429 (error code: 1015)!
+                var specIdx = 0
+                val distinctSpecs = candidateSpecs.distinct().toMutableList()
+                var retried401 = false
 
-                val bestRttMsAtom = java.util.concurrent.atomic.AtomicLong(0L)
-                val winningStreamAtom = AtomicInteger(-1)
-                val winningProtoRef = java.util.concurrent.atomic.AtomicReference<String>("?")
-
-                val lastWarmAgoMs = if (lastPrewarmRealtime > 0L) (SystemClock.elapsedRealtime() - lastPrewarmRealtime).coerceAtLeast(0L) else -1L
-                val streamLogsQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
-                val burstCount = parallelRequests.coerceIn(1, 3)
-
-                if (isAccept && orderIdInt > 0) {
-                    activeAcceptCallsCount.incrementAndGet()
-                    try {
-                    // Dual-Socket Pre-Warmed HTTP/2 Burst (Stream #0 & #2 on Primary Warm Socket, Stream #1 on Secondary Warm Socket):
-                    val doneLatch = java.util.concurrent.CountDownLatch(1)
-                    val finishedWorkers = AtomicInteger(0)
-
-                    fun executeSingleStream(streamIdx: Int) {
-                        try {
-                            if (winCodeAtom.get() in 200..299 || apiConfirmedAcceptIds.contains(orderIdInt)) return
-                            httpRequestsCount.incrementAndGet()
-                            lastInterceptedUrl = primaryUrl
-                            val rb = Request.Builder().url(primaryUrl).put(emptyBody)
-                            for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                            val clientForStream = when (streamIdx) {
-                                1 -> secondaryWarmHttpClient
-                                2 -> tertiaryWarmHttpClient
-                                else -> singleWarmHttpClient
-                            }
-                            val reqStartNs = System.nanoTime()
-                            val resp = clientForStream.newCall(rb.build()).execute()
-                            val reqEndNs = System.nanoTime()
-                            val reqRttMs = ((reqEndNs - reqStartNs) / 1_000_000L).coerceAtLeast(1L)
-                            val arrivalNs = orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs
-                            val sinceFcmMs = ((reqEndNs - arrivalNs) / 1_000_000L).coerceAtLeast(1L)
-                            val protoStr = try { resp.protocol.toString() } catch (_: Throwable) { "?" }
-                            bestRttMsAtom.compareAndSet(0L, reqRttMs)
-                            winningProtoRef.compareAndSet("?", protoStr)
-                            val code = resp.code
-                            val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
-                            resp.close()
-                            lastHttpResponseCode = code
-                            val cleanSnippet = bodyStr.replace("\n", " ").replace("\r", " ").trim().take(120)
-                            streamLogsQueue.offer(
-                                "🌐 [3/4 STREAM #$streamIdx] #$orderIdNum -> HTTP $code proto=$protoStr rtt=${reqRttMs}ms totalFromFcm=${sinceFcmMs}ms body=${cleanSnippet.ifEmpty { "<empty>" }}"
-                            )
-
-                            if (code in 200..299) {
-                                cachedApiHost = "https://gateway.saned.io"
-                                apiConfirmedAcceptIds.add(orderIdInt)
-                                recentConfirmedAcceptTimestamps[orderIdInt] = SystemClock.elapsedRealtime()
-                                if (winCodeAtom.compareAndSet(0, code)) {
-                                    winningStreamAtom.set(streamIdx)
-                                    winBodyRef.set(bodyStr)
-                                    doneLatch.countDown()
-                                }
-                                return
-                            }
-
-                            // Handle 401 TokenExpired immediately on Stream 0
-                            if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && streamIdx == 0 && ctx != null) {
-                                cachedEncPrefs = null
-                                readExactJahezEncryptedPrefs(ctx)
-                                if (cachedAuthToken.isNotEmpty()) {
-                                    token = cachedAuthToken
-                                    nativeHeaders = buildHeaders(token)
-                                    val retryRb = Request.Builder().url(primaryUrl).put(emptyBody)
-                                    for ((hk, hv) in nativeHeaders) retryRb.header(hk, hv)
-                                    val retryResp = singleWarmHttpClient.newCall(retryRb.build()).execute()
-                                    val rCode = retryResp.code
-                                    val rBody = try { retryResp.body?.string() ?: "" } catch (_: Throwable) { "" }
-                                    retryResp.close()
-                                    if (rCode in 200..299) {
-                                        apiConfirmedAcceptIds.add(orderIdInt)
-                                        if (winCodeAtom.compareAndSet(0, rCode)) {
-                                            winBodyRef.set(rBody)
-                                            doneLatch.countDown()
-                                        }
-                                        return
-                                    }
-                                }
-                            }
-
-                            lastErrCodeAtom.compareAndSet(0, code)
-                            if (bodyStr.isNotEmpty()) lastErrBodyRef.compareAndSet("", bodyStr)
-                            if (streamIdx == 0 && code == 400 && bodyStr.contains("already accepted", ignoreCase = true)) {
-                                // Since Stream #0 fired alone at 0.0ms (before Stream #1 at +65ms), if Stream #0 itself got "already accepted",
-                                // no earlier stream from us is in flight — release latch immediately!
-                                doneLatch.countDown()
-                            }
-                        } catch (t: Throwable) {
-                            lastErrCodeAtom.compareAndSet(0, -1)
-                            if (lastErrBodyRef.get().isEmpty()) lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
-                        } finally {
-                            if (finishedWorkers.incrementAndGet() >= burstCount) {
-                                doneLatch.countDown()
-                            }
-                        }
-                    }
-
-                    // Stagger extra streams (#1 at +65ms, #2 at +130ms) so Stream #0 fires at 0.0ms ALONE
-                    // with 100% of radio uplink bandwidth and ZERO backend database transaction self-collision!
-                    for (extraIdx in 1 until burstCount) {
-                        val capturedIdx = extraIdx
-                        val staggerMs = capturedIdx * 65L
-                        fastAcceptExecutor.execute {
-                            try { Process.setThreadPriority(-19) } catch (_: Throwable) {}
-                            try { Thread.sleep(staggerMs) } catch (_: Throwable) {}
-                            if (winCodeAtom.get() in 200..299 || apiConfirmedAcceptIds.contains(orderIdInt) || apiConfirmedTakenIds.contains(orderIdInt)) {
-                                if (finishedWorkers.incrementAndGet() >= burstCount) {
-                                    doneLatch.countDown()
-                                }
-                                return@execute
-                            }
-                            executeSingleStream(capturedIdx)
-                        }
-                    }
-                    // Run Stream #0 directly on the current real-time thread at 0.0ms ALONE
-                    executeSingleStream(0)
-                    try { doneLatch.await(2600L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
-                    } finally {
-                        activeAcceptCallsCount.decrementAndGet()
-                    }
-                    // Flush Pre-Flight & Stream telemetry AFTER network burst completes so 0% of CPU/Binder was used during flight
-                    DiagnosticLogger.logStep(
-                        "SpeedLog",
-                        "🚀 [2/4 PRE-FLIGHT] #$orderIdNum firing $burstCount PUT streams -> queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_HIT" else "DISK_READ"}(${tokenPrepUs}us,len=${token.length}) driverCipher=${if (cipherWasReady) "READY(${capturedDriverCipherB64.take(8)}..)" else "EMPTY⚠️"} connPool=$poolIdleBefore/$poolTotalBefore warmAgo=${lastWarmAgoMs}ms polls=${pollingHits.get()}"
-                    )
-                    while (true) {
-                        val sLog = streamLogsQueue.poll() ?: break
-                        DiagnosticLogger.logStep("SpeedLog", sLog)
-                    }
-                } else {
-                    // Reject or non-burst path
+                while (specIdx < distinctSpecs.size) {
+                    val (mName, uStr) = distinctSpecs[specIdx]
+                    specIdx++
                     try {
                         httpRequestsCount.incrementAndGet()
-                        lastInterceptedUrl = primaryUrl
-                        val rb = Request.Builder().url(primaryUrl).put(emptyBody)
+                        lastInterceptedUrl = uStr
+                        val rb = Request.Builder().url(uStr)
+                        when (mName.uppercase(Locale.US)) {
+                            "PUT" -> rb.put(emptyBody)
+                            "POST" -> rb.post(if (uStr.endsWith("/$orderIdInt")) jsonAcceptBody else emptyBody)
+                            "PATCH" -> rb.patch(jsonAcceptBody)
+                            else -> rb.get()
+                        }
                         for ((hk, hv) in nativeHeaders) rb.header(hk, hv)
-                        val resp = httpClient.newCall(rb.build()).execute()
+                        val resp = clientToUse.newCall(rb.build()).execute()
                         val code = resp.code
+                        val allowHdr = resp.header("Allow") ?: resp.header("allow") ?: ""
                         val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
                         resp.close()
                         lastHttpResponseCode = code
+
                         if (code in 200..299) {
-                            winCodeAtom.set(code)
-                            winBodyRef.set(bodyStr)
-                        } else {
-                            lastErrCodeAtom.set(code)
-                            lastErrBodyRef.set(bodyStr)
+                            cachedApiHost = "https://gateway.saned.io"
+                            winCode = code
+                            winBodyStr = bodyStr
+                            if (isAccept && orderIdInt != 0) {
+                                apiConfirmedAcceptIds.add(orderIdInt)
+                                verifiedAcceptMethod = mName
+                                verifiedAcceptUrlTemplate = uStr.replace(orderIdInt.toString(), "{id}")
+                            }
+                            DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via $mName $uStr (HTTP $code)")
+                            break
+                        }
+
+                        lastErrCode = code
+                        lastErrBody = bodyStr
+                        val cleanBody = bodyStr.replace("\n", " ").replace("\r", " ").take(100)
+                        DiagnosticLogger.logWarn("DirectApi", "Attempt $mName $uStr -> HTTP $code allow=[$allowHdr] body=($cleanBody)")
+
+                        // Handle 401 TokenExpired automatically by reloading ENCRYPTED_SANED_PREFERENCES and retrying once
+                        if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
+                            retried401 = true
+                            cachedAuthToken = ""
+                            cachedEncPrefs = null
+                            readExactJahezEncryptedPrefs(ctx)
+                            if (cachedAuthToken.isNotEmpty()) {
+                                token = cachedAuthToken
+                                nativeHeaders = buildHeaders(token)
+                                DiagnosticLogger.logStep("DirectApi", "Refreshed expired token from EncryptedPrefs, retrying $mName $uStr")
+                                specIdx--
+                                continue
+                            }
+                        }
+
+                        if (code != 404 && code != 405) {
+                            break
                         }
                     } catch (t: Throwable) {
-                        lastErrCodeAtom.set(-1)
-                        lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
-                    }
-                }
-
-                var winCode: Int? = winCodeAtom.get().takeIf { it in 200..299 }
-                var winBodyStr = winBodyRef.get()
-                val lastErrCode = lastErrCodeAtom.get()
-                val lastErrBody = lastErrBodyRef.get()
-
-                // Self-Accept Verification: If another parallel stream or Saned auto-assign already accepted this order for US,
-                // never report it as "Accepted by Another Driver"!
-                if (winCode == null && isAccept && orderIdInt > 0) {
-                    if (apiConfirmedAcceptIds.contains(orderIdInt)) {
-                        winCode = 200
-                    } else if (lastErrBody.contains("already accepted", ignoreCase = true) || lastErrBody.contains("already assigned", ignoreCase = true)) {
-                        val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-                        val (acceptedByUs, activeBody) = verifyOrderAcceptedByUs(orderIdInt, rawTok, ctx)
-                        if (acceptedByUs) {
-                            apiConfirmedAcceptIds.add(orderIdInt)
-                            winCode = 200
-                            if (activeBody.isNotEmpty()) winBodyStr = activeBody
-                            DiagnosticLogger.logStep("DirectApi", "Verified Order #$orderIdNum is in OUR active dispatches (resolved parallel race as HTTP 200 Accepted ✅)")
-                        }
+                        lastErrCode = -1
+                        lastErrBody = t.message ?: t.javaClass.simpleName
                     }
                 }
 
                 if (winCode != null) {
                     if (isAccept) {
-                        val endNs = System.nanoTime()
-                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
-                        val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
-                        val speedLabel = "0.0 ms (RTT ${rttVal}ms)"
-                        DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum succeeded via PUT $primaryUrl (HTTP $winCode, $speedLabel)")
-                        DiagnosticLogger.logStep(
-                            "SpeedLog",
-                            "🏁 [4/4 RESULT: ACCEPTED ✅] #$orderIdNum (Stream #${winningStreamAtom.get()}) HTTP $winCode bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
-                        )
                         var parsedFood = if (foodPrice > 0.0) foodPrice else cashAmt
                         var parsedCash = cashAmt
                         var parsedPayMethod = paymentMethod
@@ -4527,15 +3318,12 @@ object OrderInterceptor {
                                 if (ph.isNotEmpty()) parsedPhone = ph
                             } catch (_: Throwable) {}
                         }
-                        if (orderIdInt != 0) pendingMaxLimitOrders.remove(orderIdInt)
-                        val totalAcc = acceptedSessionOrdersCount.incrementAndGet()
                         if (parsedFood <= 0.0 && parsedCash > 0.0) parsedFood = parsedCash
                         cacheOrderPayment(orderIdNum, parsedFood, parsedCash, parsedPayMethod)
                         if (parsedRef.isNotEmpty()) cacheOrderPayment(parsedRef, parsedFood, parsedCash, parsedPayMethod)
 
-                        val limitTag = if (maxOrdersLimit > 0) " ($totalAcc/$maxOrdersLimit)" else " (#$totalAcc ∞)"
-                        lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum بسرعة $speedLabel$limitTag (HTTP $winCode)"
-                        if (ctx != null) showToast(ctx, "⚡ تم قبول الطلب #$orderIdNum في $speedLabel")
+                        lastOrderEvent = "✅ تم قبول الطلب #$orderIdNum (HTTP $winCode)"
+                        if (ctx != null) showToast(ctx, "✅ تم قبول الطلب #$orderIdNum")
                         sendOrderToLog(
                             orderId = "#$orderIdNum",
                             price = price,
@@ -4555,13 +3343,13 @@ object OrderInterceptor {
                             pickupLng = pickupLng,
                             destLat = destLat,
                             destLng = destLng,
-                            decisionReason = "Accepted in $speedLabel (HTTP $winCode)",
+                            decisionReason = decisionReason.ifEmpty { "Accepted (HTTP $winCode)" },
                             notifyUser = true
                         )
                         playAlertSound()
                         // Immediately fetch Price Food & customer details from Saned API + SQLite DB so Accepted card always displays Price Food!
                         fetchOrderCustomerDetailsAsync(orderIdNum, force = true)
-                        for (delayMs in listOf(400L, 1200L, 2600L, 5000L)) {
+                        for (delayMs in listOf(450L, 1300L, 2800L, 5500L)) {
                             CoroutineScope(Dispatchers.IO).launch {
                                 delay(delayMs)
                                 if (ctx != null) {
@@ -4577,9 +3365,6 @@ object OrderInterceptor {
                         }
                     }
                 } else if (isAccept) {
-                    if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
-                        return@execute
-                    }
                     var errMsg = ""
                     if (lastErrBody.trim().startsWith("{")) {
                         try {
@@ -4593,18 +3378,10 @@ object OrderInterceptor {
                         errMsg.contains("not available", ignoreCase = true)
 
                     if (isTakenByOtherDriver) {
-                        val endNs = System.nanoTime()
-                        val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
-                        val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
-                        val rttStr = "${rttVal}ms"
                         val takenToast = "⚠️ تم قبول الطلب #$orderIdNum من قبل سائق آخر"
-                        val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg · RTT $rttStr)"
+                        val takenReason = "تم قبول الطلب من قبل سائق آخر ($errMsg)"
                         lastOrderEvent = takenToast
-                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode, rtt=$rttStr)")
-                        DiagnosticLogger.logWarn(
-                            "SpeedLog",
-                            "🏁 [4/4 RESULT: TAKEN_BY_OTHER ⚠️] #$orderIdNum HTTP $lastErrCode msg=[$errMsg] bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
-                        )
+                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: Order already accepted by another driver (HTTP $lastErrCode)")
                         if (ctx != null) showToast(ctx, takenToast)
                         sendOrderToLog(
                             orderId = "#$orderIdNum",
@@ -4629,115 +3406,45 @@ object OrderInterceptor {
                             notifyUser = true
                         )
                         if (orderIdInt != 0) {
-                            apiConfirmedTakenIds.add(orderIdInt)
-                        }
-                        currentActivity?.let { act ->
-                            if (act.javaClass.name == Native.safeE()) {
-                                val entry = handledOrdersMap[orderIdInt]
-                                closeDispatchActivitySafely(act, entry?.wasInBackground ?: false)
+                            apiConfirmedAcceptIds.add(orderIdInt)
+                            currentActivity?.let { act ->
+                                if (act.javaClass.name == Native.safeE()) {
+                                    handlePostOrderActivityCreate(act, orderIdInt)
+                                }
                             }
                         }
                     } else {
-                        val isMaxOrdersReached = errMsg.contains("maximum number", ignoreCase = true) ||
-                            errMsg.contains("max", ignoreCase = true) ||
-                            lastErrBody.contains("Reached the maximum number of accepted orders", ignoreCase = true)
-
-                        // Always unlock handledOrdersMap on Max-Orders-Reached or transient errors so retries & UI backup are NEVER blocked!
-                        if (orderIdInt != 0 && (isMaxOrdersReached || lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
+                        if (orderIdInt != 0 && (lastErrCode <= 0 || lastErrCode == 401 || lastErrCode in 500..599)) {
                             handledOrdersMap.remove(orderIdInt)
                             loggedOrderIds.remove("#$orderIdNum")
                         }
-
-                        if (isMaxOrdersReached && (maxOrdersLimit == 0 || countCurrentActiveOrders() < maxOrdersLimit)) {
-                            val limStr = if (maxOrdersLimit <= 0) "∞ غير محدود" else maxOrdersLimit.toString()
-                            val retryStatus = "⏳ جاري القبول التلقائي (تجاوز حد الطلبات · $limStr)"
-                            val retryReason = "Auto-Retrying #$orderIdNum (Limit: $limStr) — $errMsg"
-                            DiagnosticLogger.logStep("DirectApi", "Order #$orderIdNum hit server active cap ($errMsg) -> queued for automatic multi-order retry (target limit: $limStr)")
-                            lastOrderEvent = "⏳ جاري إعادة محاولة قبول #$orderIdNum تلقائياً ($limStr)..."
-                            if (ctx != null) showToast(ctx, "⏳ جاري قبول الطلب الإضافي #$orderIdNum تلقائياً ($limStr)...")
-                            sendOrderToLog(
-                                orderId = "#$orderIdNum",
-                                price = price,
-                                dist = dist,
-                                restaurant = restaurant,
-                                status = retryStatus,
-                                customerName = custName,
-                                customerPhone = custPhone,
-                                address = custAddr,
-                                cashAmount = cashAmt,
-                                foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
-                                paymentMethod = paymentMethod,
-                                reference = reference,
-                                pickupAddress = pickupAddr,
-                                customerDistanceKm = custDist,
-                                pickupLat = pickupLat,
-                                pickupLng = pickupLng,
-                                destLat = destLat,
-                                destLng = destLng,
-                                decisionReason = retryReason,
-                                notifyUser = false
-                            )
-                            if (orderIdInt != 0) {
-                                enqueueMaxLimitOrderRetry(
-                                    PendingMaxOrderRetry(
-                                        orderIdNum = orderIdNum,
-                                        orderIdInt = orderIdInt,
-                                        price = price,
-                                        dist = dist,
-                                        restaurant = restaurant,
-                                        custDist = custDist,
-                                        pickupAddr = pickupAddr,
-                                        custAddr = custAddr,
-                                        custName = custName,
-                                        custPhone = custPhone,
-                                        cashAmt = cashAmt,
-                                        decisionReason = decisionReason,
-                                        pickupLat = pickupLat,
-                                        pickupLng = pickupLng,
-                                        destLat = destLat,
-                                        destLng = destLng,
-                                        foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
-                                        paymentMethod = paymentMethod,
-                                        reference = reference
-                                    )
-                                )
-                            }
-                        } else {
-                            val endNs = System.nanoTime()
-                            val rttVal = bestRttMsAtom.get().let { if (it > 0L) it else ((endNs - dispatchStartNs) / 1_000_000L) }
-                            val totalFromFcmMs = ((endNs - (orderArrivalNanoMap[orderIdInt] ?: dispatchStartNs)) / 1_000_000L).coerceAtLeast(1L)
-                            val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
-                            val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
-                            DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
-                            DiagnosticLogger.logWarn(
-                                "SpeedLog",
-                                "🏁 [4/4 RESULT: FAILED ❌] #$orderIdNum HTTP $lastErrCode msg=[$errMsg] bestRtt=${rttVal}ms totalFromFcm=${totalFromFcmMs}ms | queue=${queueDelayUs}us token=${if (tokenWasInRam) "RAM_0ms" else "DISK_${tokenPrepUs}us"} cipher=$cipherWasReady pool=$poolIdleBefore/$poolTotalBefore"
-                            )
-                            lastOrderEvent = failToast
-                            if (ctx != null) showToast(ctx, failToast)
-                            sendOrderToLog(
-                                orderId = "#$orderIdNum",
-                                price = price,
-                                dist = dist,
-                                restaurant = restaurant,
-                                status = "فشل القبول ❌",
-                                customerName = custName,
-                                customerPhone = custPhone,
-                                address = custAddr,
-                                cashAmount = cashAmt,
-                                foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
-                                paymentMethod = paymentMethod,
-                                reference = reference,
-                                pickupAddress = pickupAddr,
-                                customerDistanceKm = custDist,
-                                pickupLat = pickupLat,
-                                pickupLng = pickupLng,
-                                destLat = destLat,
-                                destLng = destLng,
-                                decisionReason = failReason,
-                                notifyUser = true
-                            )
-                        }
+                        val failToast = "❌ تعذر قبول الطلب #$orderIdNum ($errMsg)"
+                        val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg
+                        DiagnosticLogger.logWarn("DirectApi", "Accept #$orderIdNum failed: $errMsg (HTTP $lastErrCode) -> UI backup active if screen opens")
+                        lastOrderEvent = failToast
+                        if (ctx != null) showToast(ctx, failToast)
+                        sendOrderToLog(
+                            orderId = "#$orderIdNum",
+                            price = price,
+                            dist = dist,
+                            restaurant = restaurant,
+                            status = "فشل القبول ❌",
+                            customerName = custName,
+                            customerPhone = custPhone,
+                            address = custAddr,
+                            cashAmount = cashAmt,
+                            foodPrice = if (foodPrice > 0.0) foodPrice else cashAmt,
+                            paymentMethod = paymentMethod,
+                            reference = reference,
+                            pickupAddress = pickupAddr,
+                            customerDistanceKm = custDist,
+                            pickupLat = pickupLat,
+                            pickupLng = pickupLng,
+                            destLat = destLat,
+                            destLng = destLng,
+                            decisionReason = failReason,
+                            notifyUser = true
+                        )
                         // Also trigger UI auto-accept immediately if IncomingDispatchActivity is already open!
                         currentActivity?.let { act ->
                             if (!act.isFinishing && !act.isDestroyed) {
@@ -4751,118 +3458,11 @@ object OrderInterceptor {
                         }
                     }
                 }
-            } catch (_: Throwable) {}
-        }
-    }
-
-    private fun enqueueMaxLimitOrderRetry(item: PendingMaxOrderRetry) {
-        pendingMaxLimitOrders[item.orderIdInt] = item
-        if (!isRetryLoopActive.compareAndSet(false, true)) return
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                while (pendingMaxLimitOrders.isNotEmpty() && isMasterRunning && isAutoAccept) {
-                    delay(1400L)
-                    val now = SystemClock.elapsedRealtime()
-                    val entries = pendingMaxLimitOrders.values.toList()
-                    for (pending in entries) {
-                        if ((now - pending.enqueuedAtRealtime) > 55_000L || apiConfirmedAcceptIds.contains(pending.orderIdInt)) {
-                            pendingMaxLimitOrders.remove(pending.orderIdInt)
-                            continue
-                        }
-                        if (maxOrdersLimit > 0 && countCurrentActiveOrders() >= maxOrdersLimit) {
-                            continue
-                        }
-                        attemptQuickRetryAccept(pending)
-                    }
-                }
             } catch (_: Throwable) {
             } finally {
-                isRetryLoopActive.set(false)
+                if (isAccept) try { Process.setThreadPriority(origPriority) } catch (_: Throwable) {}
             }
         }
-    }
-
-    fun triggerPendingMaxLimitOrdersRetry(triggerSource: String) {
-        if (pendingMaxLimitOrders.isEmpty()) return
-        DiagnosticLogger.logStep("DirectApi", "Triggering immediate multi-order accept retry ($triggerSource) for ${pendingMaxLimitOrders.size} queued order(s)")
-        CoroutineScope(Dispatchers.IO).launch {
-            for (pending in pendingMaxLimitOrders.values.toList()) {
-                attemptQuickRetryAccept(pending)
-            }
-        }
-    }
-
-    private fun attemptQuickRetryAccept(pending: PendingMaxOrderRetry) {
-        if (apiConfirmedAcceptIds.contains(pending.orderIdInt)) {
-            pendingMaxLimitOrders.remove(pending.orderIdInt)
-            return
-        }
-        val ctx = resolveApplicationContext() ?: currentActivity
-        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
-        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
-        if (token.isEmpty()) return
-        val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
-        val effectiveDesiredMax = if (maxOrdersLimit > 0) maxOrdersLimit else 999
-        val jsonBody = JSONObject().apply {
-            put("requestId", pending.orderIdInt)
-            put("dispatchId", pending.orderIdInt)
-            put("order_id", pending.orderIdNum)
-            put("status", "ACCEPTED")
-            put("force", true)
-            put("forceAccept", true)
-            put("ignoreLimit", true)
-            put("ignoreMaxOrders", true)
-            put("maxAcceptedOrders", effectiveDesiredMax)
-        }.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-        val uStr = "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/${pending.orderIdInt}"
-        try {
-            val rb = Request.Builder().url(uStr).put(jsonBody)
-                .header("Authorization", "Bearer $rawTok")
-                .header("Accept-Language", cachedLanguage.ifEmpty { "en" })
-                .header("User-Agent", "okhttp/5.1.0")
-                .header("x-ignore-limit", "true")
-                .header("x-max-orders", effectiveDesiredMax.toString())
-            if (capturedDriverCipherB64.isNotEmpty()) {
-                rb.header("x-unique-Identifier", capturedDriverCipherB64)
-            }
-            val resp = httpClient.newCall(rb.build()).execute()
-            val code = resp.code
-            val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
-            resp.close()
-            if (code in 200..299) {
-                pendingMaxLimitOrders.remove(pending.orderIdInt)
-                apiConfirmedAcceptIds.add(pending.orderIdInt)
-                val totalAcc = acceptedSessionOrdersCount.incrementAndGet()
-                DiagnosticLogger.logStep("DirectApi", "Multi-order retry ACCEPT #${pending.orderIdNum} succeeded (HTTP $code, sessionAccepted=$totalAcc)")
-                if (ctx != null) showToast(ctx, "✅ تم قبول الطلب الإضافي #${pending.orderIdNum}")
-                sendOrderToLog(
-                    orderId = "#${pending.orderIdNum}",
-                    price = pending.price,
-                    dist = pending.dist,
-                    restaurant = pending.restaurant,
-                    status = "Accepted ✅",
-                    customerName = pending.custName,
-                    customerPhone = pending.custPhone,
-                    address = pending.custAddr,
-                    cashAmount = pending.cashAmt,
-                    foodPrice = pending.foodPrice,
-                    paymentMethod = pending.paymentMethod,
-                    reference = pending.reference,
-                    pickupAddress = pending.pickupAddr,
-                    customerDistanceKm = pending.custDist,
-                    pickupLat = pending.pickupLat,
-                    pickupLng = pending.pickupLng,
-                    destLat = pending.destLat,
-                    destLng = pending.destLng,
-                    decisionReason = "Accepted via Multi-Order Retry (HTTP $code)",
-                    notifyUser = true
-                )
-                playAlertSound()
-                fetchOrderCustomerDetailsAsync(pending.orderIdNum, force = true)
-            } else if (bodyStr.contains("already accepted", ignoreCase = true) || bodyStr.contains("not available", ignoreCase = true)) {
-                pendingMaxLimitOrders.remove(pending.orderIdInt)
-            }
-        } catch (_: Throwable) {}
     }
 
     fun sendOrderToLog(
@@ -5542,14 +4142,14 @@ object OrderInterceptor {
 
             "ACCEPT" -> {
                 if (isAccepting.compareAndSet(false, true)) {
-                    val latency = "0.0"
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
                     CoroutineScope(Dispatchers.Main).launch {
                         try {
                             simulateSwipe(btnAccept, dialogRoot, act)
                             executeDirectApiCall(orderId.replace("#", ""), "ACCEPT")
 
-                            lastOrderEvent = "Order $orderId accepted in ${latency} ms"
-                            showToast(act, "⚡ Accepted $orderId ($cleanPrice SAR · $distRest km) in ${latency} ms!")
+                            lastOrderEvent = "Order $orderId accepted in ${latency}ms"
+                            showToast(act, "✅ Accepted $orderId ($cleanPrice SAR · $distRest km) in ${latency}ms!")
                             sendOrderToLog(
                                 orderId = orderId,
                                 price = cleanPrice,
@@ -5562,7 +4162,7 @@ object OrderInterceptor {
                                 cashAmount = cashAmt,
                                 pickupAddress = pickupAddr,
                                 customerDistanceKm = distCust,
-                                decisionReason = "Accepted in ${latency} ms"
+                                decisionReason = "Accepted in ${latency}ms"
                             )
                             playAlertSound()
                         } finally {
@@ -5788,22 +4388,29 @@ object OrderInterceptor {
     }
 
     private fun createUnsafeOkHttpClient(): OkHttpClient {
-        // Matches Lr0.a() in SanedAssistant-98-7bac1ec.apk:
-        // Uses standard Android Conscrypt TLS 1.3 + ALPN HTTP/2 (h2) without custom SSLContext("SSL") or pingInterval
-        // so Cloudflare keeps the single multiplexed HTTP/2 socket open continuously with 0ms handshake!
-        val fastDispatcher = okhttp3.Dispatcher().apply {
-            maxRequests = 64
-            maxRequestsPerHost = 32
+        return try {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            val sslContext = SSLContext.getInstance("SSL")
+            sslContext.init(null, trustAllCerts, SecureRandom())
+            val sslSocketFactory = sslContext.socketFactory
+
+            OkHttpClient.Builder()
+                .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(3, TimeUnit.SECONDS)
+                .writeTimeout(3, TimeUnit.SECONDS)
+                .build()
+        } catch (_: Throwable) {
+            OkHttpClient.Builder()
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(3, TimeUnit.SECONDS)
+                .writeTimeout(3, TimeUnit.SECONDS)
+                .build()
         }
-        val keepAlivePool = okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES)
-        return OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .dispatcher(fastDispatcher)
-            .connectionPool(keepAlivePool)
-            .retryOnConnectionFailure(true)
-            .connectTimeout(6, TimeUnit.SECONDS)
-            .readTimeout(6, TimeUnit.SECONDS)
-            .writeTimeout(8, TimeUnit.SECONDS)
-            .build()
     }
 }

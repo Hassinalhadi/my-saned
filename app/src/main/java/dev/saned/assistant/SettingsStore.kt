@@ -135,29 +135,15 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.0f)
+    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.8f)
     fun setPollInterval(context: Context, value: Float) {
         getPrefs(context).edit().putFloat("poll_interval_sec", value).apply()
         broadcastSettings(context)
     }
 
-    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 4)
+    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 3)
     fun setParallelRequests(context: Context, value: Int) {
         getPrefs(context).edit().putInt("parallel_requests", value).apply()
-        broadcastSettings(context)
-    }
-
-    // How many orders you want to accept (0 = Unlimited / Infinite orders)
-    fun getMaxOrdersLimit(context: Context): Int =
-        getPrefs(context).getString("max_orders_limit_str", null)?.toIntOrNull()
-            ?: getPrefs(context).getInt("max_orders_limit", 0)
-
-    fun setMaxOrdersLimit(context: Context, value: Int) {
-        val cleanVal = value.coerceAtLeast(0)
-        getPrefs(context).edit()
-            .putInt("max_orders_limit", cleanVal)
-            .putString("max_orders_limit_str", cleanVal.toString())
-            .apply()
         broadcastSettings(context)
     }
 
@@ -276,7 +262,6 @@ object SettingsStore {
         val activePolling = isActivePolling(context)
         val pollInterval = getPollInterval(context)
         val parallelReqs = getParallelRequests(context)
-        val maxOrdersLim = getMaxOrdersLimit(context)
         val minPrice = getMinPrice(context)
         val maxRest = getMaxDistRest(context)
         val maxCust = getMaxDistCust(context)
@@ -300,7 +285,6 @@ object SettingsStore {
       putExtra("active_polling", activePolling)
       putExtra("poll_interval_sec", pollInterval)
       putExtra("parallel_requests", parallelReqs)
-      putExtra("max_orders_limit", maxOrdersLim)
       putExtra("min_price", minPrice)
       putExtra("max_dist_rest", maxRest)
       putExtra("max_dist_cust", maxCust)
@@ -335,7 +319,6 @@ object SettingsStore {
       putExtra("active_polling", activePolling)
       putExtra("poll_interval_sec", pollInterval)
       putExtra("parallel_requests", parallelReqs)
-      putExtra("max_orders_limit", maxOrdersLim)
       putExtra("min_price", minPrice)
       putExtra("max_dist_rest", maxRest)
       putExtra("max_dist_cust", maxCust)
@@ -369,7 +352,6 @@ object SettingsStore {
       put("active_polling", activePolling)
       put("poll_interval_sec", pollInterval.toDouble())
       put("parallel_requests", parallelReqs)
-      put("max_orders_limit", maxOrdersLim)
       put("min_price", minPrice)
       put("max_dist_rest", maxRest)
       put("max_dist_cust", maxCust)
