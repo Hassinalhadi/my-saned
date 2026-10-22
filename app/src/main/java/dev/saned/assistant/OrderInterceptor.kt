@@ -102,6 +102,8 @@ object OrderInterceptor {
     @Volatile var maxOrdersLimit: Int = 2
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = false
+    @Volatile var isFloatingOverlayEnabled: Boolean = true
+    @Volatile var appUiLanguage: String = "ar"
 
     // Active Server Polling & Parallel Acceptance
     @Volatile var isActivePolling: Boolean = true
@@ -289,6 +291,7 @@ object OrderInterceptor {
 
     fun onActivityResumed(activity: Activity) {
         currentActivity = activity
+        attachFloatingOverlayToActivity(activity)
     }
 
     private fun extractOrderIdFromActivity(activity: Activity): String {
@@ -965,6 +968,7 @@ object OrderInterceptor {
           override fun onActivityResumed(activity: Activity) {
               if (activity.packageName == "net.jahez.fleets") {
                   currentActivity = activity
+                  attachFloatingOverlayToActivity(activity)
               }
           }
           override fun onActivityPaused(activity: Activity) {}
@@ -1075,6 +1079,9 @@ object OrderInterceptor {
         maxOrdersLimit = if (isExtraOrderEnabled) 3 else intent.getIntExtra("max_orders_limit", 2).coerceIn(2, 3)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
         isShowToasts = false
+        isFloatingOverlayEnabled = intent.getBooleanExtra("floating_overlay_enabled", isFloatingOverlayEnabled)
+        intent.getStringExtra("app_ui_language")?.let { if (it.isNotBlank()) appUiLanguage = it }
+        currentActivity?.let { attachFloatingOverlayToActivity(it) }
         LocationEngine.isMasterRunning = isMasterRunning
         LocationEngine.isFakeLocationEnabled = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
         LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", LocationEngine.isFixLocationUnknownEnabled)
@@ -1150,6 +1157,8 @@ object OrderInterceptor {
                     maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = false
+                    isFloatingOverlayEnabled = bundle.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+                    bundle.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
                     LocationEngine.applySettingsBundle(bundle)
                     DeviceSpoofer.applySettingsBundle(bundle)
                     if (cachedAuthToken.isEmpty()) {
@@ -1191,6 +1200,8 @@ object OrderInterceptor {
             maxOrdersLimit = if (isExtraOrderEnabled || pMax >= 3) 3 else 2
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
             isShowToasts = false
+            isFloatingOverlayEnabled = p.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+            p.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
         }
     }
 
@@ -2625,6 +2636,7 @@ object OrderInterceptor {
         currentActivity = act
         val appCtx = act.applicationContext ?: act
         initAppContext(appCtx)
+        attachFloatingOverlayToActivity(act)
         startScreenWatcher()
         startActiveServerPolling()
 
@@ -4685,4 +4697,664 @@ object OrderInterceptor {
                 .build()
         }
     }
+
+    // =========================================================================
+    // FLOATING OVERLAY ICON (EXACT 10.JPG) & IN-SANED QUICK CONTROL PANEL
+    // =========================================================================
+    private const val FLOATING_BUBBLE_TAG = "SANED_FLOATING_OVERLAY_BUBBLE"
+    private const val FLOATING_DOT_TAG = "SANED_FLOATING_STATUS_DOT"
+    private const val FLOATING_ICON_B64 = "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"
+
+    @Volatile private var cachedFloatingBitmap: android.graphics.Bitmap? = null
+    @Volatile private var savedBubbleX: Int = -1
+    @Volatile private var savedBubbleY: Int = -1
+    @Volatile private var activeFloatingDialog: Dialog? = null
+
+    private fun ftr(ar: String, en: String): String =
+        if (appUiLanguage.lowercase(Locale.US).startsWith("en")) en else ar
+
+    private fun getFloatingIconBitmap(): android.graphics.Bitmap? {
+        cachedFloatingBitmap?.let { return it }
+        return try {
+            val bytes = Base64.decode(FLOATING_ICON_B64, Base64.DEFAULT)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also {
+                cachedFloatingBitmap = it
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun attachFloatingOverlayToActivity(activity: Activity) {
+        mainHandler.post {
+            try {
+                if (activity.isFinishing || activity.isDestroyed) return@post
+                val decor = activity.window?.decorView as? ViewGroup ?: return@post
+                val contentFrame = decor.findViewById<ViewGroup>(android.R.id.content) ?: decor
+
+                val existing = contentFrame.findViewWithTag<View>(FLOATING_BUBBLE_TAG)
+                if (!isFloatingOverlayEnabled) {
+                    if (existing != null) contentFrame.removeView(existing)
+                    return@post
+                }
+
+                if (existing != null) {
+                    existing.bringToFront()
+                    updateFloatingDotAppearance(existing)
+                    return@post
+                }
+
+                val dm = activity.resources.displayMetrics
+                val density = dm.density
+                val sizePx = (56f * density).toInt()
+                val marginPx = (12f * density).toInt()
+
+                val defaultX = (dm.widthPixels - sizePx - marginPx).coerceAtLeast(marginPx)
+                val defaultY = (dm.heightPixels * 0.34f).toInt().coerceAtLeast(marginPx * 4)
+                val initX = if (savedBubbleX >= 0) savedBubbleX.coerceIn(0, (dm.widthPixels - sizePx).coerceAtLeast(0)) else defaultX
+                val initY = if (savedBubbleY >= 0) savedBubbleY.coerceIn(0, (dm.heightPixels - sizePx).coerceAtLeast(0)) else defaultY
+
+                val bubbleContainer = android.widget.FrameLayout(activity).apply {
+                    tag = FLOATING_BUBBLE_TAG
+                    elevation = 48f * density
+                    val lp = android.widget.FrameLayout.LayoutParams(sizePx, sizePx).apply {
+                        gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                        leftMargin = initX
+                        topMargin = initY
+                    }
+                    layoutParams = lp
+                }
+
+                val iconBg = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = 15f * density
+                    setColor(android.graphics.Color.parseColor("#101726"))
+                    setStroke((1.5f * density).toInt().coerceAtLeast(1), android.graphics.Color.parseColor("#10B981"))
+                }
+
+                val imgView = android.widget.ImageView(activity).apply {
+                    layoutParams = android.widget.FrameLayout.LayoutParams(
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                    scaleType = android.widget.ImageView.ScaleType.FIT_XY
+                    background = iconBg
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, 15f * density)
+                        }
+                    }
+                    getFloatingIconBitmap()?.let { setImageBitmap(it) }
+                }
+                bubbleContainer.addView(imgView)
+
+                val dotSize = (14f * density).toInt()
+                val statusDot = View(activity).apply {
+                    tag = FLOATING_DOT_TAG
+                    layoutParams = android.widget.FrameLayout.LayoutParams(dotSize, dotSize).apply {
+                        gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                        rightMargin = (2f * density).toInt()
+                        bottomMargin = (2f * density).toInt()
+                    }
+                }
+                bubbleContainer.addView(statusDot)
+                updateFloatingDotAppearance(bubbleContainer)
+
+                var downRawX = 0f
+                var downRawY = 0f
+                var startLeft = 0
+                var startTop = 0
+                var isDragging = false
+                var longPressTriggered = false
+                val touchSlop = (8f * density)
+
+                val longPressRunnable = Runnable {
+                    if (!isDragging) {
+                        longPressTriggered = true
+                        isMasterRunning = !isMasterRunning
+                        LocationEngine.isMasterRunning = isMasterRunning
+                        DeviceSpoofer.isMasterRunning = isMasterRunning
+                        updateFloatingDotAppearance(bubbleContainer)
+                        pushFloatingSettingsToAssistant(activity)
+                        try {
+                            bubbleContainer.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        } catch (_: Throwable) {}
+                    }
+                }
+
+                bubbleContainer.setOnTouchListener { v, ev ->
+                    val lp = v.layoutParams as? android.widget.FrameLayout.LayoutParams ?: return@setOnTouchListener false
+                    val parentW = (contentFrame.width.takeIf { it > 0 } ?: dm.widthPixels)
+                    val parentH = (contentFrame.height.takeIf { it > 0 } ?: dm.heightPixels)
+                    when (ev.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downRawX = ev.rawX
+                            downRawY = ev.rawY
+                            startLeft = lp.leftMargin
+                            startTop = lp.topMargin
+                            isDragging = false
+                            longPressTriggered = false
+                            v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(90).start()
+                            mainHandler.postDelayed(longPressRunnable, 600L)
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = ev.rawX - downRawX
+                            val dy = ev.rawY - downRawY
+                            if (!isDragging && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+                                isDragging = true
+                                mainHandler.removeCallbacks(longPressRunnable)
+                            }
+                            if (isDragging) {
+                                val newX = (startLeft + dx.toInt()).coerceIn(0, (parentW - sizePx).coerceAtLeast(0))
+                                val newY = (startTop + dy.toInt()).coerceIn(0, (parentH - sizePx).coerceAtLeast(0))
+                                lp.leftMargin = newX
+                                lp.topMargin = newY
+                                v.layoutParams = lp
+                                savedBubbleX = newX
+                                savedBubbleY = newY
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            mainHandler.removeCallbacks(longPressRunnable)
+                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(110).start()
+                            if (isDragging) {
+                                val snapX = if (lp.leftMargin + sizePx / 2 < parentW / 2) marginPx else (parentW - sizePx - marginPx).coerceAtLeast(0)
+                                lp.leftMargin = snapX
+                                v.layoutParams = lp
+                                savedBubbleX = snapX
+                                savedBubbleY = lp.topMargin
+                            } else if (!longPressTriggered && ev.actionMasked == MotionEvent.ACTION_UP) {
+                                showFloatingControlPanel(activity, bubbleContainer)
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                contentFrame.addView(bubbleContainer)
+                bubbleContainer.bringToFront()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun updateFloatingDotAppearance(bubbleContainer: View) {
+        try {
+            val dot = bubbleContainer.findViewWithTag<View>(FLOATING_DOT_TAG) ?: return
+            val density = bubbleContainer.resources.displayMetrics.density
+            val dotBg = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(
+                    if (isMasterRunning) android.graphics.Color.parseColor("#10B981")
+                    else android.graphics.Color.parseColor("#EF4444")
+                )
+                setStroke((2f * density).toInt().coerceAtLeast(1), android.graphics.Color.WHITE)
+            }
+            dot.background = dotBg
+        } catch (_: Throwable) {}
+    }
+
+    private fun pushFloatingSettingsToAssistant(context: Context) {
+        val app = context.applicationContext ?: context
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val b = android.os.Bundle().apply {
+                    putBoolean("master_running", isMasterRunning)
+                    putBoolean("enabled", isMasterRunning)
+                    putBoolean("auto_accept", isAutoAccept)
+                    putBoolean("auto_reject", isAutoReject)
+                    putBoolean("dry_run", isDryRun)
+                    putBoolean("stay_in_background_v2", isStayInBackground)
+                    putBoolean("silence_alert_tone", isSilenceAlertTone)
+                    putBoolean("extra_order_enabled", isExtraOrderEnabled)
+                    putInt("max_orders_limit", maxOrdersLimit)
+                    putString("max_orders_limit_str", maxOrdersLimit.toString())
+                    putString("min_price", minOrderPrice.toString())
+                    putString("min_order_price", minOrderPrice.toString())
+                    putString("max_dist_rest", maxDistToRestaurant.toString())
+                    putString("max_dist_to_restaurant", maxDistToRestaurant.toString())
+                    putString("max_dist_cust", maxDistCustomer.toString())
+                    putString("max_dist_restaurant_to_customer", maxDistCustomer.toString())
+                    putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                    putString("fake_lat", LocationEngine.currentLat.toString())
+                    putString("fake_lng", LocationEngine.currentLng.toString())
+                    putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                    putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                    putString("app_ui_language", appUiLanguage)
+                }
+                app.contentResolver.call(
+                    android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                    "updateSettingsFromFloating",
+                    null,
+                    b
+                )
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun showFloatingControlPanel(activity: Activity, bubbleView: View) {
+        try {
+            if (activity.isFinishing || activity.isDestroyed) return
+            activeFloatingDialog?.let {
+                if (it.isShowing) {
+                    it.dismiss()
+                    return
+                }
+            }
+
+            val density = activity.resources.displayMetrics.density
+            fun dp(v: Float): Int = (v * density).toInt()
+            fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+                return android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = radiusDp * density
+                    setColor(android.graphics.Color.parseColor(hex))
+                    if (strokeHex != null && strokePx > 0) {
+                        setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                    }
+                }
+            }
+
+            val isAr = !appUiLanguage.lowercase(Locale.US).startsWith("en")
+            val dlg = Dialog(activity)
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+
+            val rootScroll = android.widget.ScrollView(activity).apply {
+                background = roundBg("#0F172A", 20f, "#1E293B", dp(1.5f))
+                layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+            }
+
+            val mainCol = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setPadding(dp(16f), dp(14f), dp(16f), dp(16f))
+            }
+
+            // 1. Header Row (Icon + Title + Lang Switch + Close)
+            val headerRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(10f))
+            }
+
+            val hdrIcon = android.widget.ImageView(activity).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(dp(36f), dp(36f)).apply {
+                    setMargins(0, 0, dp(8f), 0)
+                }
+                getFloatingIconBitmap()?.let { setImageBitmap(it) }
+            }
+            headerRow.addView(hdrIcon)
+
+            val titleCol = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val tvTitle = TextView(activity).apply {
+                text = ftr("مساعد ساند السريع", "Saned Quick Assistant")
+                textSize = 15.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.WHITE)
+            }
+            val tvSub = TextView(activity).apply {
+                val tokOk = cachedAuthToken.isNotEmpty()
+                text = if (tokOk) ftr("متصل مباشرة ⚡ (0.0ms)", "Connected Live ⚡ (0.0ms)")
+                else ftr("نشط داخل ساند ⚡", "Active Inside Saned ⚡")
+                textSize = 11.5f
+                setTextColor(android.graphics.Color.parseColor("#10B981"))
+            }
+            titleCol.addView(tvTitle)
+            titleCol.addView(tvSub)
+            headerRow.addView(titleCol)
+
+            val btnLang = android.widget.Button(activity).apply {
+                text = if (isAr) "EN 🌐" else "عربي 🌐"
+                textSize = 11.5f
+                isAllCaps = false
+                setTextColor(android.graphics.Color.WHITE)
+                background = roundBg("#1E293B", 10f, "#334155", dp(1f))
+                setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dp(34f)
+                ).apply { setMargins(dp(4f), 0, dp(4f), 0) }
+                setOnClickListener {
+                    appUiLanguage = if (isAr) "en" else "ar"
+                    pushFloatingSettingsToAssistant(activity)
+                    dlg.dismiss()
+                    activeFloatingDialog = null
+                    showFloatingControlPanel(activity, bubbleView)
+                }
+            }
+            headerRow.addView(btnLang)
+
+            val btnClose = android.widget.Button(activity).apply {
+                text = "✖"
+                textSize = 13f
+                setTextColor(android.graphics.Color.WHITE)
+                background = roundBg("#334155", 10f)
+                layoutParams = android.widget.LinearLayout.LayoutParams(dp(36f), dp(34f))
+                setOnClickListener { dlg.dismiss() }
+            }
+            headerRow.addView(btnClose)
+            mainCol.addView(headerRow)
+
+            // Helper for creating toggle buttons inside the floating panel
+            fun makeToggleRow(labelAr: String, labelEn: String, initial: Boolean, onToggle: (Boolean) -> Unit): android.widget.Button {
+                val btn = android.widget.Button(activity).apply {
+                    isAllCaps = false
+                    textSize = 13f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.WHITE)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(42f)
+                    ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
+                }
+                var state = initial
+                fun refreshBtn() {
+                    val label = ftr(labelAr, labelEn)
+                    val stateTxt = if (state) ftr("مفعل ✅", "ON ✅") else ftr("متوقف ❌", "OFF ❌")
+                    btn.text = "$label : $stateTxt"
+                    btn.background = if (state) roundBg("#059669", 11f, "#10B981", dp(1f))
+                    else roundBg("#1E293B", 11f, "#475569", dp(1f))
+                }
+                refreshBtn()
+                btn.setOnClickListener {
+                    state = !state
+                    onToggle(state)
+                    refreshBtn()
+                    updateFloatingDotAppearance(bubbleView)
+                    pushFloatingSettingsToAssistant(activity)
+                }
+                return btn
+            }
+
+            // 2. Quick Toggles Section
+            mainCol.addView(makeToggleRow("⚡ التشغيل الرئيسي", "⚡ Master Switch", isMasterRunning) {
+                isMasterRunning = it
+                LocationEngine.isMasterRunning = it
+                DeviceSpoofer.isMasterRunning = it
+            })
+
+            mainCol.addView(makeToggleRow("🚀 قبول تلقائي فوري (0.0ms)", "🚀 Instant Auto-Accept (0.0ms)", isAutoAccept) {
+                isAutoAccept = it
+            })
+
+            mainCol.addView(makeToggleRow("🛡️ رفض تلقائي للغير مطابق", "🛡️ Auto-Reject Unmatched", isAutoReject) {
+                isAutoReject = it
+            })
+
+            // Extra Order Toggle Button (OFF = 2 orders, ON = 3 orders)
+            val btnExtraOrder = android.widget.Button(activity).apply {
+                isAllCaps = false
+                textSize = 13f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.WHITE)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(44f)
+                ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
+            }
+            fun refreshExtraOrderBtn() {
+                if (isExtraOrderEnabled) {
+                    btnExtraOrder.text = ftr("➕ طلب إضافي: مفعل ✅ (الحد: 3 طلبات)", "➕ Extra Order: ON ✅ (Limit: 3 Orders)")
+                    btnExtraOrder.background = roundBg("#059669", 11f, "#10B981", dp(1f))
+                } else {
+                    btnExtraOrder.text = ftr("➕ طلب إضافي: متوقف (الافتراضي: 2 طلبات)", "➕ Extra Order: OFF (Default: 2 Orders)")
+                    btnExtraOrder.background = roundBg("#1E293B", 11f, "#475569", dp(1f))
+                }
+            }
+            refreshExtraOrderBtn()
+            btnExtraOrder.setOnClickListener {
+                isExtraOrderEnabled = !isExtraOrderEnabled
+                maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
+                refreshExtraOrderBtn()
+                pushFloatingSettingsToAssistant(activity)
+            }
+            mainCol.addView(btnExtraOrder)
+
+            // 3. DELIVER ORDER (Camouflaged 2-Point GPS & Route Simulator Quick Control)
+            val deliverCard = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                background = roundBg("#1E293B", 12f, "#334155", dp(1f))
+                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, dp(6f), 0, dp(6f)) }
+            }
+            val tvDeliverHdr = TextView(activity).apply {
+                text = ftr("📦 توصيل الطلب", "📦 DELIVER ORDER")
+                textSize = 13.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#38BDF8"))
+                setPadding(0, 0, 0, dp(4f))
+            }
+            deliverCard.addView(tvDeliverHdr)
+
+            deliverCard.addView(makeToggleRow("تفعيل توصيل الطلب", "Enable DELIVER ORDER", LocationEngine.isFakeLocationEnabled) {
+                LocationEngine.isFakeLocationEnabled = it
+                if (it) LocationEngine.pushSpoofedLocationToAllCallbacks()
+            })
+
+            deliverCard.addView(makeToggleRow("تشغيل حركة توصيل الطلب", "Run DELIVER ORDER Movement", LocationEngine.isTripSimulationActive) {
+                LocationEngine.isTripSimulationActive = it
+                if (it) {
+                    LocationEngine.isFakeLocationEnabled = true
+                    LocationEngine.pushSpoofedLocationToAllCallbacks()
+                }
+            })
+            mainCol.addView(deliverCard)
+
+            // 4. Quick Filters (Min Price, Max Rest Dist, Max Cust Dist)
+            val filterCard = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                background = roundBg("#1E293B", 12f, "#334155", dp(1f))
+                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, dp(4f), 0, dp(6f)) }
+            }
+            val tvFilterHdr = TextView(activity).apply {
+                text = ftr("🎯 شروط القبول السريعة (0 = بدون شرط)", "🎯 Quick Filters (0 = No Limit)")
+                textSize = 13f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#FBBF24"))
+                setPadding(0, 0, 0, dp(6f))
+            }
+            filterCard.addView(tvFilterHdr)
+
+            val filterInputsRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            fun makeNumInput(hintAr: String, hintEn: String, initVal: Double): android.widget.EditText {
+                return android.widget.EditText(activity).apply {
+                    hint = ftr(hintAr, hintEn)
+                    setText(if (initVal > 0.0) initVal.toString() else "0")
+                    textSize = 12.5f
+                    setTextColor(android.graphics.Color.WHITE)
+                    setHintTextColor(android.graphics.Color.parseColor("#94A3B8"))
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    gravity = android.view.Gravity.CENTER
+                    background = roundBg("#0F172A", 8f, "#475569", dp(1f))
+                    setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(38f), 1f).apply {
+                        setMargins(dp(3f), 0, dp(3f), 0)
+                    }
+                }
+            }
+            val edtP = makeNumInput("أقل سعر", "Min Price", minOrderPrice)
+            val edtR = makeNumInput("كم مطعم", "Rest km", maxDistToRestaurant)
+            val edtC = makeNumInput("كم عميل", "Cust km", maxDistCustomer)
+            filterInputsRow.addView(edtP)
+            filterInputsRow.addView(edtR)
+            filterInputsRow.addView(edtC)
+            filterCard.addView(filterInputsRow)
+
+            val btnSaveFilters = android.widget.Button(activity).apply {
+                text = ftr("💾 حفظ الشروط فوراً", "💾 Save Filters Now")
+                isAllCaps = false
+                textSize = 12.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.WHITE)
+                background = roundBg("#2563EB", 9f)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(38f)
+                ).apply { setMargins(0, dp(8f), 0, 0) }
+                setOnClickListener {
+                    minOrderPrice = edtP.text.toString().toDoubleOrNull() ?: 0.0
+                    maxDistToRestaurant = edtR.text.toString().toDoubleOrNull() ?: 0.0
+                    maxDistCustomer = edtC.text.toString().toDoubleOrNull() ?: 0.0
+                    pushFloatingSettingsToAssistant(activity)
+                    text = ftr("✅ تم الحفظ والتطبيق", "✅ Saved & Applied")
+                }
+            }
+            filterCard.addView(btnSaveFilters)
+            mainCol.addView(filterCard)
+
+            // 5. Recent Orders & Instant Google Maps Navigation Inside Saned
+            val ordersList = synchronized(syncedOrdersCache) {
+                syncedOrdersCache.values.toList().takeLast(3).reversed()
+            }
+            if (ordersList.isNotEmpty()) {
+                val ordHdr = TextView(activity).apply {
+                    text = ftr("📋 آخر الطلبات والملاحة المباشرة:", "📋 Recent Orders & Direct Navigation:")
+                    textSize = 13f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
+                    setPadding(0, dp(4f), 0, dp(4f))
+                }
+                mainCol.addView(ordHdr)
+
+                for (obj in ordersList) {
+                    val m = OrderModel.fromJson(obj)
+                    val oCard = android.widget.LinearLayout(activity).apply {
+                        orientation = android.widget.LinearLayout.VERTICAL
+                        background = roundBg("#1E293B", 10f, "#334155", dp(1f))
+                        setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+                        layoutParams = android.widget.LinearLayout.LayoutParams(
+                            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { setMargins(0, dp(3f), 0, dp(3f)) }
+                    }
+                    val dispRef = m.reference.ifEmpty { if (m.id != 0) "#${m.id}" else "#" }
+                    val effFood = if (m.foodPrice > 0.0) m.foodPrice else m.cashAmount
+                    val foodTxt = if (effFood > 0.0) String.format(Locale.US, "%.2f", effFood) else "0.00"
+                    val tvLine1 = TextView(activity).apply {
+                        text = "$dispRef • ${m.restaurant.ifEmpty { ftr("مطعم", "Store") }}"
+                        textSize = 12.5f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(android.graphics.Color.WHITE)
+                    }
+                    val tvLine2 = TextView(activity).apply {
+                        text = ftr(
+                            "التوصيل: ${m.price} ر.س | سعر الطعام: $foodTxt ر.س | الهاتف: ${m.customerPhone.ifEmpty { "—" }}",
+                            "Delivery: ${m.price} SAR | Food Price: $foodTxt SAR | Phone: ${m.customerPhone.ifEmpty { "—" }}"
+                        )
+                        textSize = 11.5f
+                        setTextColor(android.graphics.Color.parseColor("#34D399"))
+                    }
+                    oCard.addView(tvLine1)
+                    oCard.addView(tvLine2)
+
+                    if ((m.pickupLat != 0.0 && m.pickupLng != 0.0) || (m.destLat != 0.0 && m.destLng != 0.0)) {
+                        val navRow = android.widget.LinearLayout(activity).apply {
+                            orientation = android.widget.LinearLayout.HORIZONTAL
+                            setPadding(0, dp(4f), 0, 0)
+                        }
+                        if (m.pickupLat != 0.0 && m.pickupLng != 0.0) {
+                            val bRest = android.widget.Button(activity).apply {
+                                text = ftr("🏪 المطعم ↗", "🏪 Pickup ↗")
+                                isAllCaps = false
+                                textSize = 11f
+                                setTextColor(android.graphics.Color.WHITE)
+                                background = roundBg("#0284C7", 8f)
+                                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(32f), 1f).apply {
+                                    setMargins(dp(2f), 0, dp(2f), 0)
+                                }
+                                setOnClickListener {
+                                    openDirectGoogleMaps(activity, m.pickupLat, m.pickupLng)
+                                    dlg.dismiss()
+                                }
+                            }
+                            navRow.addView(bRest)
+                        }
+                        if (m.destLat != 0.0 && m.destLng != 0.0) {
+                            val bCust = android.widget.Button(activity).apply {
+                                text = ftr("🏠 العميل (قبل الاستلام) ↗", "🏠 Customer (Pre-Pickup) ↗")
+                                isAllCaps = false
+                                textSize = 11f
+                                setTextColor(android.graphics.Color.WHITE)
+                                background = roundBg("#059669", 8f)
+                                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(32f), 1.3f).apply {
+                                    setMargins(dp(2f), 0, dp(2f), 0)
+                                }
+                                setOnClickListener {
+                                    openDirectGoogleMaps(activity, m.destLat, m.destLng)
+                                    dlg.dismiss()
+                                }
+                            }
+                            navRow.addView(bCust)
+                        }
+                        oCard.addView(navRow)
+                    }
+                    mainCol.addView(oCard)
+                }
+            }
+
+            // 6. Open Full Saned Assistant App Button
+            val btnOpenApp = android.widget.Button(activity).apply {
+                text = ftr("🗺️ فتح خريطة توصيل الطلب والتطبيق الكامل ↗", "🗺️ Open DELIVER ORDER Map & Full App ↗")
+                isAllCaps = false
+                textSize = 12.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.WHITE)
+                background = roundBg("#4F46E5", 11f)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(40f)
+                ).apply { setMargins(0, dp(8f), 0, 0) }
+                setOnClickListener {
+                    try {
+                        val launch = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
+                            ?: Intent().setClassName("dev.jing.sanedhook", "dev.saned.assistant.ui.MainActivity")
+                        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        activity.startActivity(launch)
+                        dlg.dismiss()
+                    } catch (_: Throwable) {}
+                }
+            }
+            mainCol.addView(btnOpenApp)
+
+            rootScroll.addView(mainCol)
+            dlg.setContentView(rootScroll)
+            dlg.window?.apply {
+                setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                val w = (activity.resources.displayMetrics.widthPixels * 0.92f).toInt()
+                setLayout(w, android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+            }
+            activeFloatingDialog = dlg
+            dlg.show()
+        } catch (_: Throwable) {}
+    }
+
+    private fun openDirectGoogleMaps(context: Context, lat: Double, lng: Double) {
+        try {
+            val uri = android.net.Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving")
+            val mapIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                setPackage("com.google.android.apps.maps")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(mapIntent)
+            } catch (_: Throwable) {
+                context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } catch (_: Throwable) {}
+    }
+
 }

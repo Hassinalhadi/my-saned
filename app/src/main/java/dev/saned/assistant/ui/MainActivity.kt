@@ -151,6 +151,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chkSilenceAlertTone: CheckBox
     private lateinit var chkSoundAlert: CheckBox
     private lateinit var chkStrictVersionCheck: CheckBox
+    private lateinit var chkFloatingOverlay: CheckBox
     private lateinit var edtMinPrice: EditText
     private lateinit var edtMaxDistRest: EditText
     private lateinit var edtMaxDistCust: EditText
@@ -4414,6 +4415,15 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(chkStrictVersionCheck)
 
+        chkFloatingOverlay = CheckBox(this).apply {
+            text = tr("إظهار الأيقونة الطافية فوق شاشة ساند للتحكم السريع بدون تبديل التطبيقات", "Show Floating Icon Over Saned Screen for Quick Control")
+            isChecked = SettingsStore.isFloatingOverlayEnabled(this@MainActivity)
+            setOnCheckedChangeListener { _, isChecked ->
+                SettingsStore.setFloatingOverlayEnabled(this@MainActivity, isChecked)
+            }
+        }
+        layout.addView(chkFloatingOverlay)
+
         layout.addView(
             createLabel(
                 tr(
@@ -4629,6 +4639,7 @@ class MainActivity : AppCompatActivity() {
         SettingsStore.setSilenceAlertTone(this, chkSilenceAlertTone.isChecked)
         SettingsStore.setSoundEnabled(this, chkSoundAlert.isChecked)
         SettingsStore.setStrictVersionCheck(this, chkStrictVersionCheck.isChecked)
+        if (::chkFloatingOverlay.isInitialized) SettingsStore.setFloatingOverlayEnabled(this, chkFloatingOverlay.isChecked)
         SettingsStore.setShowFoodPrice(this, true)
         SettingsStore.setExtraOrderEnabled(this, isExtraOrderEnabled)
         SettingsStore.setMinPrice(this, minPrice)

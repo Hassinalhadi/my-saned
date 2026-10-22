@@ -535,6 +535,28 @@ class XposedProvider : ContentProvider() {
             return bundle
         }
 
+        if (method == "updateSettingsFromFloating" && extras != null) {
+            try {
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val ed = prefs.edit()
+                for (key in extras.keySet()) {
+                    when (val v = extras.get(key)) {
+                        is Boolean -> ed.putBoolean(key, v)
+                        is Int -> ed.putInt(key, v)
+                        is Long -> ed.putLong(key, v)
+                        is Float -> ed.putFloat(key, v)
+                        is Double -> ed.putString(key, v.toString())
+                        is String -> ed.putString(key, v)
+                    }
+                }
+                ed.apply()
+                syncToLSPosedRemotePrefs(ctx)
+                ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
+                bundle.putBoolean("ok", true)
+            } catch (_: Throwable) {}
+            return bundle
+        }
+
         if (method == "saveAuthToken") {
             try {
                 val tok = extras?.getString("auth_token") ?: arg ?: ""

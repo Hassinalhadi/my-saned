@@ -256,6 +256,13 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
+    // Floating Icon Over Saned Screen (Default TRUE)
+    fun isFloatingOverlayEnabled(context: Context): Boolean = getPrefs(context).getBoolean("floating_overlay_enabled", true)
+    fun setFloatingOverlayEnabled(context: Context, value: Boolean) {
+        getPrefs(context).edit().putBoolean("floating_overlay_enabled", value).apply()
+        broadcastSettings(context)
+    }
+
     // 2-Point Route Simulator (Point 1 -> Point 2) & Variable Speeds
     fun getPoint1Lat(context: Context): Double = getPrefs(context).getString("point1_lat", null)?.toDoubleOrNull() ?: getFakeLat(context)
     fun getPoint1Lng(context: Context): Double = getPrefs(context).getString("point1_lng", null)?.toDoubleOrNull() ?: getFakeLng(context)
@@ -438,6 +445,8 @@ object SettingsStore {
                     putExtra("sound_enabled", snd)
                     putExtra("show_toasts", toasts)
                     putExtra("show_food_price", true)
+                    putExtra("floating_overlay_enabled", isFloatingOverlayEnabled(appCtx))
+                    putExtra("app_ui_language", getAppLanguage(appCtx))
                     putExtra("hook_early_cloaker", hEarly)
                     putExtra("hook_sec_cloaker", hSec)
                     putExtra("hook_location", hLoc)
@@ -482,6 +491,8 @@ object SettingsStore {
                     put("hook_orders", hOrd)
                     put("hook_bootstrap_loop", hBoot)
                     put("show_food_price", true)
+                    put("floating_overlay_enabled", isFloatingOverlayEnabled(appCtx))
+                    put("app_ui_language", getAppLanguage(appCtx))
                 }
                 val file = File("/data/local/tmp/saned_config.json")
                 file.writeText(json.toString())
