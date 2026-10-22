@@ -382,7 +382,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(36, 10, 36, 10)
         }
         navMapLabel = TextView(this).apply {
-            text = tr("الخريطة والمسار", "Map & Route")
+            text = tr("الخريطة", "Map")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
@@ -622,13 +622,13 @@ class MainActivity : AppCompatActivity() {
         isoLayout.addView(chkHookSecCloaker)
 
         chkHookLocation = CheckBox(this).apply {
-            text = tr("3. محرك الموقع المزيف ومحاكاة المسار", "3. Fake Location & Route Simulator Module")
+            text = tr("3. وحدة توجيه وتوصيل الطلبات", "3. Order Delivery Navigation Module")
             isChecked = SettingsStore.isHookLocation(this@MainActivity)
         }
         isoLayout.addView(chkHookLocation)
 
         chkHookDeviceSpoofer = CheckBox(this).apply {
-            text = tr("4. تغيير بصمة ومعرف الجهاز", "4. Device Identifier Spoofer Module")
+            text = tr("4. وحدة معرف الجهاز", "4. Device Identifier Module")
             isChecked = SettingsStore.isHookDeviceSpoofer(this@MainActivity)
         }
         isoLayout.addView(chkHookDeviceSpoofer)
@@ -866,9 +866,13 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(createDiagnosticsCard())
         mainLayout.addView(createMasterSwitchCard())
         mainLayout.addView(createFiltersCard())
-        mainLayout.addView(createPollingCard())
+        // Server Polling card is kept initialized in memory (locked to ON, Interval=0, Parallel=3) but hidden from Settings UI
+        val hiddenPollingCard = createPollingCard().apply { visibility = View.GONE }
+        mainLayout.addView(hiddenPollingCard)
         mainLayout.addView(createAndroidIdCard())
-        mainLayout.addView(createLocationShortcutCard())
+        // Location Shortcut card is kept in memory with camouflaged title but hidden from Settings UI
+        val hiddenLocShortcutCard = createLocationShortcutCard().apply { visibility = View.GONE }
+        mainLayout.addView(hiddenLocShortcutCard)
 
         val btnSave = Button(this).apply {
             text = tr("💾 حفظ وتطبيق جميع الإعدادات", "💾 Save & Apply All Settings")
@@ -1646,7 +1650,7 @@ class MainActivity : AppCompatActivity() {
         // 6. Quick 2-Point Route Simulator Button for this Order
         if ((order.pickupLat != 0.0 && order.pickupLng != 0.0) || (order.destLat != 0.0 && order.destLng != 0.0)) {
             val btnSimOrderRoute = TextView(this).apply {
-                text = tr("🚗  محاكاة مسار الطريق لهذا الطلب من نقطة 1 إلى نقطة 2", "🚗  Simulate 2-Point Street Route for This Order")
+                text = tr("توصيل الطلب", "DELIVER ORDER")
                 textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -2191,7 +2195,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(note)
 
         chkAndroidId = CheckBox(this).apply {
-            text = tr("تفعيل تغيير معرف الجهاز", "Enable Device Identifier Spoofing")
+            text = tr("تفعيل معرف الجهاز المخصص", "Enable Custom Device Identifier")
             isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setSpoofAndroidId(this@MainActivity, isChecked)
@@ -2252,7 +2256,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 24, 24, 24)
         }
         val title = TextView(this).apply {
-            text = tr("🗺️ محاكي الموقع والمسار بين نقطتين", "🗺️ 2-Point Location Spoofer & Route Simulator")
+            text = tr("📦 توصيل الطلب", "📦 DELIVER ORDER")
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -2261,8 +2265,8 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
         val sub = TextView(this).apply {
             text = tr(
-                "انتقل إلى تبويب الخريطة والمسار لتحديد النقطة 1 والنقطة 2 ومحاكاة المشي في الطريق بسرعات مختلفة أو بسرعة مخصصة.",
-                "Open the Map & Route tab to set Point 1 and Point 2 and simulate driving along the road with variable speeds or a custom speed."
+                "انتقل إلى تبويب الخريطة لإدارة مسار توصيل الطلب.",
+                "Open the Map tab to manage order delivery navigation."
             )
             textSize = 12f
             setTextColor(Color.parseColor("#475569"))
@@ -2270,7 +2274,7 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(sub)
         val btnOpenMap = Button(this).apply {
-            text = tr("🗺️ فتح الخريطة ومحاكي النقطتين الآن", "🗺️ Open Map & 2-Point Simulator Now")
+            text = tr("📦 توصيل الطلب", "📦 DELIVER ORDER")
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#2563EB"))
@@ -2316,7 +2320,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 8)
         }
         val title = TextView(this).apply {
-            text = tr("🗺️ الموقع المزيف ومحاكي المسار (نقطتين 1 ➔ 2)", "🗺️ Location Spoofer & 2-Point Route Simulator")
+            text = tr("📦 توصيل الطلب", "📦 DELIVER ORDER")
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -2341,13 +2345,13 @@ class MainActivity : AppCompatActivity() {
             val isFake = SettingsStore.isFakeLocation(this@MainActivity)
             text = if (isFake) {
                 tr(
-                    "🟢 الموقع المزيف مفعل • حدد النقطة 1 والنقطة 2 على الخريطة لبدء محاكاة الطريق",
-                    "🟢 Fake Location Enabled • Set Point 1 and Point 2 on the map to start route simulation"
+                    "🟢 وضع توصيل الطلب مفعل • حدد مسار التوصيل على الخريطة",
+                    "🟢 Order Delivery Mode Active • Select delivery path on the map"
                 )
             } else {
                 tr(
-                    "⚪ اضغط على الخريطة لتعيين النقطة 1 والنقطة 2 أو تثبيت موقعك",
-                    "⚪ Tap on the map to set Point 1 and Point 2 or pin your location"
+                    "⚪ اضغط على الخريطة لتحديد موقع توصيل الطلب",
+                    "⚪ Tap on the map to set order delivery location"
                 )
             }
             textSize = 12f
@@ -2366,7 +2370,7 @@ class MainActivity : AppCompatActivity() {
 
         // Toggles Row (Pure Arabic or Pure English — NO mixed text!)
         chkFakeLoc = CheckBox(this).apply {
-            text = tr("تفعيل الموقع المزيف والحماية من الكشف", "Enable Fake Location & Anti-Detection")
+            text = tr("تفعيل وضع توصيل الطلب المباشر", "Enable Direct Order Delivery")
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -2381,7 +2385,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(chkFakeLoc)
 
         chkFixLoc = CheckBox(this).apply {
-            text = tr("إصلاح خطأ الموقع غير معروف", "Fix Location Unknown Error")
+            text = tr("تحسين دقة إشارة الموقع", "Enhance Location Signal")
             isChecked = SettingsStore.isFixLocation(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setFixLocation(this@MainActivity, isChecked)
@@ -2430,7 +2434,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 4, 0, 8)
         }
         btnModeTeleport = Button(this).apply {
-            text = tr("📍 موقع واحد", "📍 Single Pin")
+            text = tr("📍 الموقع الحالي", "📍 Current Pin")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply {
@@ -2439,7 +2443,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { setMapTapSelectionMode("teleport") }
         }
         btnModePoint1 = Button(this).apply {
-            text = tr("1️⃣ النقطة 1 (انطلاق)", "1️⃣ Point 1 (Start)")
+            text = tr("1️⃣ الاستلام (1)", "1️⃣ Pickup (1)")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
@@ -2448,7 +2452,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { setMapTapSelectionMode("point1") }
         }
         btnModePoint2 = Button(this).apply {
-            text = tr("2️⃣ النقطة 2 (وصول)", "2️⃣ Point 2 (End)")
+            text = tr("2️⃣ التسليم (2)", "2️⃣ Drop-off (2)")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
@@ -2488,7 +2492,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnEditTwoPts = TextView(this).apply {
-            text = tr("✏️ تعيين النقطتين 1 و 2", "✏️ Set Points 1 & 2")
+            text = tr("✏️ تعديل الموقع", "✏️ Edit Location")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2514,7 +2518,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { swapPoint1AndPoint2() }
         }
         val btnBuildTwoPtRoute = TextView(this).apply {
-            text = tr("🛣️ رسم مسار 1 ➔ 2", "🛣️ Route 1 ➔ 2")
+            text = tr("🛣️ تحديث المسار", "🛣️ Update Path")
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2670,7 +2674,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartRouteSim = Button(this).apply {
-            text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
+            text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#059669"))
@@ -2729,7 +2733,7 @@ class MainActivity : AppCompatActivity() {
                 mapWebView.evaluateJavascript("if(window.clearSimulatedRoute) window.clearSimulatedRoute();", null)
                 Toast.makeText(
                     this@MainActivity,
-                    tr("⏹️ تم إيقاف محاكاة المسار وتثبيت الموقع الحالي", "⏹️ Route simulation stopped and current location pinned"),
+                    tr("⏹️ تم إيقاف توصيل الطلب وتثبيت الموقع الحالي", "⏹️ Order delivery stopped and current location pinned"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -2781,7 +2785,7 @@ class MainActivity : AppCompatActivity() {
                 applyImmediateSpoofLocation(lt, lg, panMap = true)
                 Toast.makeText(
                     this@MainActivity,
-                    tr("✅ تم تحديث وتثبيت الموقع فوراً", "✅ Spoofed location updated and pinned immediately"),
+                    tr("✅ تم تحديث وتثبيت الموقع فوراً", "✅ Location updated and pinned immediately"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -2804,13 +2808,13 @@ class MainActivity : AppCompatActivity() {
         tvTwoPointSummary.text = if (isAr) {
             String.format(
                 Locale.US,
-                "1️⃣ النقطة 1 (انطلاق): %.5f, %.5f\n2️⃣ النقطة 2 (وصول):   %.5f, %.5f   •   البعد المباشر: %.2f كم",
+                "1️⃣ الاستلام: %.5f, %.5f\n2️⃣ التسليم:   %.5f, %.5f   •   المسافة: %.2f كم",
                 point1Lat, point1Lng, point2Lat, point2Lng, straightDistKm
             )
         } else {
             String.format(
                 Locale.US,
-                "1️⃣ Point 1 (Start): %.5f, %.5f\n2️⃣ Point 2 (End):   %.5f, %.5f   •   Direct Distance: %.2f km",
+                "1️⃣ Pickup: %.5f, %.5f\n2️⃣ Drop-off: %.5f, %.5f   •   Distance: %.2f km",
                 point1Lat, point1Lng, point2Lat, point2Lng, straightDistKm
             )
         }
@@ -2856,7 +2860,7 @@ class MainActivity : AppCompatActivity() {
         }
         Toast.makeText(
             this,
-            tr("🔄 تم عكس النقطتين (1 ⇄ 2) وإعادة رسم المسار", "🔄 Swapped Point 1 ⇄ Point 2 and rebuilt route"),
+            tr("🔄 تم عكس المسار (1 ⇄ 2) وتحديث الطريق", "🔄 Swapped path (1 ⇄ 2) and updated route"),
             Toast.LENGTH_SHORT
         ).show()
     }
@@ -2869,8 +2873,8 @@ class MainActivity : AppCompatActivity() {
 
         val info = TextView(this).apply {
             text = tr(
-                "حدد إحداثيات النقطة 1 (نقطة الانطلاق) والنقطة 2 (نقطة الوصول) لمحاكاة الطريق بينهما:",
-                "Specify coordinates for Point 1 (Start) and Point 2 (Destination) to simulate the street route between them:"
+                "حدد إحداثيات موقع الاستلام (1) وموقع التسليم (2) لتوصيل الطلب:",
+                "Specify coordinates for Pickup (1) and Drop-off (2) for order delivery:"
             )
             textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
@@ -2879,7 +2883,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(info)
 
         val lblP1 = TextView(this).apply {
-            text = tr("1️⃣ النقطة 1 — نقطة الانطلاق (خط العرض , خط الطول):", "1️⃣ Point 1 — Start Location (Lat , Lng):")
+            text = tr("1️⃣ موقع الاستلام (خط العرض , خط الطول):", "1️⃣ Pickup Location (Lat , Lng):")
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#059669"))
@@ -2909,7 +2913,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(rowP1)
 
         val lblP2 = TextView(this).apply {
-            text = tr("2️⃣ النقطة 2 — نقطة الوصول (خط العرض , خط الطول):", "2️⃣ Point 2 — Destination Location (Lat , Lng):")
+            text = tr("2️⃣ موقع التسليم (خط العرض , خط الطول):", "2️⃣ Drop-off Location (Lat , Lng):")
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#DC2626"))
@@ -2939,7 +2943,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(rowP2)
 
         AlertDialog.Builder(this)
-            .setTitle(tr("1️⃣➔2️⃣ تعيين النقطتين 1 و 2 للمسار", "1️⃣➔2️⃣ Set Route Points 1 & 2"))
+            .setTitle(tr("📦 إعداد إحداثيات توصيل الطلب", "📦 DELIVER ORDER Coordinates"))
             .setView(layout)
             .setPositiveButton(tr("🛣️ حفظ ورسم المسار", "🛣️ Save & Build Route")) { _, _ ->
                 val p1Lt = edtP1Lat.text.toString().trim().toDoubleOrNull() ?: point1Lat
@@ -3004,14 +3008,14 @@ class MainActivity : AppCompatActivity() {
         val infoTv = TextView(this).apply {
             text = if (distKm > 0.01) {
                 if (isAr) {
-                    String.format(Locale.US, "🛣️ مسار الطريق من النقطة 1 إلى النقطة 2: %.2f كم\nاختر نظام السرعة لمحاكاة المشي في الطريق:", distKm)
+                    String.format(Locale.US, "🛣️ مسافة توصيل الطلب: %.2f كم\nاختر نظام السرعة لتوصيل الطلب:", distKm)
                 } else {
-                    String.format(Locale.US, "🛣️ Street route from Point 1 to Point 2: %.2f km\nChoose your speed mode for the route simulation:", distKm)
+                    String.format(Locale.US, "🛣️ Order delivery distance: %.2f km\nChoose speed mode for order delivery:", distKm)
                 }
             } else {
                 tr(
-                    "اختر نظام السرعة لمحاكاة الطريق من النقطة 1 إلى النقطة 2 (سرعات مختلفة واقعية أو سرعة مخصصة ثابتة):",
-                    "Select speed mode for simulating the route from Point 1 to Point 2 (Variable realistic speeds or Custom fixed speed):"
+                    "اختر نظام السرعة لتوصيل الطلب (سرعات مختلفة أو سرعة مخصصة):",
+                    "Select speed mode for order delivery (Variable speeds or Custom speed):"
                 )
             }
             textSize = 12.5f
@@ -3055,8 +3059,8 @@ class MainActivity : AppCompatActivity() {
 
         val varDesc = TextView(this).apply {
             text = tr(
-                "يتحرك الحساب من النقطة 1 إلى النقطة 2 بسرعات متغيرة تلقائياً بين الحد الأدنى والحد الأقصى (تهدئة واقعية عند المنعطفات وتسارع في الشوارع المستقيمة):",
-                "Moves from Point 1 to Point 2 at realistic varying speeds between Min and Max (smoothly slowing down on turns and accelerating on straight roads):"
+                "يتحرك المسار بسرعات متغيرة تلقائياً بين الحد الأدنى والحد الأقصى أثناء توصيل الطلب:",
+                "Moves along the delivery path at varying speeds between Min and Max:"
             )
             textSize = 11.5f
             setTextColor(Color.parseColor("#065F46"))
@@ -3302,8 +3306,8 @@ class MainActivity : AppCompatActivity() {
 
         val chkLoop = CheckBox(this).apply {
             text = tr(
-                "🔄 تكرار المسار ذهاباً وإياباً بين النقطة 1 والنقطة 2 تلقائياً",
-                "🔄 Automatically loop route back and forth between Point 1 and Point 2"
+                "🔄 تكرار مسار التوصيل ذهاباً وإياباً تلقائياً",
+                "🔄 Automatically repeat delivery path back and forth"
             )
             isChecked = isRouteSimLooping
             setPadding(0, 14, 0, 0)
@@ -3311,11 +3315,11 @@ class MainActivity : AppCompatActivity() {
         dialogLayout.addView(chkLoop)
 
         AlertDialog.Builder(this)
-            .setTitle(tr("🚗 إعدادات السرعة لمحاكي المسار (1 ➔ 2)", "🚗 Route Simulator Speed Settings (1 ➔ 2)"))
+            .setTitle(tr("🚗 إعدادات سرعة توصيل الطلب", "🚗 DELIVER ORDER Speed Settings"))
             .setView(scrollWrap)
             .setPositiveButton(
                 if (startImmediately) {
-                    tr("🚀 بدء محاكاة المسار الآن", "🚀 Start Route Simulation Now")
+                    tr("🚀 توصيل الطلب الآن", "🚀 DELIVER ORDER NOW")
                 } else {
                     tr("💾 حفظ إعدادات السرعة", "💾 Save Speed Settings")
                 }
@@ -3366,8 +3370,8 @@ class MainActivity : AppCompatActivity() {
         }
         val tv = TextView(this).apply {
             text = tr(
-                "تعمل الخرائط المدمجة ورسم الشوارع بين النقطة 1 والنقطة 2 تلقائياً بدون مفتاح.\nوإذا كان لديك مفتاح خاص بك (اختياري)، يمكنك إدخاله هنا:",
-                "Built-in street maps and Point 1 to Point 2 routing work automatically without a key.\nIf you have your own API key (optional), you can enter it here:"
+                "تعمل الخرائط المدمجة وتوجيه مسار توصيل الطلب تلقائياً بدون مفتاح.\nوإذا كان لديك مفتاح خاص بك (اختياري)، يمكنك إدخاله هنا:",
+                "Built-in street maps and order delivery routing work automatically without a key.\nIf you have your own API key (optional), you can enter it here:"
             )
             textSize = 12.5f
             setTextColor(Color.parseColor("#334155"))
@@ -3409,8 +3413,8 @@ class MainActivity : AppCompatActivity() {
         if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
             options.add(
                 tr(
-                    "🏪 مسار (1 ➔ 2) من موقعي الحالي إلى المطعم (${order.restaurant.ifEmpty { "المطعم" }})",
-                    "🏪 Route (1 ➔ 2) from Current Location to Restaurant (${order.restaurant.ifEmpty { "Pickup" }})"
+                    "🏪 التوجه إلى المطعم (${order.restaurant.ifEmpty { "المطعم" }})",
+                    "🏪 Go to Pickup (${order.restaurant.ifEmpty { "Pickup" }})"
                 )
             )
             actions.add {
@@ -3430,8 +3434,8 @@ class MainActivity : AppCompatActivity() {
             val fromLng = if (order.pickupLng != 0.0) order.pickupLng else curLng
             options.add(
                 tr(
-                    "📍 مسار (1 ➔ 2) من المطعم إلى موقع العميل",
-                    "📍 Route (1 ➔ 2) from Restaurant to Customer Drop-off"
+                    "📍 توصيل الطلب من المطعم إلى العميل",
+                    "📍 Deliver Order to Customer"
                 )
             )
             actions.add {
@@ -3449,15 +3453,15 @@ class MainActivity : AppCompatActivity() {
         if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
             options.add(
                 tr(
-                    "⚡ نقل موقعي فوراً إلى عند المطعم",
-                    "⚡ Teleport Immediately to Restaurant"
+                    "⚡ الوصول المباشر إلى المطعم",
+                    "⚡ Direct Arrival at Pickup"
                 )
             )
             actions.add {
                 applyImmediateSpoofLocation(order.pickupLat, order.pickupLng, panMap = true)
                 Toast.makeText(
                     this,
-                    tr("📍 تم نقل موقعك فوراً إلى المطعم", "📍 Teleported immediately to restaurant"),
+                    tr("📍 تم تحديث موقع الاستلام", "📍 Updated pickup location"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -3465,15 +3469,15 @@ class MainActivity : AppCompatActivity() {
         if (order.destLat != 0.0 && order.destLng != 0.0) {
             options.add(
                 tr(
-                    "⚡ نقل موقعي فوراً إلى موقع العميل",
-                    "⚡ Teleport Immediately to Customer Location"
+                    "⚡ الوصول المباشر إلى العميل",
+                    "⚡ Direct Arrival at Customer"
                 )
             )
             actions.add {
                 applyImmediateSpoofLocation(order.destLat, order.destLng, panMap = true)
                 Toast.makeText(
                     this,
-                    tr("📍 تم نقل موقعك فوراً إلى موقع العميل", "📍 Teleported immediately to customer location"),
+                    tr("📍 تم تحديث موقع التسليم", "📍 Updated drop-off location"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -3491,8 +3495,8 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(
                 tr(
-                    "🚗 محاكاة المسار للطلب #${order.reference.ifEmpty { order.id.toString() }}",
-                    "🚗 Route Simulator for Order #${order.reference.ifEmpty { order.id.toString() }}"
+                    "📦 توصيل الطلب #${order.reference.ifEmpty { order.id.toString() }}",
+                    "📦 DELIVER ORDER #${order.reference.ifEmpty { order.id.toString() }}"
                 )
             )
             .setItems(options.toTypedArray()) { _, which ->
@@ -3519,8 +3523,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(
                 this,
                 tr(
-                    "اضغط مباشرة على الخريطة لتحديد النقطة 1 والنقطة 2 أو انتظر وصول طلب",
-                    "Tap directly on the map to set Point 1 and Point 2, or wait for an order"
+                    "اضغط مباشرة على الخريطة لتحديد مسار التوصيل أو انتظر وصول طلب",
+                    "Tap directly on the map to set delivery path, or wait for an order"
                 ),
                 Toast.LENGTH_LONG
             ).show()
@@ -3532,7 +3536,7 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray()
 
         AlertDialog.Builder(this)
-            .setTitle(tr("📦 اختر طلباً لتحميل مساره (نقطة 1 ➔ نقطة 2)", "📦 Select Order to Load 2-Point Route"))
+            .setTitle(tr("📦 اختر طلباً للتوصيل", "📦 Select Order to Deliver"))
             .setItems(labels) { _, which ->
                 showOrderRouteQuickPickerDialog(ordersWithCoords[which])
             }
@@ -3618,14 +3622,14 @@ class MainActivity : AppCompatActivity() {
                         isRouteSimPaused = false
                         if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
                         if (::btnStartRouteSim.isInitialized) {
-                            btnStartRouteSim.text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
+                            btnStartRouteSim.text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
                         }
                         updateSimCoordinateInputs(lastPt.first, lastPt.second, finalBrg)
                         updateRouteSimBannerUI()
                         updateRouteMetricsUI()
                         Toast.makeText(
                             this@MainActivity,
-                            tr("🏁 وصلت إلى النقطة 2 (نهاية المسار المحدد)!", "🏁 Reached Point 2 (Destination)!"),
+                            tr("🏁 تم الوصول إلى وجهة تسليم الطلب!", "🏁 Reached Order Delivery Destination!"),
                             Toast.LENGTH_LONG
                         ).show()
                         return
@@ -3706,8 +3710,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(
                 this,
                 tr(
-                    "🛣️ جاري رسم مسار الشوارع من النقطة 1 إلى النقطة 2...",
-                    "🛣️ Building street route from Point 1 to Point 2..."
+                    "🛣️ جاري تجهيز مسار توصيل الطلب...",
+                    "🛣️ Preparing order delivery path..."
                 ),
                 Toast.LENGTH_SHORT
             ).show()
@@ -3740,13 +3744,13 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post(routeSimTickRunnable)
         val toastMsg = if (isVariableSpeedMode) {
             tr(
-                "🚗 بدأت محاكاة المسار (1 ➔ 2) بسرعات مختلفة (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} كم/س)",
-                "🚗 Started 2-Point route simulation with variable speeds (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} km/h)"
+                "🚗 بدأ توصيل الطلب بسرعات مختلفة (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} كم/س)",
+                "🚗 Started order delivery with variable speeds (${routeSimMinSpeedKmh.toInt()}-${routeSimMaxSpeedKmh.toInt()} km/h)"
             )
         } else {
             tr(
-                "🚗 بدأت محاكاة المسار (1 ➔ 2) بسرعة مخصصة ${routeSimSpeedKmh.toInt()} كم/س",
-                "🚗 Started 2-Point route simulation at custom speed ${routeSimSpeedKmh.toInt()} km/h"
+                "🚗 بدأ توصيل الطلب بسرعة مخصصة ${routeSimSpeedKmh.toInt()} كم/س",
+                "🚗 Started order delivery at custom speed ${routeSimSpeedKmh.toInt()} km/h"
             )
         }
         Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
@@ -3771,7 +3775,7 @@ class MainActivity : AppCompatActivity() {
             mainHandler.post(routeSimTickRunnable)
             Toast.makeText(
                 this,
-                tr("▶️ تم استئناف محاكاة المسار", "▶️ Route simulation resumed"),
+                tr("▶️ تم استئناف توصيل الطلب", "▶️ Order delivery resumed"),
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -3791,7 +3795,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
         if (::btnStartRouteSim.isInitialized) {
-            btnStartRouteSim.text = tr("🚗 بدء محاكاة المسار (1 ➔ 2)", "🚗 Start Route Sim (1 ➔ 2)")
+            btnStartRouteSim.text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
         }
         updateRouteSimBannerUI()
         updateRouteMetricsUI()
@@ -3811,13 +3815,13 @@ class MainActivity : AppCompatActivity() {
                 tvRouteSimStatus.text = if (isAr) {
                     String.format(
                         Locale.US,
-                        "🚗 يتحرك من نقطة 1 إلى 2 • السرعة الآن: %.0f كم/س • المتبقي: %.2f كم (%d:%02d د) • 📍 %s, %s",
+                        "🚗 جاري توصيل الطلب • السرعة الآن: %.0f كم/س • المتبقي: %.2f كم (%d:%02d د) • 📍 %s, %s",
                         activeSpd, remKm, remSec / 60, remSec % 60, lat, lng
                     )
                 } else {
                     String.format(
                         Locale.US,
-                        "🚗 Moving Point 1 ➔ 2 • Current Speed: %.0f km/h • Remaining: %.2f km (%d:%02d) • 📍 %s, %s",
+                        "🚗 Delivering Order • Current Speed: %.0f km/h • Remaining: %.2f km (%d:%02d) • 📍 %s, %s",
                         activeSpd, remKm, remSec / 60, remSec % 60, lat, lng
                     )
                 }
@@ -3826,24 +3830,24 @@ class MainActivity : AppCompatActivity() {
             }
             isRouteSimRunning && isRouteSimPaused -> {
                 tvRouteSimStatus.text = tr(
-                    "⏸️ محاكاة المسار متوقفة مؤقتاً عند 📍 $lat, $lng (اضغط ▶️ للاستئناف)",
-                    "⏸️ Route simulation paused at 📍 $lat, $lng (Tap ▶️ to resume)"
+                    "⏸️ توصيل الطلب متوقف مؤقتاً عند 📍 $lat, $lng (اضغط ▶️ للاستئناف)",
+                    "⏸️ Order delivery paused at 📍 $lat, $lng (Tap ▶️ to resume)"
                 )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#B45309"))
                 tvRouteSimStatus.background = roundedBg("#FFFBEB", 12f, "#FCD34D", 2)
             }
             SettingsStore.isFakeLocation(this) -> {
                 tvRouteSimStatus.text = tr(
-                    "🟢 الموقع المزيف نشط وثابت عند 📍 $lat, $lng",
-                    "🟢 Fake location active and pinned at 📍 $lat, $lng"
+                    "🟢 موقع التوصيل نشط وثابت عند 📍 $lat, $lng",
+                    "🟢 Delivery location active and pinned at 📍 $lat, $lng"
                 )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#059669"))
                 tvRouteSimStatus.background = roundedBg("#F8FAFC", 12f, "#E2E8F0", 2)
             }
             else -> {
                 tvRouteSimStatus.text = tr(
-                    "⚪ اضغط على الخريطة لتعيين النقطة 1 والنقطة 2 أو تثبيت موقعك",
-                    "⚪ Tap on the map to set Point 1 and Point 2 or pin your location"
+                    "⚪ اضغط على الخريطة لتحديد موقع توصيل الطلب",
+                    "⚪ Tap on the map to set order delivery location"
                 )
                 tvRouteSimStatus.setTextColor(Color.parseColor("#475569"))
                 tvRouteSimStatus.background = roundedBg("#F8FAFC", 12f, "#E2E8F0", 2)
@@ -3887,8 +3891,8 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             tvRouteMetricsBadge.text = tr(
-                "🛣️ المسار (1 ➔ 2): حدد النقطة 1 والنقطة 2 على الخريطة • الوضع الحالي: $speedSummary",
-                "🛣️ Route (1 ➔ 2): Set Point 1 & Point 2 on the map • Current Mode: $speedSummary"
+                "🛣️ مسار التوصيل: حدد موقع الاستلام والتسليم على الخريطة • الوضع الحالي: $speedSummary",
+                "🛣️ Delivery Path: Set Pickup & Drop-off on the map • Current Mode: $speedSummary"
             )
         }
     }
@@ -3918,11 +3922,11 @@ class MainActivity : AppCompatActivity() {
         val gMapsKey = SettingsStore.getGoogleMapsApiKey(this).replace("'", "")
         val mapLang = if (isAr) "ar" else "en"
         val mapDir = if (isAr) "rtl" else "ltr"
-        val hudDefault = tr("خريطة المسار • اضغط لتعيين النقطة 2 ورسم الطريق 🛣️", "Route Map • Tap to set Point 2 & build route 🛣️")
-        val hudPoint1 = tr("خريطة المسار • اضغط لتعيين النقطة 1 (الانطلاق) 1️⃣", "Route Map • Tap to set Point 1 (Start) 1️⃣")
-        val hudPoint2 = tr("خريطة المسار • اضغط لتعيين النقطة 2 (الوصول) 2️⃣", "Route Map • Tap to set Point 2 (Destination) 2️⃣")
+        val hudDefault = tr("خريطة التوصيل • اضغط لتحديد وجهة التسليم 🛣️", "Delivery Map • Tap to set drop-off destination 🛣️")
+        val hudPoint1 = tr("خريطة التوصيل • اضغط لتحديد موقع الاستلام 1️⃣", "Delivery Map • Tap to set pickup location 1️⃣")
+        val hudPoint2 = tr("خريطة التوصيل • اضغط لتحديد موقع التسليم 2️⃣", "Delivery Map • Tap to set drop-off location 2️⃣")
         val hudTeleport = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
-        val hudMovingPrefix = tr("🚗 يتحرك من النقطة 1 إلى 2 (", "🚗 Moving Point 1 ➔ 2 (")
+        val hudMovingPrefix = tr("🚗 جاري توصيل الطلب (", "🚗 Delivering Order (")
 
         val html = """
             <!DOCTYPE html>
@@ -4298,7 +4302,7 @@ class MainActivity : AppCompatActivity() {
                     setMapTapSelectionMode("point2")
                     Toast.makeText(
                         this@MainActivity,
-                        tr("1️⃣ تم تحديد النقطة 1 • اضغط الآن على النقطة 2 (الوصول)", "1️⃣ Point 1 set • Now tap Point 2 (Destination)"),
+                        tr("1️⃣ تم تحديد الاستلام • اضغط الآن على موقع التسليم", "1️⃣ Pickup set • Now tap Drop-off location"),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -4600,9 +4604,9 @@ class MainActivity : AppCompatActivity() {
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0
 
-        val activePolling = chkActivePolling.isChecked
-        val pollInterval = edtPollInterval.text.toString().toFloatOrNull() ?: 0.8f
-        val parallelReqs = edtParallelRequests.text.toString().toIntOrNull() ?: 3
+        val activePolling = true
+        val pollInterval = 0.0f
+        val parallelReqs = 3
 
         SettingsStore.setMasterRunning(this, master)
         SettingsStore.setSpoofAndroidId(this, spoofId)

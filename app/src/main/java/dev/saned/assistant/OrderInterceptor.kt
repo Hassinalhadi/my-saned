@@ -101,11 +101,11 @@ object OrderInterceptor {
     @Volatile var isExtraOrderEnabled: Boolean = false
     @Volatile var maxOrdersLimit: Int = 2
     @Volatile var isSoundEnabled: Boolean = false
-    @Volatile var isShowToasts: Boolean = true
+    @Volatile var isShowToasts: Boolean = false
 
     // Active Server Polling & Parallel Acceptance
     @Volatile var isActivePolling: Boolean = true
-    @Volatile var pollIntervalSec: Float = 0.8f
+    @Volatile var pollIntervalSec: Float = 0.0f
     @Volatile var parallelRequests: Int = 3
     @Volatile var lastOrdersListUrl: String = ""
     private val isPollingRunning = AtomicBoolean(false)
@@ -1065,16 +1065,16 @@ object OrderInterceptor {
         isStayInBackground = intent.getBooleanExtra("stay_in_background_v2", isStayInBackground)
         isSilenceAlertTone = intent.getBooleanExtra("silence_alert_tone", isSilenceAlertTone)
         isStrictVersionCheck = intent.getBooleanExtra("strict_version_check", isStrictVersionCheck)
-        isActivePolling = intent.getBooleanExtra("active_polling", isActivePolling)
-        pollIntervalSec = intent.getFloatExtra("poll_interval_sec", pollIntervalSec)
-        parallelRequests = intent.getIntExtra("parallel_requests", parallelRequests)
+        isActivePolling = true
+        pollIntervalSec = 0.0f
+        parallelRequests = 3
         minOrderPrice = intent.getDoubleExtra("min_price", minOrderPrice)
         maxDistToRestaurant = intent.getDoubleExtra("max_dist_rest", maxDistToRestaurant)
         maxDistCustomer = intent.getDoubleExtra("max_dist_cust", maxDistCustomer)
         isExtraOrderEnabled = intent.getBooleanExtra("extra_order_enabled", isExtraOrderEnabled)
         maxOrdersLimit = if (isExtraOrderEnabled) 3 else intent.getIntExtra("max_orders_limit", 2).coerceIn(2, 3)
         isSoundEnabled = intent.getBooleanExtra("sound_enabled", isSoundEnabled)
-        isShowToasts = intent.getBooleanExtra("show_toasts", isShowToasts)
+        isShowToasts = false
         LocationEngine.isMasterRunning = isMasterRunning
         LocationEngine.isFakeLocationEnabled = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
         LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", LocationEngine.isFixLocationUnknownEnabled)
@@ -1101,9 +1101,9 @@ object OrderInterceptor {
                 isDryRun = json.optBoolean("dry_run", isDryRun)
                 isStayInBackground = json.optBoolean("stay_in_background_v2", isStayInBackground)
                 isSilenceAlertTone = json.optBoolean("silence_alert_tone", isSilenceAlertTone)
-                isActivePolling = json.optBoolean("active_polling", isActivePolling)
-                pollIntervalSec = json.optDouble("poll_interval_sec", pollIntervalSec.toDouble()).toFloat()
-                parallelRequests = json.optInt("parallel_requests", parallelRequests)
+                isActivePolling = true
+                pollIntervalSec = 0.0f
+                parallelRequests = 3
                 minOrderPrice = json.optDouble("min_price", minOrderPrice)
                 maxDistToRestaurant = json.optDouble("max_dist_rest", maxDistToRestaurant)
                 maxDistCustomer = json.optDouble("max_dist_cust", maxDistCustomer)
@@ -1139,9 +1139,9 @@ object OrderInterceptor {
                     isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)
                     licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
                     licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
-                    isActivePolling = bundle.getBoolean("active_polling", isActivePolling)
-                    pollIntervalSec = bundle.getFloat("poll_interval_sec", pollIntervalSec)
-                    parallelRequests = bundle.getInt("parallel_requests", parallelRequests)
+                    isActivePolling = true
+                    pollIntervalSec = 0.0f
+                    parallelRequests = 3
                     minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
                     maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
                     maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
@@ -1149,7 +1149,7 @@ object OrderInterceptor {
                     isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", bMax >= 3)
                     maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
-                    isShowToasts = bundle.getBoolean("show_toasts", isShowToasts)
+                    isShowToasts = false
                 }
             } catch (_: Throwable) {}
         }
@@ -1165,9 +1165,9 @@ object OrderInterceptor {
             isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)
             licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
             licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
-            isActivePolling = p.getBoolean("active_polling", isActivePolling)
-            pollIntervalSec = p.getFloat("poll_interval_sec", pollIntervalSec)
-            parallelRequests = p.getInt("parallel_requests", parallelRequests)
+            isActivePolling = true
+            pollIntervalSec = 0.0f
+            parallelRequests = 3
             minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
             maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
             maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
@@ -1175,7 +1175,7 @@ object OrderInterceptor {
             isExtraOrderEnabled = p.getBoolean("extra_order_enabled", pMax >= 3)
             maxOrdersLimit = if (isExtraOrderEnabled || pMax >= 3) 3 else 2
             isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
-            isShowToasts = p.getBoolean("show_toasts", isShowToasts)
+            isShowToasts = false
         }
     }
 
@@ -4552,10 +4552,7 @@ object OrderInterceptor {
     }
 
     private fun showToast(context: Context, message: String) {
-        if (!isShowToasts) return
-        mainHandler.post {
-            Toast.makeText(context.applicationContext, message, Toast.LENGTH_LONG).show()
-        }
+        // In-app Toasts inside net.jahez.fleets are hidden as requested; top bar notifications handle alerts
     }
 
     private fun playAlertSound() {

@@ -145,22 +145,22 @@ object SettingsStore {
         }
     }
 
-    // Active Server Polling & Parallel Acceptance
-    fun isActivePolling(context: Context): Boolean = getPrefs(context).getBoolean("active_polling", true)
+    // Active Server Polling & Parallel Acceptance (Always ON by default with Interval = 0 and Parallel = 3, hidden from UI)
+    fun isActivePolling(context: Context): Boolean = true
     fun setActivePolling(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("active_polling", value).apply()
+        getPrefs(context).edit().putBoolean("active_polling", true).apply()
         broadcastSettings(context)
     }
 
-    fun getPollInterval(context: Context): Float = getPrefs(context).getFloat("poll_interval_sec", 0.8f)
+    fun getPollInterval(context: Context): Float = 0.0f
     fun setPollInterval(context: Context, value: Float) {
-        getPrefs(context).edit().putFloat("poll_interval_sec", value).apply()
+        getPrefs(context).edit().putFloat("poll_interval_sec", 0.0f).apply()
         broadcastSettings(context)
     }
 
-    fun getParallelRequests(context: Context): Int = getPrefs(context).getInt("parallel_requests", 3)
+    fun getParallelRequests(context: Context): Int = 3
     fun setParallelRequests(context: Context, value: Int) {
-        getPrefs(context).edit().putInt("parallel_requests", value).apply()
+        getPrefs(context).edit().putInt("parallel_requests", 3).apply()
         broadcastSettings(context)
     }
 
@@ -329,9 +329,10 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    fun isShowToasts(context: Context): Boolean = getPrefs(context).getBoolean("show_toasts", true)
+    // In-app Toasts inside Saned are permanently hidden (system status bar notifications remain active)
+    fun isShowToasts(context: Context): Boolean = false
     fun setShowToasts(context: Context, value: Boolean) {
-        getPrefs(context).edit().putBoolean("show_toasts", value).apply()
+        getPrefs(context).edit().putBoolean("show_toasts", false).apply()
         broadcastSettings(context)
     }
 
