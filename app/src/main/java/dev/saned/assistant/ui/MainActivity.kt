@@ -4788,6 +4788,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        io.github.libxposed.service.XposedProvider.ensureServiceBinderConnected(this)
         refreshOrdersLogUI()
         refreshDiagLogsUI()
         SettingsStore.broadcastSettings(this)

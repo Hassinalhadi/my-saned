@@ -1,9 +1,11 @@
 package io.github.libxposed.service
 
+import android.content.ComponentName
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
@@ -14,16 +16,26 @@ import dev.saned.assistant.NotificationHelper
 import dev.saned.assistant.OrderModel
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class XposedProvider : ContentProvider() {
 
     companion object {
         private const val DESCRIPTOR = "io.github.libxposed.service.IXposedService"
+        private const val PULL_DESCRIPTOR_LSPATCH = "org.lsposed.lspatch.IXposedServicePull"
+        private const val PULL_DESCRIPTOR_NPATCH = "top.nkbe.npatch.IXposedServicePull"
+        private const val NPATCH_REMOTE_URI = "content://top.nkbe.npatch.remote"
         private const val TRANSACTION_REQUEST_REMOTE_PREFS = 21
         private const val TRANSACTION_UPDATE_REMOTE_PREFS = 22
         private const val PREF_GROUP = "sanedhook_settings"
         private const val DIAG_PREF_NAME = "sanedhook_diag_logs"
         private const val MAX_DIAG_LINES = 300
+
+        private val pullExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "Saned-NPatch-Pull").apply { isDaemon = true }
+        }
+        private val isPullInProgress = AtomicBoolean(false)
 
         @Volatile
         var serviceBinder: IBinder? = null
@@ -35,6 +47,154 @@ class XposedProvider : ContentProvider() {
         private var lastDiagBroadcastRealtime: Long = 0L
         @Volatile
         private var lastSavedOrdersJson: String? = null
+
+        private fun attachServiceBinder(binder: IBinder, ctx: Context?) {
+            if (serviceBinder === binder) return
+            serviceBinder = binder
+            try {
+                binder.linkToDeath({
+                    if (serviceBinder === binder) {
+                        serviceBinder = null
+                    }
+                }, 0)
+            } catch (_: Throwable) {}
+            if (ctx != null) {
+                pushAllPrefsToBinder(ctx, binder)
+            }
+        }
+
+        /**
+         * Matches Lz21.b / Lz21.d / Lx21.run in SanedAssistant-98-7bac1ec.apk + NPatch v1.0.9 Remote Store:
+         * Connects to Non-Root NPatch (top.nkbe.npatch) or Vector / LSPatch Manager to pull/request IXposedService binder.
+         */
+        fun ensureServiceBinderConnected(context: Context) {
+            val current = serviceBinder
+            if (current != null && current.isBinderAlive) return
+            val appCtx = context.applicationContext ?: context
+            if (!isPullInProgress.compareAndSet(false, true)) return
+            pullExecutor.execute {
+                try {
+                    // 1. Try NPatch v1.0.7–v1.0.9 Remote Store ContentProvider (content://top.nkbe.npatch.remote)
+                    tryConnectNPatchRemoteProvider(appCtx)
+                    if (serviceBinder?.isBinderAlive == true) return@execute
+
+                    // 2. Try REQUEST_PUSH service binding (Lz21.d + Lx21.run) for NPatch / Vector / LSPatch
+                    for (attempt in 0 until 4) {
+                        requestPushFromNonRootManager(appCtx)
+                        if (serviceBinder?.isBinderAlive == true) break
+                        try { Thread.sleep(350L) } catch (_: Throwable) { break }
+                        tryConnectNPatchRemoteProvider(appCtx)
+                        if (serviceBinder?.isBinderAlive == true) break
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    isPullInProgress.set(false)
+                }
+            }
+        }
+
+        private fun tryConnectNPatchRemoteProvider(ctx: Context) {
+            val uri = Uri.parse(NPATCH_REMOTE_URI)
+            val pkg = ctx.packageName
+            val extras = Bundle().apply {
+                putString("packageName", pkg)
+                putString("modulePackage", pkg)
+                putString("package", pkg)
+            }
+            for (methodName in listOf("connect", "getService", "acquireService", "getBinder", "requestBinder")) {
+                try {
+                    val reply = ctx.contentResolver.call(uri, methodName, pkg, extras) ?: continue
+                    for (key in listOf("binder", "service", "client", "xposed_service")) {
+                        val b = reply.getBinder(key)
+                        if (b != null && b.isBinderAlive) {
+                            attachServiceBinder(b, ctx)
+                            return
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+
+        private fun requestPushFromNonRootManager(ctx: Context) {
+            val pm = ctx.packageManager ?: return
+            val candidateActions = listOf(
+                "org.lsposed.lspatch.action.REQUEST_PUSH",
+                "top.nkbe.npatch.action.REQUEST_PUSH"
+            )
+            val discoveredComponents = LinkedHashSet<ComponentName>()
+            for (action in candidateActions) {
+                try {
+                    val list = pm.queryIntentServices(Intent(action), 0)
+                    if (list != null) {
+                        for (ri in list) {
+                            val si = ri.serviceInfo ?: continue
+                            if (!si.packageName.isNullOrEmpty() && !si.name.isNullOrEmpty()) {
+                                discoveredComponents.add(ComponentName(si.packageName, si.name))
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {}
+                for (mgrPkg in listOf("top.nkbe.npatch", "org.lsposed.lspatch")) {
+                    try {
+                        val list = pm.queryIntentServices(Intent(action).setPackage(mgrPkg), 0)
+                        if (list != null) {
+                            for (ri in list) {
+                                val si = ri.serviceInfo ?: continue
+                                if (!si.packageName.isNullOrEmpty() && !si.name.isNullOrEmpty()) {
+                                    discoveredComponents.add(ComponentName(si.packageName, si.name))
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+
+            for (comp in discoveredComponents) {
+                if (serviceBinder?.isBinderAlive == true) break
+                try {
+                    val bindIntent = Intent("org.lsposed.lspatch.action.REQUEST_PUSH").apply {
+                        component = comp
+                        putExtra("packageName", ctx.packageName)
+                    }
+                    val conn = object : ServiceConnection {
+                        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                            val connectionRef = this
+                            pullExecutor.execute {
+                                try {
+                                    if (binder != null) {
+                                        for (desc in listOf(PULL_DESCRIPTOR_LSPATCH, PULL_DESCRIPTOR_NPATCH)) {
+                                            val data = Parcel.obtain()
+                                            val reply = Parcel.obtain()
+                                            try {
+                                                data.writeInterfaceToken(desc)
+                                                val ok = binder.transact(IBinder.FIRST_CALL_TRANSACTION, data, reply, 0)
+                                                if (ok) {
+                                                    reply.readException()
+                                                    break
+                                                }
+                                            } catch (_: Throwable) {
+                                            } finally {
+                                                reply.recycle()
+                                                data.recycle()
+                                            }
+                                        }
+                                    }
+                                } catch (_: Throwable) {
+                                } finally {
+                                    try { ctx.unbindService(connectionRef) } catch (_: Throwable) {}
+                                }
+                            }
+                        }
+
+                        override fun onServiceDisconnected(name: ComponentName?) {}
+                        override fun onNullBinding(name: ComponentName?) {
+                            try { ctx.unbindService(this) } catch (_: Throwable) {}
+                        }
+                    }
+                    ctx.bindService(bindIntent, conn, Context.BIND_AUTO_CREATE)
+                } catch (_: Throwable) {}
+            }
+        }
 
         @Synchronized
         fun appendDiagLog(ctx: Context, logText: String) {
@@ -88,7 +248,15 @@ class XposedProvider : ContentProvider() {
         }
 
         fun syncToLSPosedRemotePrefs(context: Context) {
-            val binder = serviceBinder ?: return
+            val binder = serviceBinder
+            if (binder == null || !binder.isBinderAlive) {
+                ensureServiceBinderConnected(context)
+                return
+            }
+            pushAllPrefsToBinder(context, binder)
+        }
+
+        private fun pushAllPrefsToBinder(context: Context, binder: IBinder) {
             try {
                 val prefs = context.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
                 val all = prefs.all
@@ -329,20 +497,17 @@ class XposedProvider : ContentProvider() {
         }
     }
 
-    override fun onCreate(): Boolean = true
+    override fun onCreate(): Boolean {
+        context?.let { ensureServiceBinderConnected(it) }
+        return true
+    }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val bundle = Bundle()
         if (method == "SendBinder") {
             val binder = extras?.getBinder("binder")
             if (binder != null) {
-                serviceBinder = binder
-                try {
-                    binder.linkToDeath({
-                        serviceBinder = null
-                    }, 0)
-                } catch (_: Throwable) {}
-                context?.let { syncToLSPosedRemotePrefs(it) }
+                attachServiceBinder(binder, context)
             }
             return bundle
         }
@@ -367,6 +532,20 @@ class XposedProvider : ContentProvider() {
         if (method == "getDiagLogs") {
             bundle.putString("diag_log_text", getDiagLogs(ctx))
             bundle.putBoolean("ok", true)
+            return bundle
+        }
+
+        if (method == "saveAuthToken") {
+            try {
+                val tok = extras?.getString("auth_token") ?: arg ?: ""
+                val host = extras?.getString("api_host") ?: ""
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val ed = prefs.edit()
+                if (tok.isNotEmpty()) ed.putString("cached_jahez_auth_token", tok)
+                if (host.isNotEmpty()) ed.putString("cached_jahez_api_host", host)
+                ed.apply()
+                bundle.putBoolean("ok", true)
+            } catch (_: Throwable) {}
             return bundle
         }
 

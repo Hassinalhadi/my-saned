@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -94,8 +95,38 @@ object LocationEngine {
         }
     }
 
+    fun applySettingsBundle(b: Bundle) {
+        isMasterRunning = b.getBoolean("master_running", b.getBoolean("enabled", isMasterRunning))
+        isFakeLocationEnabled = b.getBoolean("fake_location_enabled", isFakeLocationEnabled)
+        isFixLocationUnknownEnabled = b.getBoolean("fix_location_unknown", isFixLocationUnknownEnabled)
+        isTripSimulationActive = b.getBoolean("route_sim_active", isTripSimulationActive)
+        val spd = b.getFloat("route_sim_speed_kmh", simulatedSpeedKmh)
+        if (!spd.isNaN() && spd > 0f) simulatedSpeedKmh = spd.coerceIn(1.0f, 220.0f)
+        val brg = b.getFloat("route_sim_bearing", currentBearing)
+        if (!brg.isNaN()) currentBearing = brg
+        val lat = b.getString("fake_lat", null)?.toDoubleOrNull()
+        val lng = b.getString("fake_lng", null)?.toDoubleOrNull()
+        if (lat != null && !lat.isNaN() && lat != 0.0) {
+            if (currentLat != 0.0 && currentLng != 0.0 && (lat != currentLat || (lng != null && lng != currentLng))) {
+                val computedBrg = calculateBearing(currentLat, currentLng, lat, lng ?: currentLng)
+                if (computedBrg > 0f) currentBearing = computedBrg
+            }
+            currentLat = lat
+        }
+        if (lng != null && !lng.isNaN() && lng != 0.0) currentLng = lng
+    }
+
     fun syncLocationSettings() {
         syncFromPrefs()
+        try {
+            val ctx = DiagnosticLogger.resolveAnyContext()
+            if (ctx != null) {
+                val b = ctx.contentResolver.call(Uri.parse("content://dev.jing.sanedhook.XposedService"), "getSettings", null, null)
+                if (b != null && !b.isEmpty) {
+                    applySettingsBundle(b)
+                }
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_config.json")
             if (f.exists()) {

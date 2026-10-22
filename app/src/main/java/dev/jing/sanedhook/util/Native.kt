@@ -1,5 +1,8 @@
 package dev.jing.sanedhook.util
 
+import java.io.File
+import java.util.zip.ZipFile
+
 object Native {
     @JvmField val a: Native = this
     @Volatile var isLoaded: Boolean = true
@@ -42,6 +45,8 @@ object Native {
     private const val FALLBACK_ENCRYPTED_PREFS = "ENCRYPTED_SANED_PREFERENCES"
     private const val FALLBACK_TOKEN_KEY = "token"
     private const val FALLBACK_LANG_KEY = "language"
+    // Unrestricted Google Maps API Key from 0xc08a in libshnative.so for Non-Root NPatch/LSPatch re-signed APKs
+    private const val FALLBACK_MAPS_API_KEY = "AIzaSyDngGva2vOywyZGjSvoGQqnIr-IC3v4FVE"
 
     private val FALLBACK_INTENT_KEYS = arrayOf(
         "EXTRA_DISPATCH_REQUEST_ID", "EXTRA_DISPATCH_PICKUP_LATITUDE", "EXTRA_DISPATCH_PICKUP_LONGITUDE",
@@ -79,21 +84,21 @@ object Native {
         val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
         val cleanLang = lang.trim().ifEmpty { "en" }
         val (method, url) = when (kind) {
-  0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
-  1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
-  2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
-  3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
-  else -> return emptyArray()
+            0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
+            1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
+            2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
+            3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
+            else -> return emptyArray()
         }
         val list = mutableListOf(
-  method, url,
-  "Authorization", "Bearer $cleanTok",
-  "Accept-Language", cleanLang,
-  "User-Agent", "okhttp/5.1.0"
+            method, url,
+            "Authorization", "Bearer $cleanTok",
+            "Accept-Language", cleanLang,
+            "User-Agent", "okhttp/5.1.0"
         )
         if (driverCipher.isNotEmpty()) {
-  list.add("x-unique-Identifier")
-  list.add(driverCipher)
+            list.add("x-unique-Identifier")
+            list.add(driverCipher)
         }
         return list.toTypedArray()
     }
@@ -112,8 +117,34 @@ object Native {
     fun safeN(): Array<String> = FALLBACK_SECURITY_CLASSES
     fun safeO(s: String): String = ""
     fun safeP(): Array<String> = FALLBACK_VERSION_PROFILES
-    fun safeQ(): String = ""
-    fun safeR(path: String): Boolean = true
+    fun safeQ(): String = FALLBACK_MAPS_API_KEY
+
+    /**
+     * Returns true if the APK at [path] is an unpatched official APK,
+     * or false if it was patched/re-signed by NPatch, Vector, or LSPatch.
+     */
+    fun safeR(path: String): Boolean {
+        if (path.isBlank()) return true
+        return try {
+            val f = File(path)
+            if (!f.exists() || !f.canRead()) return true
+            ZipFile(f).use { zf ->
+                val isNonRootPatched =
+                    zf.getEntry("assets/npatch/metaloader.dex") != null ||
+                    zf.getEntry("assets/npatch/config.json") != null ||
+                    zf.getEntry("assets/npatch/origin.apk") != null ||
+                    zf.getEntry("assets/lspatch/metaloader.dex") != null ||
+                    zf.getEntry("assets/lspatch/config.json") != null ||
+                    zf.getEntry("assets/lspatch/origin.apk") != null ||
+                    zf.getEntry("lib/arm64-v8a/libnpatch.so") != null ||
+                    zf.getEntry("lib/x86_64/libnpatch.so") != null
+                !isNonRootPatched
+            }
+        } catch (_: Throwable) {
+            true
+        }
+    }
+
     fun safeS(versionCode: Long): Int = when (versionCode) {
         40093L -> 0
         40099L, 4099L, 40104L -> 1

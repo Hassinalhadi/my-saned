@@ -11,23 +11,50 @@
 
     <queries>
         <package android:name="net.jahez.fleets" />
+        <package android:name="top.nkbe.npatch" />
+        <package android:name="org.lsposed.lspatch" />
+        <package android:name="org.lsposed.manager" />
+        <provider android:authorities="top.nkbe.npatch.remote" />
+        <provider android:authorities="dev.jing.sanedhook.XposedService" />
+        <intent>
+            <action android:name="org.lsposed.lspatch.action.REQUEST_PUSH" />
+        </intent>
+        <intent>
+            <action android:name="top.nkbe.npatch.action.REQUEST_PUSH" />
+        </intent>
     </queries>
 
     <application
         android:allowBackup="true"
+        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+        android:extractNativeLibs="true"
         android:icon="@drawable/ic_launcher_original"
         android:label="Saned Assistant"
         android:roundIcon="@drawable/ic_launcher_original"
         android:supportsRtl="false"
         android:theme="@style/Theme.SanedAssistant">
 
-        <!-- Modern LibXposed Provider (Used by LSPosed for SendBinder & Settings IPC) -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Saned Assistant (Root LSPosed &amp; Non-Root NPatch)" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposedscope" />
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyDB6gdCIHSWCkgQwX1_GI_Kl9dov9ax0yg" />
+
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
             android:authorities="dev.jing.sanedhook.XposedService"
             android:exported="true" />
 
-        <!-- High-Speed Inter-Process Broadcast Receiver for Settings, Orders & Ping -->
         <receiver
             android:name=".SanedReceiver"
             android:exported="true">

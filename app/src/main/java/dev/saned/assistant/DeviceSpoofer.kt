@@ -2,6 +2,8 @@ package dev.saned.assistant
 
 import android.content.ContentResolver
 import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -20,32 +22,48 @@ object DeviceSpoofer {
         remotePrefs = prefs
         syncFromPrefs()
         try {
-  prefs.registerOnSharedPreferenceChangeListener { _, _ ->
-      syncFromPrefs()
-  }
+            prefs.registerOnSharedPreferenceChangeListener { _, _ ->
+                syncFromPrefs()
+            }
         } catch (_: Throwable) {}
     }
 
     private fun syncFromPrefs() {
         remotePrefs?.let { p ->
-  isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
-  isSpoofAndroidId = p.getBoolean("spoof_android_id", isSpoofAndroidId)
-  val sId = p.getString("spoofed_android_id", "")?.trim() ?: ""
-  if (sId.isNotEmpty()) spoofedAndroidId = sId
+            isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
+            isSpoofAndroidId = p.getBoolean("spoof_android_id", isSpoofAndroidId)
+            val sId = p.getString("spoofed_android_id", "")?.trim() ?: ""
+            if (sId.isNotEmpty()) spoofedAndroidId = sId
         }
+    }
+
+    fun applySettingsBundle(b: Bundle) {
+        isMasterRunning = b.getBoolean("master_running", b.getBoolean("enabled", isMasterRunning))
+        isSpoofAndroidId = b.getBoolean("spoof_android_id", isSpoofAndroidId)
+        val sId = b.getString("spoofed_android_id", "")?.trim() ?: ""
+        if (sId.isNotEmpty()) spoofedAndroidId = sId
     }
 
     fun syncSettings(resolver: ContentResolver? = null) {
         syncFromPrefs()
         try {
-  val f = File("/data/local/tmp/saned_config.json")
-  if (f.exists()) {
-      val json = JSONObject(f.readText())
-      isMasterRunning = json.optBoolean("master_running", json.optBoolean("enabled", isMasterRunning))
-      isSpoofAndroidId = json.optBoolean("spoof_android_id", isSpoofAndroidId)
-      val sId = json.optString("spoofed_android_id", "").trim()
-      if (sId.isNotEmpty()) spoofedAndroidId = sId
-  }
+            val activeResolver = resolver ?: DiagnosticLogger.resolveAnyContext()?.contentResolver
+            if (activeResolver != null) {
+                val b = activeResolver.call(Uri.parse("content://dev.jing.sanedhook.XposedService"), "getSettings", null, null)
+                if (b != null && !b.isEmpty) {
+                    applySettingsBundle(b)
+                }
+            }
+        } catch (_: Throwable) {}
+        try {
+            val f = File("/data/local/tmp/saned_config.json")
+            if (f.exists()) {
+                val json = JSONObject(f.readText())
+                isMasterRunning = json.optBoolean("master_running", json.optBoolean("enabled", isMasterRunning))
+                isSpoofAndroidId = json.optBoolean("spoof_android_id", isSpoofAndroidId)
+                val sId = json.optString("spoofed_android_id", "").trim()
+                if (sId.isNotEmpty()) spoofedAndroidId = sId
+            }
         } catch (_: Throwable) {}
     }
 
@@ -60,20 +78,20 @@ object DeviceSpoofer {
      */
     fun hook(module: XposedModule, classLoader: ClassLoader) {
         try {
-  val mGetString = Settings.Secure::class.java.getDeclaredMethod(
-      "getString",
-      ContentResolver::class.java,
-      String::class.java
-  )
-  module.hook(mGetString).intercept(object : XposedInterface.Hooker {
-      override fun intercept(chain: XposedInterface.Chain): Any? {
-          val key = chain.args.getOrNull(1) as? String
-          if ("android_id" == key && isMasterRunning && isSpoofAndroidId && spoofedAndroidId.isNotEmpty()) {
-              return spoofedAndroidId
-          }
-          return chain.proceed()
-      }
-  })
+            val mGetString = Settings.Secure::class.java.getDeclaredMethod(
+                "getString",
+                ContentResolver::class.java,
+                String::class.java
+            )
+            module.hook(mGetString).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val key = chain.args.getOrNull(1) as? String
+                    if ("android_id" == key && isMasterRunning && isSpoofAndroidId && spoofedAndroidId.isNotEmpty()) {
+                        return spoofedAndroidId
+                    }
+                    return chain.proceed()
+                }
+            })
         } catch (_: Throwable) {}
     }
 }

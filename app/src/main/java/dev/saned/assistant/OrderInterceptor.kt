@@ -1150,6 +1150,21 @@ object OrderInterceptor {
                     maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
                     isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
                     isShowToasts = false
+                    LocationEngine.applySettingsBundle(bundle)
+                    DeviceSpoofer.applySettingsBundle(bundle)
+                    if (cachedAuthToken.isEmpty()) {
+                        val savedTok = bundle.getString("cached_jahez_auth_token", "")?.trim() ?: ""
+                        if (savedTok.isNotEmpty()) {
+                            cachedAuthToken = savedTok
+                            cachedHeaders["Authorization"] = savedTok
+                        }
+                    }
+                    if (cachedApiHost.isEmpty()) {
+                        val savedHost = bundle.getString("cached_jahez_api_host", "")?.trim() ?: ""
+                        if (savedHost.isNotEmpty() && isValidJahezHost(savedHost)) {
+                            cachedApiHost = savedHost
+                        }
+                    }
                 }
             } catch (_: Throwable) {}
         }
@@ -1180,16 +1195,58 @@ object OrderInterceptor {
     }
 
     fun persistToken(token: String) {
-        if (token.isEmpty()) return
+        val clean = token.trim()
+        if (clean.isEmpty()) return
+        try {
+            val ctx = resolveApplicationContext() ?: appContext
+            if (ctx != null) {
+                File(ctx.filesDir, "saned_auth_token.txt").writeText(clean)
+                val extras = android.os.Bundle().apply { putString("auth_token", clean) }
+                ctx.contentResolver.call(
+                    android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                    "saveAuthToken",
+                    clean,
+                    extras
+                )
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
-            f.writeText(token.trim())
+            f.writeText(clean)
             f.setReadable(true, false)
             f.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 
     fun readPersistedToken(): String {
+        try {
+            val ctx = resolveApplicationContext() ?: appContext
+            if (ctx != null) {
+                val localFile = File(ctx.filesDir, "saned_auth_token.txt")
+                if (localFile.exists()) {
+                    val t = localFile.readText().trim()
+                    if (t.isNotEmpty()) {
+                        cachedAuthToken = t
+                        cachedHeaders["Authorization"] = t
+                        extractHostFromJwt(t)
+                        return t
+                    }
+                }
+                val b = ctx.contentResolver.call(
+                    android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                    "getSettings",
+                    null,
+                    null
+                )
+                val pTok = b?.getString("cached_jahez_auth_token", "")?.trim() ?: ""
+                if (pTok.isNotEmpty()) {
+                    cachedAuthToken = pTok
+                    cachedHeaders["Authorization"] = pTok
+                    extractHostFromJwt(pTok)
+                    return pTok
+                }
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_auth_token.txt")
             if (f.exists()) {
@@ -1209,23 +1266,50 @@ object OrderInterceptor {
         return try {
             val uri = java.net.URI(host)
             val h = uri.host?.lowercase() ?: ""
-            h == "api.jahez.net" || h.endsWith(".jahez.net")
+            h == "api.jahez.net" || h.endsWith(".jahez.net") || h == "gateway.saned.io" || h.endsWith(".saned.io")
         } catch (_: Throwable) {
             false
         }
     }
 
     fun persistHost(host: String) {
-        if (!isValidJahezHost(host)) return
+        val clean = host.trim()
+        if (!isValidJahezHost(clean)) return
+        try {
+            val ctx = resolveApplicationContext() ?: appContext
+            if (ctx != null) {
+                File(ctx.filesDir, "saned_api_host.txt").writeText(clean)
+                val extras = android.os.Bundle().apply { putString("api_host", clean) }
+                ctx.contentResolver.call(
+                    android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                    "saveAuthToken",
+                    null,
+                    extras
+                )
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_api_host.txt")
-            f.writeText(host.trim())
+            f.writeText(clean)
             f.setReadable(true, false)
             f.setWritable(true, false)
         } catch (_: Throwable) {}
     }
 
     fun readPersistedHost(): String {
+        try {
+            val ctx = resolveApplicationContext() ?: appContext
+            if (ctx != null) {
+                val localFile = File(ctx.filesDir, "saned_api_host.txt")
+                if (localFile.exists()) {
+                    val h = localFile.readText().trim()
+                    if (isValidJahezHost(h)) {
+                        cachedApiHost = h
+                        return h
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
         try {
             val f = File("/data/local/tmp/saned_api_host.txt")
             if (f.exists()) {
@@ -1301,7 +1385,13 @@ object OrderInterceptor {
 
     fun clearPersistedToken() {
         try {
-  File("/data/local/tmp/saned_auth_token.txt").delete()
+            val ctx = resolveApplicationContext() ?: appContext
+            if (ctx != null) {
+                File(ctx.filesDir, "saned_auth_token.txt").delete()
+            }
+        } catch (_: Throwable) {}
+        try {
+            File("/data/local/tmp/saned_auth_token.txt").delete()
         } catch (_: Throwable) {}
         cachedAuthToken = ""
         cachedHeaders.remove("Authorization")
