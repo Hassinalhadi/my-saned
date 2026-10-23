@@ -137,7 +137,8 @@ class MainActivity : AppCompatActivity() {
     private var isRouteSimPaused: Boolean = false
     private var isRouteSimLooping: Boolean = false
     private var isRouteSimForward: Boolean = true
-    private var mapTapMode: String = "point2" // "teleport", "point1", "point2"
+    private var mapTapMode: String = "teleport" // "teleport", "point1", "point2"
+    private var isTwoPointsEnabledByUser: Boolean = false
     private var point1Lat: Double = 24.803508
     private var point1Lng: Double = 46.604578
     private var point2Lat: Double = 24.812500
@@ -218,7 +219,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val appTitle = TextView(this).apply {
-            text = tr("مساعد ساند", "Saned Assistant")
+            text = "J-Driver"
             textSize = 21f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#1E1B2E"))
@@ -232,6 +233,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(20, 10, 20, 10)
             setOnClickListener { switchTab(2) }
         }
+        btnTopLogs.visibility = View.GONE
         topBar.addView(btnTopLogs)
 
         val btnTopSim = TextView(this).apply {
@@ -240,6 +242,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(20, 10, 20, 10)
             setOnClickListener { sendSimulateOrder() }
         }
+        btnTopSim.visibility = View.GONE
         topBar.addView(btnTopSim)
 
         val btnClearTop = TextView(this).apply {
@@ -257,6 +260,7 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+        btnClearTop.visibility = View.GONE
         topBar.addView(btnClearTop)
 
         val btnRefreshTop = TextView(this).apply {
@@ -274,6 +278,7 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+        btnRefreshTop.visibility = View.GONE
         topBar.addView(btnRefreshTop)
 
         rootContainer.addView(topBar)
@@ -298,30 +303,31 @@ class MainActivity : AppCompatActivity() {
         contentFrame.addView(tabLogsView)
         rootContainer.addView(contentFrame)
 
-        // ================= BOTTOM NAVIGATION BAR =================
+        // ================= BOTTOM NAVIGATION BAR (LARGE ONE-HANDED THUMB TARGETS) =================
         val bottomNav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setBackgroundColor(Color.WHITE)
-            setPadding(16, 16, 16, 20)
-            elevation = 16f
+            setPadding(20, 18, 20, 26)
+            elevation = 20f
         }
 
         navOrdersBtn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setPadding(0, 6, 0, 6)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab(0) }
         }
         navOrdersIconBg = TextView(this).apply {
             text = "🏠"
-            textSize = 16f
+            textSize = 20f
             gravity = Gravity.CENTER
-            setPadding(42, 10, 42, 10)
+            setPadding(52, 14, 52, 14)
         }
         navOrdersLabel = TextView(this).apply {
             text = tr("الطلبات", "Orders")
-            textSize = 12.5f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
         }
@@ -331,18 +337,19 @@ class MainActivity : AppCompatActivity() {
         navSettingsBtn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setPadding(0, 6, 0, 6)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab(1) }
         }
         navSettingsIconBg = TextView(this).apply {
             text = "⚙️"
-            textSize = 16f
+            textSize = 20f
             gravity = Gravity.CENTER
-            setPadding(42, 10, 42, 10)
+            setPadding(52, 14, 52, 14)
         }
         navSettingsLabel = TextView(this).apply {
             text = tr("الإعدادات", "Settings")
-            textSize = 12.5f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
         }
@@ -373,18 +380,19 @@ class MainActivity : AppCompatActivity() {
         navMapBtn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setPadding(0, 6, 0, 6)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab(3) }
         }
         navMapIconBg = TextView(this).apply {
             text = "🗺️"
-            textSize = 16f
+            textSize = 20f
             gravity = Gravity.CENTER
-            setPadding(36, 10, 36, 10)
+            setPadding(52, 14, 52, 14)
         }
         navMapLabel = TextView(this).apply {
             text = tr("الخريطة", "Map")
-            textSize = 12f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 6, 0, 0)
         }
@@ -394,6 +402,7 @@ class MainActivity : AppCompatActivity() {
         bottomNav.addView(navOrdersBtn)
         bottomNav.addView(navMapBtn)
         bottomNav.addView(navSettingsBtn)
+        navLogsBtn.visibility = View.GONE
         bottomNav.addView(navLogsBtn)
         rootContainer.addView(bottomNav)
 
@@ -422,7 +431,7 @@ class MainActivity : AppCompatActivity() {
         currentTab = tabIndex
         tabOrdersView.visibility = if (tabIndex == 0) View.VISIBLE else View.GONE
         tabSettingsView.visibility = if (tabIndex == 1) View.VISIBLE else View.GONE
-        tabLogsView.visibility = if (tabIndex == 2) View.VISIBLE else View.GONE
+        tabLogsView.visibility = View.GONE
         tabMapView.visibility = if (tabIndex == 3) View.VISIBLE else View.GONE
 
         navOrdersIconBg.background = if (tabIndex == 0) roundedBg("#EDE9FE", 20f) else null
@@ -754,13 +763,24 @@ class MainActivity : AppCompatActivity() {
         val statusStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = roundedBg("#FFFFFF", 14f, "#E2E8F0", 2)
-            setPadding(24, 18, 24, 18)
+            background = roundedBg("#FFFFFF", 16f, "#CBD5E1", 2)
+            setPadding(28, 24, 28, 24)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(0, 0, 0, 24)
+            }
+            setOnClickListener {
+                val nextRun = !SettingsStore.isMasterRunning(this@MainActivity)
+                SettingsStore.setMasterRunning(this@MainActivity, nextRun)
+                if (::swMaster.isInitialized) swMaster.isChecked = nextRun
+                refreshOrdersLogUI()
+                Toast.makeText(
+                    this@MainActivity,
+                    if (nextRun) tr("🟢 تم تشغيل J-Driver", "🟢 J-Driver Enabled") else tr("🔴 تم إيقاف J-Driver مؤقتاً", "🔴 J-Driver Paused"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
@@ -779,7 +799,7 @@ class MainActivity : AppCompatActivity() {
                     "🔴 Master Switch OFF (Orders are still logged below)"
                 )
             }
-            textSize = 12f
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(if (isRun) Color.parseColor("#059669") else Color.parseColor("#D97706"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -863,25 +883,25 @@ class MainActivity : AppCompatActivity() {
         }
 
         mainLayout.addView(createLanguageCard())
-        mainLayout.addView(createConnectionPingCard())
-        mainLayout.addView(createDiagnosticsCard())
+        mainLayout.addView(createConnectionPingCard().apply { visibility = View.GONE })
+        mainLayout.addView(createDiagnosticsCard().apply { visibility = View.GONE })
         mainLayout.addView(createMasterSwitchCard())
         mainLayout.addView(createFiltersCard())
         // Server Polling card is kept initialized in memory (locked to ON, Interval=0, Parallel=3) but hidden from Settings UI
         val hiddenPollingCard = createPollingCard().apply { visibility = View.GONE }
         mainLayout.addView(hiddenPollingCard)
-        mainLayout.addView(createAndroidIdCard())
+        mainLayout.addView(createAndroidIdCard().apply { visibility = View.GONE })
         // Location Shortcut card is kept in memory with camouflaged title but hidden from Settings UI
         val hiddenLocShortcutCard = createLocationShortcutCard().apply { visibility = View.GONE }
         mainLayout.addView(hiddenLocShortcutCard)
 
         val btnSave = Button(this).apply {
             text = tr("💾 حفظ وتطبيق جميع الإعدادات", "💾 Save & Apply All Settings")
-            textSize = 15f
+            textSize = 16.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#059669"))
-            setPadding(24, 28, 24, 28)
+            setPadding(32, 36, 32, 36)
             setOnClickListener { saveAllSettings() }
         }
         mainLayout.addView(btnSave)
@@ -925,7 +945,8 @@ class MainActivity : AppCompatActivity() {
 
         val btnArabic = Button(this).apply {
             text = if (isAr) "✅ العربية" else "العربية"
-            textSize = 13.5f
+            textSize = 15.5f
+            setPadding(24, 28, 24, 28)
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor(if (isAr) "#4F46E5" else "#E2E8F0"))
             setTextColor(if (isAr) Color.WHITE else Color.parseColor("#1E293B"))
@@ -940,7 +961,8 @@ class MainActivity : AppCompatActivity() {
 
         val btnEnglish = Button(this).apply {
             text = if (!isAr) "✅ English" else "English"
-            textSize = 13.5f
+            textSize = 15.5f
+            setPadding(24, 28, 24, 28)
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor(if (!isAr) "#4F46E5" else "#E2E8F0"))
             setTextColor(if (!isAr) Color.WHITE else Color.parseColor("#1E293B"))
@@ -1340,12 +1362,12 @@ class MainActivity : AppCompatActivity() {
         pickupBox.addView(pickupTextCol)
 
         val pickupNavBtn = TextView(this).apply {
-            text = tr("اتجاهات ↗", "Navigate ↗")
-            textSize = 11.5f
+            text = tr("📍 اتجاهات ↗", "📍 Navigate ↗")
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#334155"))
-            background = roundedBg("#E2E8F0", 12f)
-            setPadding(18, 10, 18, 10)
+            setTextColor(Color.WHITE)
+            background = roundedBg("#059669", 14f)
+            setPadding(26, 18, 26, 18)
         }
         pickupBox.addView(pickupNavBtn)
         inner.addView(pickupBox)
@@ -1380,7 +1402,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             background = roundedBg("#5B3FD3", 24f)
             setTextColor(Color.WHITE)
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 20, 18, 20)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1457,12 +1479,12 @@ class MainActivity : AppCompatActivity() {
         dropoffBox.addView(dropoffTextCol)
 
         val dropoffNavBtn = TextView(this).apply {
-            text = tr("اتجاهات ↗", "Navigate ↗")
-            textSize = 11.5f
+            text = tr("📍 اتجاهات ↗", "📍 Navigate ↗")
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            background = roundedBg("#5B3FD3", 12f)
-            setPadding(18, 10, 18, 10)
+            background = roundedBg("#4F46E5", 14f)
+            setPadding(26, 18, 26, 18)
         }
         dropoffBox.addView(dropoffNavBtn)
         inner.addView(dropoffBox)
@@ -1603,13 +1625,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             val btnCall = TextView(this).apply {
-                text = tr("📞   اتصال", "📞   Call")
-                textSize = 14f
+                text = tr("📞   اتصال بالعميل", "📞   Call Customer")
+                textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
-                setTextColor(Color.parseColor("#1E1B2E"))
-                background = roundedBg("#EDE9FE", 20f)
-                setPadding(24, 24, 24, 24)
+                setTextColor(Color.WHITE)
+                background = roundedBg("#059669", 18f)
+                setPadding(28, 30, 28, 30)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                     setMargins(0, 0, 12, 0)
                 }
@@ -1625,12 +1647,12 @@ class MainActivity : AppCompatActivity() {
 
             val btnWhatsApp = TextView(this).apply {
                 text = tr("💬   واتساب", "💬   WhatsApp")
-                textSize = 14f
+                textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
-                setTextColor(Color.parseColor("#1E1B2E"))
-                background = roundedBg("#EDE9FE", 20f)
-                setPadding(24, 24, 24, 24)
+                setTextColor(Color.WHITE)
+                background = roundedBg("#16A34A", 18f)
+                setPadding(28, 30, 28, 30)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                     setMargins(12, 0, 0, 0)
                 }
@@ -1651,13 +1673,13 @@ class MainActivity : AppCompatActivity() {
         // 6. Quick 2-Point Route Simulator Button for this Order
         if ((order.pickupLat != 0.0 && order.pickupLng != 0.0) || (order.destLat != 0.0 && order.destLng != 0.0)) {
             val btnSimOrderRoute = TextView(this).apply {
-                text = tr("توصيل الطلب", "DELIVER ORDER")
-                textSize = 13f
+                text = tr("🚗   توصيل الطلب (DELIVER ORDER)", "🚗   DELIVER ORDER")
+                textSize = 15.5f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
                 background = roundedBg("#2563EB", 18f)
-                setPadding(24, 20, 24, 20)
+                setPadding(28, 30, 28, 30)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -2141,9 +2163,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         swMaster = Switch(this).apply {
-            text = tr("تفعيل جميع ميزات المساعد (تشغيل / إيقاف شامل)", "Enable All Assistant Functions (Master ON / OFF)")
-            textSize = 14f
+            text = tr("تفعيل جميع ميزات J-Driver (تشغيل / إيقاف شامل)", "Enable All J-Driver Functions (Master ON / OFF)")
+            textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 22, 12, 22)
             isChecked = SettingsStore.isMasterRunning(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 updateMasterStatusUI(isChecked)
@@ -2338,6 +2361,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(18, 10, 18, 10)
             setOnClickListener { showGoogleMapsApiKeyDialog() }
         }
+        btnApiKey.visibility = View.GONE
         headerRow.addView(btnApiKey)
         layout.addView(headerRow)
 
@@ -2371,9 +2395,11 @@ class MainActivity : AppCompatActivity() {
 
         // Toggles Row (Pure Arabic or Pure English — NO mixed text!)
         chkFakeLoc = CheckBox(this).apply {
-            text = tr("تفعيل وضع توصيل الطلب المباشر", "Enable Direct Order Delivery")
+            text = tr("تفعيل وضع توصيل الطلب المباشر (DELIVER ORDER)", "Enable Direct Order Delivery (DELIVER ORDER)")
             isChecked = SettingsStore.isFakeLocation(this@MainActivity)
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 18, 12, 18)
             setTextColor(Color.parseColor("#0F172A"))
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setFakeLocation(this@MainActivity, isChecked)
@@ -2387,10 +2413,8 @@ class MainActivity : AppCompatActivity() {
 
         chkFixLoc = CheckBox(this).apply {
             text = tr("تحسين دقة إشارة الموقع", "Enhance Location Signal")
-            isChecked = SettingsStore.isFixLocation(this@MainActivity)
-            setOnCheckedChangeListener { _, isChecked ->
-                SettingsStore.setFixLocation(this@MainActivity, isChecked)
-            }
+            isChecked = true
+            visibility = View.GONE
         }
         layout.addView(chkFixLoc)
 
@@ -2435,29 +2459,32 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 4, 0, 8)
         }
         btnModeTeleport = Button(this).apply {
-            text = tr("📍 الموقع الحالي", "📍 Current Pin")
-            textSize = 11f
+            text = tr("📍 تثبيت موقع", "📍 Pin Location")
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply {
-                setMargins(0, 0, 4, 0)
+            setPadding(14, 26, 14, 26)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 6, 0)
             }
             setOnClickListener { setMapTapSelectionMode("teleport") }
         }
         btnModePoint1 = Button(this).apply {
             text = tr("1️⃣ الاستلام (1)", "1️⃣ Pickup (1)")
-            textSize = 11f
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
-                setMargins(4, 0, 4, 0)
+            setPadding(14, 26, 14, 26)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(6, 0, 6, 0)
             }
             setOnClickListener { setMapTapSelectionMode("point1") }
         }
         btnModePoint2 = Button(this).apply {
             text = tr("2️⃣ التسليم (2)", "2️⃣ Drop-off (2)")
-            textSize = 11f
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.05f).apply {
-                setMargins(4, 0, 0, 0)
+            setPadding(14, 26, 14, 26)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(6, 0, 0, 0)
             }
             setOnClickListener { setMapTapSelectionMode("point2") }
         }
@@ -2499,7 +2526,8 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = roundedBg("#059669", 10f)
-            setPadding(14, 12, 14, 12)
+            textSize = 12.5f
+            setPadding(18, 22, 18, 22)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.15f).apply {
                 setMargins(0, 0, 6, 0)
             }
@@ -2512,7 +2540,8 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = roundedBg("#0284C7", 10f)
-            setPadding(14, 12, 14, 12)
+            textSize = 12.5f
+            setPadding(18, 22, 18, 22)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.95f).apply {
                 setMargins(3, 0, 3, 0)
             }
@@ -2525,14 +2554,17 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = roundedBg("#2563EB", 10f)
-            setPadding(14, 12, 14, 12)
+            textSize = 12.5f
+            setPadding(18, 22, 18, 22)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
                 setMargins(6, 0, 0, 0)
             }
             setOnClickListener {
+                isTwoPointsEnabledByUser = true
+                updateTwoPointSummaryUI()
                 if (::mapWebView.isInitialized) {
                     mapWebView.evaluateJavascript(
-                        "if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);",
+                        "if(window.setTwoPointsVisible) window.setTwoPointsVisible(true); if(window.buildStreetRoute) window.buildStreetRoute($point1Lat, $point1Lng, $point2Lat, $point2Lng, true);",
                         null
                     )
                 }
@@ -2557,7 +2589,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#1E293B"))
             background = roundedBg("#E2E8F0", 10f)
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 20, 18, 20)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(0, 0, 6, 0)
             }
@@ -2572,7 +2604,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#1E293B"))
             background = roundedBg("#E2E8F0", 10f)
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 20, 18, 20)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(3, 0, 3, 0)
             }
@@ -2587,7 +2619,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#1E293B"))
             background = roundedBg("#E2E8F0", 10f)
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 20, 18, 20)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.85f).apply {
                 setMargins(3, 0, 6, 0)
             }
@@ -2602,7 +2634,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = roundedBg("#7C3AED", 10f)
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 20, 18, 20)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.95f)
             setOnClickListener { showSelectOrderForRouteDialog() }
         }
@@ -2676,8 +2708,9 @@ class MainActivity : AppCompatActivity() {
 
         btnStartRouteSim = Button(this).apply {
             text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
-            textSize = 12f
+            textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(22, 28, 22, 28)
             setBackgroundColor(Color.parseColor("#059669"))
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.55f).apply {
@@ -2691,8 +2724,9 @@ class MainActivity : AppCompatActivity() {
 
         val btnSpeedDialog = Button(this).apply {
             text = tr("⚡ السرعات", "⚡ Speeds")
-            textSize = 11.5f
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(18, 28, 18, 28)
             setBackgroundColor(Color.parseColor("#2563EB"))
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.85f).apply {
@@ -2706,8 +2740,9 @@ class MainActivity : AppCompatActivity() {
 
         btnPauseRouteSim = Button(this).apply {
             text = "⏸️"
-            textSize = 12f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(18, 28, 18, 28)
             setBackgroundColor(Color.parseColor("#D97706"))
             setTextColor(Color.WHITE)
             visibility = View.GONE
@@ -2722,8 +2757,9 @@ class MainActivity : AppCompatActivity() {
 
         btnStopRouteSim = Button(this).apply {
             text = tr("⏹️ إيقاف", "⏹️ Stop")
-            textSize = 11.5f
+            textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(18, 28, 18, 28)
             setBackgroundColor(Color.parseColor("#DC2626"))
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.75f).apply {
@@ -2731,7 +2767,8 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 stopRouteSimulation()
-                mapWebView.evaluateJavascript("if(window.clearSimulatedRoute) window.clearSimulatedRoute();", null)
+                setMapTapSelectionMode("teleport")
+                mapWebView.evaluateJavascript("if(window.clearSimulatedRoute) window.clearSimulatedRoute(); if(window.setTwoPointsVisible) window.setTwoPointsVisible(false);", null)
                 Toast.makeText(
                     this@MainActivity,
                     tr("⏹️ تم إيقاف توصيل الطلب وتثبيت الموقع الحالي", "⏹️ Order delivery stopped and current location pinned"),
@@ -2792,11 +2829,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         coordsRow.addView(btnApplyCoords)
+        coordsRow.visibility = View.GONE
         layout.addView(coordsRow)
 
+        isTwoPointsEnabledByUser = false
         updateTwoPointSummaryUI()
         updateRouteMetricsUI()
-        setMapTapSelectionMode("point2")
+        setMapTapSelectionMode("teleport")
         setupGoogleMapWebView()
 
         card.addView(layout)
@@ -2805,6 +2844,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateTwoPointSummaryUI() {
         if (!::tvTwoPointSummary.isInitialized) return
+        if (!isTwoPointsEnabledByUser) {
+            tvTwoPointSummary.text = tr(
+                "⚪ النقطة 1 والنقطة 2 غير مفعلة حالياً — اضغط على (1️⃣ الاستلام 1) أو (2️⃣ التسليم 2) لتفعيلهما",
+                "⚪ Point 1 & Point 2 are currently OFF — tap (1️⃣ Pickup 1) or (2️⃣ Drop-off 2) to enable them"
+            )
+            return
+        }
         val straightDistKm = computeDistanceMeters(point1Lat, point1Lng, point2Lat, point2Lng) / 1000.0
         tvTwoPointSummary.text = if (isAr) {
             String.format(
@@ -2823,6 +2869,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun setMapTapSelectionMode(mode: String) {
         mapTapMode = mode
+        if (mode == "point1" || mode == "point2") {
+            isTwoPointsEnabledByUser = true
+        } else if (mode == "teleport" && !isRouteSimRunning) {
+            isTwoPointsEnabledByUser = false
+            routeWaypoints.clear()
+            routeTotalMeters = 0.0
+            routeTraveledMeters = 0.0
+            updateRouteMetricsUI()
+        }
+        updateTwoPointSummaryUI()
         if (::btnModeTeleport.isInitialized && ::btnModePoint1.isInitialized && ::btnModePoint2.isInitialized) {
             val isTel = mode == "teleport"
             val isP1 = mode == "point1"
@@ -2838,11 +2894,22 @@ class MainActivity : AppCompatActivity() {
             btnModePoint2.setTextColor(if (isP2) Color.WHITE else Color.parseColor("#1E293B"))
         }
         if (::mapWebView.isInitialized) {
-            mapWebView.evaluateJavascript("if(window.setClickMode) window.setClickMode('$mode');", null)
+            if (mode == "point1" || mode == "point2") {
+                mapWebView.evaluateJavascript(
+                    "if(window.setTwoPointsVisible) window.setTwoPointsVisible(true); if(window.setClickMode) window.setClickMode('$mode');",
+                    null
+                )
+            } else {
+                mapWebView.evaluateJavascript(
+                    "if(window.clearSimulatedRoute) window.clearSimulatedRoute(); if(window.setTwoPointsVisible) window.setTwoPointsVisible(false); if(window.setClickMode) window.setClickMode('$mode');",
+                    null
+                )
+            }
         }
     }
 
     private fun swapPoint1AndPoint2() {
+        isTwoPointsEnabledByUser = true
         val tmpLat = point1Lat
         val tmpLng = point1Lng
         point1Lat = point2Lat
@@ -2955,6 +3022,7 @@ class MainActivity : AppCompatActivity() {
                 point1Lng = p1Lg
                 point2Lat = p2Lt
                 point2Lng = p2Lg
+                isTwoPointsEnabledByUser = true
                 SettingsStore.setPoint1(this, point1Lat, point1Lng)
                 SettingsStore.setPoint2(this, point2Lat, point2Lng)
                 updateTwoPointSummaryUI()
@@ -3424,6 +3492,7 @@ class MainActivity : AppCompatActivity() {
                 point1Lng = if (curLng != 0.0) curLng else order.pickupLng - 0.008
                 point2Lat = order.pickupLat
                 point2Lng = order.pickupLng
+                isTwoPointsEnabledByUser = true
                 SettingsStore.setPoint1(this, point1Lat, point1Lng)
                 SettingsStore.setPoint2(this, point2Lat, point2Lng)
                 updateTwoPointSummaryUI()
@@ -3445,6 +3514,7 @@ class MainActivity : AppCompatActivity() {
                 point1Lng = fromLng
                 point2Lat = order.destLat
                 point2Lng = order.destLng
+                isTwoPointsEnabledByUser = true
                 SettingsStore.setPoint1(this, point1Lat, point1Lng)
                 SettingsStore.setPoint2(this, point2Lat, point2Lng)
                 updateTwoPointSummaryUI()
@@ -3701,6 +3771,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startOrResumeRouteSimulation() {
+        isTwoPointsEnabledByUser = true
+        updateTwoPointSummaryUI()
         if (routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
             if (::mapWebView.isInitialized) {
                 mapWebView.evaluateJavascript(
@@ -3923,7 +3995,7 @@ class MainActivity : AppCompatActivity() {
         val gMapsKey = SettingsStore.getGoogleMapsApiKey(this).replace("'", "")
         val mapLang = if (isAr) "ar" else "en"
         val mapDir = if (isAr) "rtl" else "ltr"
-        val hudDefault = tr("خريطة التوصيل • اضغط لتحديد وجهة التسليم 🛣️", "Delivery Map • Tap to set drop-off destination 🛣️")
+        val hudDefault = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
         val hudPoint1 = tr("خريطة التوصيل • اضغط لتحديد موقع الاستلام 1️⃣", "Delivery Map • Tap to set pickup location 1️⃣")
         val hudPoint2 = tr("خريطة التوصيل • اضغط لتحديد موقع التسليم 2️⃣", "Delivery Map • Tap to set drop-off location 2️⃣")
         val hudTeleport = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
@@ -3975,7 +4047,7 @@ class MainActivity : AppCompatActivity() {
                     var pt2Lng = $point2Lng;
                     var curLat = pt1Lat;
                     var curLng = pt1Lng;
-                    var clickMode = 'point2';
+                    var clickMode = 'teleport';
                     var googleApiKey = '$gMapsKey';
 
                     var map = L.map('map', { zoomControl: true }).setView([pt1Lat, pt1Lng], 14);
@@ -4026,11 +4098,23 @@ class MainActivity : AppCompatActivity() {
                         iconAnchor: [15, 15]
                     });
 
-                    var point1Marker = L.marker([pt1Lat, pt1Lng], { icon: pt1Icon, draggable: true }).addTo(map);
-                    var point2Marker = L.marker([pt2Lat, pt2Lng], { icon: pt2Icon, draggable: true }).addTo(map);
+                    var twoPointsVisible = false;
+                    var point1Marker = L.marker([pt1Lat, pt1Lng], { icon: pt1Icon, draggable: true });
+                    var point2Marker = L.marker([pt2Lat, pt2Lng], { icon: pt2Icon, draggable: true });
                     var driverMarker = L.marker([curLat, curLng], { icon: driverIcon, draggable: true, zIndexOffset: 500 }).addTo(map);
                     var routePolyline = null;
                     var routeShadowLine = null;
+
+                    window.setTwoPointsVisible = function(visible) {
+                        twoPointsVisible = !!visible;
+                        if (twoPointsVisible) {
+                            if (!map.hasLayer(point1Marker)) point1Marker.addTo(map);
+                            if (!map.hasLayer(point2Marker)) point2Marker.addTo(map);
+                        } else {
+                            if (map.hasLayer(point1Marker)) map.removeLayer(point1Marker);
+                            if (map.hasLayer(point2Marker)) map.removeLayer(point2Marker);
+                        }
+                    };
 
                     window.setClickMode = function(m) {
                         clickMode = m;
@@ -4124,6 +4208,7 @@ class MainActivity : AppCompatActivity() {
                     function drawRouteCoordinates(coordsLatLng, promptSpeedDialog) {
                         window.clearSimulatedRoute();
                         if (!coordsLatLng || coordsLatLng.length < 2) return;
+                        window.setTwoPointsVisible(true);
                         var startPt = coordsLatLng[0];
                         var endPt = coordsLatLng[coordsLatLng.length - 1];
                         point1Marker.setLatLng(startPt);
@@ -4165,6 +4250,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     window.buildStreetRoute = function(startLat, startLng, endLat, endLng, promptSpeedDialog) {
+                        window.setTwoPointsVisible(true);
                         pt1Lat = startLat;
                         pt1Lng = startLng;
                         pt2Lat = endLat;
@@ -4267,10 +4353,7 @@ class MainActivity : AppCompatActivity() {
                             .catch(function() {});
                     };
 
-                    // Automatically draw the initial 2-Point route on load
-                    setTimeout(function() {
-                        window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
-                    }, 350);
+                    // Point 1 & Point 2 start disabled on load until the user enables them manually
                 </script>
             </body>
             </html>
@@ -4374,49 +4457,66 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
 
         chkAutoAccept = CheckBox(this).apply {
-            text = tr("تفعيل القبول التلقائي الفوري للطلبات المطابقة للشروط", "Enable Instant Auto-Accept for Matching Orders")
+            text = tr("🚀 تفعيل القبول التلقائي الفوري للطلبات المطابقة", "🚀 Enable Instant Auto-Accept for Matching Orders")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 18, 12, 18)
             isChecked = SettingsStore.isAutoAccept(this@MainActivity)
         }
         layout.addView(chkAutoAccept)
 
         chkAutoReject = CheckBox(this).apply {
-            text = tr("تفعيل الرفض التلقائي الفوري للطلبات المخالفة للمسافة أو السعر", "Enable Instant Auto-Reject for Orders Outside Limits")
+            text = tr("🛡️ تفعيل الرفض التلقائي للطلبات خارج حدود المسافة والسعر", "🛡️ Enable Instant Auto-Reject for Orders Outside Limits")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 18, 12, 18)
             isChecked = SettingsStore.isAutoReject(this@MainActivity)
         }
         layout.addView(chkAutoReject)
 
+        // Dry-Run testing mode is permanently disabled and hidden for final production driver release
         chkDryRun = CheckBox(this).apply {
-            text = tr("وضع التجربة فقط (تسجيل وإشعار بالطلبات بدون قبول أو رفض فعلي)", "Dry-Run Mode (Log & notify orders without accepting or rejecting)")
-            isChecked = SettingsStore.isDryRun(this@MainActivity)
+            isChecked = false
+            visibility = View.GONE
         }
         layout.addView(chkDryRun)
 
         chkStayInBackground = CheckBox(this).apply {
-            text = tr("عدم فتح شاشة التطبيق عند معالجة الطلب تلقائياً (البقاء في الخلفية)", "Keep Target App in Background When Orders Are Handled Automatically")
+            text = tr("📱 البقاء في الخلفية عند قبول الطلب تلقائياً", "📱 Keep App in Background When Orders Are Auto-Accepted")
+            textSize = 14f
+            setPadding(12, 16, 12, 16)
             isChecked = SettingsStore.isStayInBackground(this@MainActivity)
         }
         layout.addView(chkStayInBackground)
 
         chkSilenceAlertTone = CheckBox(this).apply {
-            text = tr("كتم صوت تنبيه الطلب المزعج عند معالجته تلقائياً", "Silence Order Alert Tone When Handled Automatically")
+            text = tr("🔕 كتم صوت رنين الطلب المزعج عند القبول التلقائي", "🔕 Silence Loud Order Alert Tone on Auto-Accept")
+            textSize = 14f
+            setPadding(12, 16, 12, 16)
             isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
         }
         layout.addView(chkSilenceAlertTone)
 
         chkSoundAlert = CheckBox(this).apply {
-            text = tr("تشغيل نغمة تنبيه خفيفة عند قبول الطلب تلقائياً", "Play Short Notification Beep When an Order Is Auto-Accepted")
+            text = tr("🔔 تشغيل نغمة خفيفة عند قبول الطلب", "🔔 Play Short Beep When an Order Is Accepted")
+            textSize = 14f
+            setPadding(12, 16, 12, 16)
             isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
         }
         layout.addView(chkSoundAlert)
 
+        // Strict version check hidden in production UI
         chkStrictVersionCheck = CheckBox(this).apply {
-            text = tr("التحقق الصارم من توافق إصدار التطبيق قبل التشغيل", "Strict Target App Version Verification")
-            isChecked = SettingsStore.isStrictVersionCheck(this@MainActivity)
+            isChecked = false
+            visibility = View.GONE
         }
         layout.addView(chkStrictVersionCheck)
 
         chkFloatingOverlay = CheckBox(this).apply {
-            text = tr("إظهار الأيقونة الطافية فوق شاشة ساند للتحكم السريع بدون تبديل التطبيقات", "Show Floating Icon Over Saned Screen for Quick Control")
+            text = tr("⚡ إظهار الأيقونة الطائفة فوق شاشة ساند للتحكم السريع", "⚡ Show Floating Quick Control Icon Over Saned Screen")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 18, 12, 18)
             isChecked = SettingsStore.isFloatingOverlayEnabled(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setFloatingOverlayEnabled(this@MainActivity, isChecked)
@@ -4467,9 +4567,9 @@ class MainActivity : AppCompatActivity() {
             )
         )
         btnExtraOrder = Button(this).apply {
-            textSize = 14f
+            textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(24, 22, 24, 22)
+            setPadding(28, 32, 28, 32)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -4572,16 +4672,22 @@ class MainActivity : AppCompatActivity() {
     private fun createLabel(text: String): TextView {
         return TextView(this).apply {
             this.text = text
-            textSize = 12f
-            setTextColor(Color.parseColor("#475569"))
-            setPadding(0, 12, 0, 4)
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#1E293B"))
+            setPadding(0, 18, 0, 8)
         }
     }
 
     private fun createInput(initialValue: String): EditText {
         return EditText(this).apply {
             setText(if (initialValue == "0.0") "0" else initialValue)
-            textSize = 14f
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            background = roundedBg("#F8FAFC", 12f, "#CBD5E1", 2)
+            setPadding(24, 22, 24, 22)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
         }
     }
@@ -4609,7 +4715,7 @@ class MainActivity : AppCompatActivity() {
 
         val autoAccept = chkAutoAccept.isChecked
         val autoReject = chkAutoReject.isChecked
-        val dryRun = chkDryRun.isChecked
+        val dryRun = false
         val minPrice = edtMinPrice.text.toString().toDoubleOrNull() ?: 0.0
         val maxRest = edtMaxDistRest.text.toString().toDoubleOrNull() ?: 0.0
         val maxCust = edtMaxDistCust.text.toString().toDoubleOrNull() ?: 0.0

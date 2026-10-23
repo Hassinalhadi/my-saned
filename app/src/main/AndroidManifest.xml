@@ -27,9 +27,8 @@
     <application
         android:allowBackup="true"
         android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-        android:extractNativeLibs="true"
         android:icon="@drawable/ic_launcher_original"
-        android:label="Saned Assistant"
+        android:label="J-Driver"
         android:roundIcon="@drawable/ic_launcher_original"
         android:supportsRtl="false"
         android:theme="@style/Theme.SanedAssistant">
@@ -39,7 +38,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Saned Assistant (Root LSPosed &amp; Non-Root NPatch)" />
+            android:value="J-Driver (Root LSPosed &amp; Non-Root NPatch)" />
         <meta-data
             android:name="xposedminversion"
             android:value="93" />
