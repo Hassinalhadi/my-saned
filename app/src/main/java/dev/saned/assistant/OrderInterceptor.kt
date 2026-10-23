@@ -5489,9 +5489,9 @@ object OrderInterceptor {
             filtersBox.addView(btnSaveFilters)
             card.addView(filtersBox)
 
-            // 7. Single Bottom Emoji Button "$ 🏬🏤" (opens J-Driver full app)
+            // 7. Single Bottom Emoji Button "Go to app" (opens J-Driver full app)
             val btnOpenFullApp = TextView(activity).apply {
-                text = "$ 🏬🏤"
+                text = "Go to app"
                 textSize = 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 gravity = android.view.Gravity.CENTER
