@@ -4700,18 +4700,22 @@ object OrderInterceptor {
     }
 
     // =========================================================================
-    // FLOATING OVERLAY ICON (EXACT 10.JPG) & J-DRIVER QUICK CONTROL MENU (12.JPG)
+    // FLOATING OVERLAY ICON (EXACT 10.JPG) & COMPACT J-DRIVER QUICK MENU (12.JPG)
     // =========================================================================
-    private const val FLOATING_BUBBLE_TAG = "SANED_FLOATING_OVERLAY_BUBBLE"
-    private const val FLOATING_DOT_TAG = "SANED_FLOATING_STATUS_DOT"
+    private const val FLOATING_BUBBLE_TAG = "JDRIVER_FLOATING_BUBBLE_V3"
+    private const val LEGACY_BUBBLE_TAG_1 = "SANED_FLOATING_OVERLAY_BUBBLE"
+    private const val LEGACY_BUBBLE_TAG_2 = "SANED_FLOATING_FULL_APP_WINDOW"
+    private const val FLOATING_DOT_TAG = "JDRIVER_FLOATING_STATUS_DOT_V3"
     private const val FLOATING_ICON_B64 = "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"
 
     @Volatile private var cachedFloatingBitmap: android.graphics.Bitmap? = null
     @Volatile private var savedBubbleX: Int = -1
     @Volatile private var savedBubbleY: Int = -1
+    @Volatile private var activeQuickDialog: Dialog? = null
+    @Volatile private var lastQuickDialogOpenUptime: Long = 0L
 
     private fun refreshFloatingAppOrdersIfVisible() {
-        // No-op: reverted from full floating app window to streamlined Quick Control Dialog
+        // No-op: using compact single Quick Control Dialog
     }
 
     private fun getFloatingIconBitmap(): android.graphics.Bitmap? {
@@ -4726,15 +4730,49 @@ object OrderInterceptor {
         }
     }
 
+    private fun purgeLegacyFloatingViews(decorView: android.widget.FrameLayout) {
+        try {
+            for (i in decorView.childCount - 1 downTo 0) {
+                val child = decorView.getChildAt(i) ?: continue
+                val t = child.tag?.toString() ?: ""
+                if (t == LEGACY_BUBBLE_TAG_1 || t == LEGACY_BUBBLE_TAG_2 || t == "SANED_FLOATING_STATUS_DOT") {
+                    child.setOnTouchListener(null)
+                    child.setOnClickListener(null)
+                    child.visibility = View.GONE
+                    decorView.removeViewAt(i)
+                }
+            }
+            // If multiple JDRIVER_FLOATING_BUBBLE_V3 somehow exist, keep only the last one
+            val matching = mutableListOf<View>()
+            for (i in 0 until decorView.childCount) {
+                val child = decorView.getChildAt(i) ?: continue
+                if (child.tag == FLOATING_BUBBLE_TAG) {
+                    matching.add(child)
+                }
+            }
+            if (matching.size > 1) {
+                for (k in 0 until matching.size - 1) {
+                    val dup = matching[k]
+                    dup.setOnTouchListener(null)
+                    dup.visibility = View.GONE
+                    decorView.removeView(dup)
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
     fun attachFloatingOverlayToActivity(activity: Activity) {
         mainHandler.post {
             try {
                 if (activity.isFinishing || activity.isDestroyed) return@post
-                // Only attach inside Target App (net.jahez.fleets), never inside our own J-Driver UI
                 val pkg = activity.packageName
                 if (pkg == "dev.jing.sanedhook" || pkg == "dev.saned.assistant") return@post
 
                 val decorView = activity.window?.decorView as? android.widget.FrameLayout ?: return@post
+
+                // Always remove any legacy/duplicate floating bubble or window first
+                purgeLegacyFloatingViews(decorView)
+
                 val existing = decorView.findViewWithTag<View>(FLOATING_BUBBLE_TAG)
 
                 if (!isFloatingOverlayEnabled) {
@@ -4752,15 +4790,16 @@ object OrderInterceptor {
                 val density = activity.resources.displayMetrics.density
                 val screenW = activity.resources.displayMetrics.widthPixels
                 val screenH = activity.resources.displayMetrics.heightPixels
-                val bubbleSizePx = (60f * density).toInt()
+                // Small-to-medium floating icon (50dp)
+                val bubbleSizePx = (50f * density).toInt()
 
                 if (savedBubbleX < 0 || savedBubbleY < 0) {
                     try {
                         val sp = activity.getSharedPreferences("saned_floating_overlay_pos", Context.MODE_PRIVATE)
-                        savedBubbleX = sp.getInt("x", (screenW - bubbleSizePx - (14f * density).toInt()).coerceAtLeast(0))
+                        savedBubbleX = sp.getInt("x", (screenW - bubbleSizePx - (12f * density).toInt()).coerceAtLeast(0))
                         savedBubbleY = sp.getInt("y", (screenH * 0.32f).toInt())
                     } catch (_: Throwable) {
-                        savedBubbleX = (screenW - bubbleSizePx - (14f * density).toInt()).coerceAtLeast(0)
+                        savedBubbleX = (screenW - bubbleSizePx - (12f * density).toInt()).coerceAtLeast(0)
                         savedBubbleY = (screenH * 0.32f).toInt()
                     }
                 }
@@ -4788,7 +4827,7 @@ object OrderInterceptor {
                 }
                 bubbleContainer.addView(iconView)
 
-                val dotSize = (15f * density).toInt()
+                val dotSize = (12f * density).toInt()
                 val statusDot = View(activity).apply {
                     tag = FLOATING_DOT_TAG
                     val dotLp = android.widget.FrameLayout.LayoutParams(dotSize, dotSize)
@@ -4836,26 +4875,24 @@ object OrderInterceptor {
                             }
                             true
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        MotionEvent.ACTION_UP -> {
                             v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(90).start()
                             if (!isDragging) {
-                                showFloatingQuickControlDialog(activity, statusDot)
-                            } else {
-                                val snapX = if (lp.leftMargin + bubbleSizePx / 2 < screenW / 2) {
-                                    (8f * density).toInt()
-                                } else {
-                                    (screenW - bubbleSizePx - (8f * density).toInt()).coerceAtLeast(0)
+                                val nowUp = SystemClock.uptimeMillis()
+                                if (nowUp - lastQuickDialogOpenUptime > 350L) {
+                                    lastQuickDialogOpenUptime = nowUp
+                                    showFloatingQuickControlDialog(activity, statusDot)
                                 }
-                                lp.leftMargin = snapX
-                                v.layoutParams = lp
-                                savedBubbleX = snapX
-                                try {
-                                    activity.getSharedPreferences("saned_floating_overlay_pos", Context.MODE_PRIVATE)
-                                        .edit()
-                                        .putInt("x", savedBubbleX)
-                                        .putInt("y", savedBubbleY)
-                                        .apply()
-                                } catch (_: Throwable) {}
+                            } else {
+                                snapFloatingBubbleToEdge(activity, v, lp, screenW, bubbleSizePx, density)
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            // Do NOT open dialog on ACTION_CANCEL (prevents opening a second duplicate dialog!)
+                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(90).start()
+                            if (isDragging) {
+                                snapFloatingBubbleToEdge(activity, v, lp, screenW, bubbleSizePx, density)
                             }
                             true
                         }
@@ -4865,8 +4902,37 @@ object OrderInterceptor {
 
                 decorView.addView(bubbleContainer)
                 bubbleContainer.bringToFront()
+
+                // Also watch hierarchy briefly to purge any legacy bubble added after us
+                decorView.postDelayed({ purgeLegacyFloatingViews(decorView) }, 250)
+                decorView.postDelayed({ purgeLegacyFloatingViews(decorView) }, 900)
             } catch (_: Throwable) {}
         }
+    }
+
+    private fun snapFloatingBubbleToEdge(
+        activity: Activity,
+        v: View,
+        lp: android.widget.FrameLayout.LayoutParams,
+        screenW: Int,
+        bubbleSizePx: Int,
+        density: Float
+    ) {
+        val snapX = if (lp.leftMargin + bubbleSizePx / 2 < screenW / 2) {
+            (8f * density).toInt()
+        } else {
+            (screenW - bubbleSizePx - (8f * density).toInt()).coerceAtLeast(0)
+        }
+        lp.leftMargin = snapX
+        v.layoutParams = lp
+        savedBubbleX = snapX
+        try {
+            activity.getSharedPreferences("saned_floating_overlay_pos", Context.MODE_PRIVATE)
+                .edit()
+                .putInt("x", savedBubbleX)
+                .putInt("y", savedBubbleY)
+                .apply()
+        } catch (_: Throwable) {}
     }
 
     private fun updateStatusDotBackground(dot: View) {
@@ -4874,7 +4940,7 @@ object OrderInterceptor {
             val gd = android.graphics.drawable.GradientDrawable()
             gd.shape = android.graphics.drawable.GradientDrawable.OVAL
             gd.setColor(android.graphics.Color.parseColor(if (isMasterRunning) "#10B981" else "#EF4444"))
-            gd.setStroke(4, android.graphics.Color.WHITE)
+            gd.setStroke(3, android.graphics.Color.WHITE)
             dot.background = gd
         } catch (_: Throwable) {}
     }
@@ -4882,6 +4948,15 @@ object OrderInterceptor {
     private fun showFloatingQuickControlDialog(activity: Activity, statusDot: View) {
         try {
             if (activity.isFinishing || activity.isDestroyed) return
+
+            // Ensure only ONE Quick Control Dialog is ever open at a time
+            try {
+                activeQuickDialog?.let { oldDlg ->
+                    if (oldDlg.isShowing) oldDlg.dismiss()
+                }
+            } catch (_: Throwable) {}
+            activeQuickDialog = null
+
             syncSettings(activity.contentResolver)
 
             val density = activity.resources.displayMetrics.density
@@ -4889,36 +4964,41 @@ object OrderInterceptor {
             fun dp(v: Float): Int = (v * density).toInt()
 
             val dialog = Dialog(activity)
+            activeQuickDialog = dialog
             dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
             dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            dialog.setOnDismissListener {
+                if (activeQuickDialog === dialog) activeQuickDialog = null
+            }
 
             val rootScroll = android.widget.ScrollView(activity).apply {
                 isFillViewport = true
             }
 
+            // Small-to-Medium Compact Card Container
             val card = android.widget.LinearLayout(activity).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
                 layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
-                setPadding(dp(18f), dp(16f), dp(18f), dp(16f))
+                setPadding(dp(13f), dp(11f), dp(13f), dp(11f))
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                    cornerRadius = 22f * density
+                    cornerRadius = 18f * density
                     setColor(android.graphics.Color.parseColor("#0F172A"))
-                    setStroke(dp(1.5f), android.graphics.Color.parseColor("#334155"))
+                    setStroke(dp(1.2f), android.graphics.Color.parseColor("#334155"))
                 }
             }
 
-            // Header Row (Icon + Title "J-Driver" + Language Toggle + Close Button)
+            // Header Row (Compact Icon + Title "J-Driver" + Language Toggle + Close Button)
             val headerRow = android.widget.LinearLayout(activity).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(0, 0, 0, dp(12f))
+                setPadding(0, 0, 0, dp(8f))
             }
 
             val hdrIcon = android.widget.ImageView(activity).apply {
                 getFloatingIconBitmap()?.let { setImageBitmap(it) }
-                layoutParams = android.widget.LinearLayout.LayoutParams(dp(36f), dp(36f)).apply {
-                    setMargins(0, 0, dp(10f), 0)
+                layoutParams = android.widget.LinearLayout.LayoutParams(dp(28f), dp(28f)).apply {
+                    setMargins(0, 0, dp(8f), 0)
                 }
             }
             headerRow.addView(hdrIcon)
@@ -4930,13 +5010,13 @@ object OrderInterceptor {
 
             val tvTitle = TextView(activity).apply {
                 text = "J-Driver"
-                textSize = 17.5f
+                textSize = 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.WHITE)
             }
             val tvSub = TextView(activity).apply {
                 text = if (isAr) "نشط داخل ساند ⚡" else "Active Inside Saned ⚡"
-                textSize = 11.5f
+                textSize = 10.5f
                 setTextColor(android.graphics.Color.parseColor("#38BDF8"))
             }
             titleCol.addView(tvTitle)
@@ -4945,12 +5025,12 @@ object OrderInterceptor {
 
             val btnLang = TextView(activity).apply {
                 text = if (isAr) "🌐 EN" else "🌐 عربي"
-                textSize = 13.5f
+                textSize = 11f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
-                setPadding(dp(14f), dp(9f), dp(14f), dp(9f))
+                setPadding(dp(9f), dp(5f), dp(9f), dp(5f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 10f * density
+                    cornerRadius = 8f * density
                     setColor(android.graphics.Color.parseColor("#1E293B"))
                     setStroke(dp(1f), android.graphics.Color.parseColor("#475569"))
                 }
@@ -4958,7 +5038,7 @@ object OrderInterceptor {
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    setMargins(dp(6f), 0, dp(6f), 0)
+                    setMargins(dp(4f), 0, dp(4f), 0)
                 }
                 setOnClickListener {
                     appUiLanguage = if (isAr) "en" else "ar"
@@ -4972,12 +5052,12 @@ object OrderInterceptor {
 
             val btnClose = TextView(activity).apply {
                 text = "✖"
-                textSize = 16f
+                textSize = 12.5f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.parseColor("#F1F5F9"))
-                setPadding(dp(14f), dp(9f), dp(14f), dp(9f))
+                setTextColor(android.graphics.Color.parseColor("#CBD5E1"))
+                setPadding(dp(9f), dp(5f), dp(9f), dp(5f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 10f * density
+                    cornerRadius = 8f * density
                     setColor(android.graphics.Color.parseColor("#1E293B"))
                 }
                 setOnClickListener { dialog.dismiss() }
@@ -4985,6 +5065,7 @@ object OrderInterceptor {
             headerRow.addView(btnClose)
             card.addView(headerRow)
 
+            // Small-to-Medium Toggle Button Builder
             fun makeToggleBtn(
                 labelProvider: () -> String,
                 stateProvider: () -> Boolean,
@@ -4992,15 +5073,15 @@ object OrderInterceptor {
                 onToggle: () -> Unit
             ): TextView {
                 return TextView(activity).apply {
-                    textSize = 14.5f
+                    textSize = 12f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     gravity = android.view.Gravity.CENTER_VERTICAL
-                    setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                    setPadding(dp(11f), dp(8.5f), dp(11f), dp(8.5f))
                     val lp = android.widget.LinearLayout.LayoutParams(
                         android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                         android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                     )
-                    lp.setMargins(0, 0, 0, dp(9f))
+                    lp.setMargins(0, 0, 0, dp(6f))
                     layoutParams = lp
 
                     fun refreshLook() {
@@ -5008,7 +5089,7 @@ object OrderInterceptor {
                         text = labelProvider()
                         setTextColor(android.graphics.Color.WHITE)
                         background = android.graphics.drawable.GradientDrawable().apply {
-                            cornerRadius = 12f * density
+                            cornerRadius = 10f * density
                             setColor(android.graphics.Color.parseColor(if (on) activeColor else "#1E293B"))
                             setStroke(dp(1f), android.graphics.Color.parseColor(if (on) "#34D399" else "#334155"))
                         }
@@ -5091,12 +5172,12 @@ object OrderInterceptor {
                 pushQuickSettingsUpdateToProvider(activity)
             })
 
-            // 5. DELIVER ORDER Section
+            // 5. DELIVER ORDER Section (Compact)
             val deliverBox = android.widget.LinearLayout(activity).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
-                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                setPadding(dp(9f), dp(7f), dp(9f), dp(5f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 14f * density
+                    cornerRadius = 11f * density
                     setColor(android.graphics.Color.parseColor("#172554"))
                     setStroke(dp(1f), android.graphics.Color.parseColor("#2563EB"))
                 }
@@ -5104,16 +5185,16 @@ object OrderInterceptor {
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                 )
-                lp.setMargins(0, dp(2f), 0, dp(10f))
+                lp.setMargins(0, dp(1f), 0, dp(7f))
                 layoutParams = lp
             }
 
             val tvDeliverHdr = TextView(activity).apply {
                 text = if (isAr) "📦 DELIVER ORDER (توصيل الطلب)" else "📦 DELIVER ORDER"
-                textSize = 12.5f
+                textSize = 11f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#93C5FD"))
-                setPadding(0, 0, 0, dp(6f))
+                setPadding(0, 0, 0, dp(4f))
             }
             deliverBox.addView(tvDeliverHdr)
 
@@ -5158,12 +5239,12 @@ object OrderInterceptor {
             })
             card.addView(deliverBox)
 
-            // 6. Quick Filters Row (Min Price $, Max Rest KM 🏬, Max Cust KM 🏤)
+            // 6. Quick Filters Row (Compact)
             val filtersBox = android.widget.LinearLayout(activity).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
-                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                setPadding(dp(9f), dp(7f), dp(9f), dp(8f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 14f * density
+                    cornerRadius = 11f * density
                     setColor(android.graphics.Color.parseColor("#1E293B"))
                     setStroke(dp(1f), android.graphics.Color.parseColor("#334155"))
                 }
@@ -5171,36 +5252,18 @@ object OrderInterceptor {
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                 )
-                lp.setMargins(0, 0, 0, dp(10f))
+                lp.setMargins(0, 0, 0, dp(7f))
                 layoutParams = lp
             }
 
             val tvFiltersHdr = TextView(activity).apply {
-                text = if (isAr) "🎯 فلاتر السعر والمسافة السريعة (0 = بلا حد)" else "🎯 Quick Filters (0 = No Limit)"
-                textSize = 11.5f
+                text = if (isAr) "🎯 فلاتر السريعة (0 = بلا حد)" else "🎯 Quick Filters (0 = No Limit)"
+                textSize = 10.5f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(android.graphics.Color.parseColor("#CBD5E1"))
-                setPadding(0, 0, 0, dp(6f))
+                setPadding(0, 0, 0, dp(5f))
             }
             filtersBox.addView(tvFiltersHdr)
-
-            // Emoji labels row above the 3 filter boxes ($ , 🏬 , 🏤)
-            val emojiLabelsRow = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                setPadding(0, 0, 0, dp(2f))
-            }
-            for (emo in listOf("$", "🏬", "🏤")) {
-                val tvEmo = TextView(activity).apply {
-                    text = emo
-                    textSize = 15.5f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    gravity = android.view.Gravity.CENTER
-                    setTextColor(android.graphics.Color.parseColor("#94A3B8"))
-                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                emojiLabelsRow.addView(tvEmo)
-            }
-            filtersBox.addView(emojiLabelsRow)
 
             val inputsRow = android.widget.LinearLayout(activity).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
@@ -5211,27 +5274,27 @@ object OrderInterceptor {
                     hint = hintText
                     val formatted = if (currentVal <= 0.0) "0" else if (currentVal == currentVal.toInt().toDouble()) currentVal.toInt().toString() else currentVal.toString()
                     setText(formatted)
-                    textSize = 15f
+                    textSize = 12f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     setTextColor(android.graphics.Color.WHITE)
                     setHintTextColor(android.graphics.Color.parseColor("#64748B"))
                     gravity = android.view.Gravity.CENTER
                     inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-                    setPadding(dp(8f), dp(11f), dp(8f), dp(11f))
+                    setPadding(dp(5f), dp(6f), dp(5f), dp(6f))
                     background = android.graphics.drawable.GradientDrawable().apply {
-                        cornerRadius = 8f * density
+                        cornerRadius = 7f * density
                         setColor(android.graphics.Color.parseColor("#0F172A"))
                         setStroke(dp(1f), android.graphics.Color.parseColor("#475569"))
                     }
                     layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        setMargins(dp(3f), 0, dp(3f), 0)
+                        setMargins(dp(2.5f), 0, dp(2.5f), 0)
                     }
                 }
             }
 
-            val edtMinPrice = makeFilterInput("$", minOrderPrice)
-            val edtMaxRest = makeFilterInput("🏬", maxDistToRestaurant)
-            val edtMaxCust = makeFilterInput("🏤", maxDistCustomer)
+            val edtMinPrice = makeFilterInput(if (isAr) "السعر" else "Price", minOrderPrice)
+            val edtMaxRest = makeFilterInput(if (isAr) "المطعم" else "Pickup", maxDistToRestaurant)
+            val edtMaxCust = makeFilterInput(if (isAr) "العميل" else "Customer", maxDistCustomer)
 
             inputsRow.addView(edtMinPrice)
             inputsRow.addView(edtMaxRest)
@@ -5240,20 +5303,20 @@ object OrderInterceptor {
 
             val btnSaveFilters = TextView(activity).apply {
                 text = if (isAr) "💾 حفظ الفلاتر الآن" else "💾 Save Filters Now"
-                textSize = 14.5f
+                textSize = 11.5f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 gravity = android.view.Gravity.CENTER
                 setTextColor(android.graphics.Color.WHITE)
-                setPadding(dp(14f), dp(13f), dp(14f), dp(13f))
+                setPadding(dp(8f), dp(7.5f), dp(8f), dp(7.5f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 10f * density
+                    cornerRadius = 8f * density
                     setColor(android.graphics.Color.parseColor("#2563EB"))
                 }
                 val lp = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                 )
-                lp.setMargins(0, dp(8f), 0, 0)
+                lp.setMargins(0, dp(6f), 0, 0)
                 layoutParams = lp
                 setOnClickListener {
                     minOrderPrice = edtMinPrice.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
@@ -5273,16 +5336,16 @@ object OrderInterceptor {
             filtersBox.addView(btnSaveFilters)
             card.addView(filtersBox)
 
-            // 7. Bottom Button converted to emojis "$ 🏬🏤" (as requested for image 12)
+            // 7. Single Bottom Emoji Button "$ 🏬🏤" (opens J-Driver full app)
             val btnOpenFullApp = TextView(activity).apply {
                 text = "$ 🏬🏤"
-                textSize = 18f
+                textSize = 14f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 gravity = android.view.Gravity.CENTER
                 setTextColor(android.graphics.Color.WHITE)
-                setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                setPadding(dp(10f), dp(8.5f), dp(10f), dp(8.5f))
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 12f * density
+                    cornerRadius = 10f * density
                     setColor(android.graphics.Color.parseColor("#2563EB"))
                 }
                 setOnClickListener {
@@ -5305,7 +5368,8 @@ object OrderInterceptor {
             val win = dialog.window
             if (win != null) {
                 val dm = activity.resources.displayMetrics
-                win.setLayout((dm.widthPixels * 0.94f).toInt(), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+                // Small-to-medium width (82% of screen width)
+                win.setLayout((dm.widthPixels * 0.82f).toInt(), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
             }
             dialog.show()
         } catch (_: Throwable) {}
