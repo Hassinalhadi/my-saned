@@ -72,6 +72,20 @@ class SanedReceiver : BroadcastReceiver() {
       SettingsStore.broadcastSettings(context)
   }
 
+  "dev.saned.assistant.ACTION_UPDATE_SETTINGS_FROM_OVERLAY" -> {
+      try {
+          val extras = intent.extras
+          if (extras != null) {
+              context.contentResolver.call(
+                  android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                  "updateSettingsFromFloating",
+                  null,
+                  extras
+              )
+          }
+      } catch (_: Throwable) {}
+  }
+
   "dev.saned.assistant.ACTION_PONG" -> {
       try {
           val relay = Intent("dev.saned.assistant.UI_PONG_RECEIVED").apply {

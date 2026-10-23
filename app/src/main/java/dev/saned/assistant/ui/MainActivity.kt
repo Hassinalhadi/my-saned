@@ -4806,6 +4806,10 @@ class MainActivity : AppCompatActivity() {
                 "dev.saned.assistant.UI_REFRESH_ORDERS" -> {
                     refreshOrdersLogUI()
                 }
+                "dev.saned.assistant.UI_SETTINGS_UPDATED" -> {
+                    reloadSettingsIntoUI()
+                    refreshOrdersLogUI()
+                }
                 "dev.saned.assistant.UI_REFRESH_LOGS", "dev.saned.assistant.ACTION_DIAG_LOG" -> {
                     refreshDiagLogsUI()
                 }
@@ -4929,9 +4933,53 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun reloadSettingsIntoUI() {
+        try {
+            if (::swMaster.isInitialized) {
+                val m = SettingsStore.isMasterRunning(this)
+                if (swMaster.isChecked != m) swMaster.isChecked = m
+                updateMasterStatusUI(m)
+            }
+            if (::chkAutoAccept.isInitialized) chkAutoAccept.isChecked = SettingsStore.isAutoAccept(this)
+            if (::chkAutoReject.isInitialized) chkAutoReject.isChecked = SettingsStore.isAutoReject(this)
+            if (::chkStayInBackground.isInitialized) chkStayInBackground.isChecked = SettingsStore.isStayInBackground(this)
+            if (::chkSilenceAlertTone.isInitialized) chkSilenceAlertTone.isChecked = SettingsStore.isSilenceAlertTone(this)
+            if (::chkSoundAlert.isInitialized) chkSoundAlert.isChecked = SettingsStore.isSoundEnabled(this)
+            if (::chkFloatingOverlay.isInitialized) chkFloatingOverlay.isChecked = SettingsStore.isFloatingOverlayEnabled(this)
+            if (::edtMinPrice.isInitialized) {
+                val mp = SettingsStore.getMinPrice(this)
+                val mpStr = if (mp == 0.0) "0" else if (mp == mp.toInt().toDouble()) mp.toInt().toString() else mp.toString()
+                if (edtMinPrice.text.toString() != mpStr) edtMinPrice.setText(mpStr)
+            }
+            if (::edtMaxDistRest.isInitialized) {
+                val mr = SettingsStore.getMaxDistRest(this)
+                val mrStr = if (mr == 0.0) "0" else if (mr == mr.toInt().toDouble()) mr.toInt().toString() else mr.toString()
+                if (edtMaxDistRest.text.toString() != mrStr) edtMaxDistRest.setText(mrStr)
+            }
+            if (::edtMaxDistCust.isInitialized) {
+                val mc = SettingsStore.getMaxDistCust(this)
+                val mcStr = if (mc == 0.0) "0" else if (mc == mc.toInt().toDouble()) mc.toInt().toString() else mc.toString()
+                if (edtMaxDistCust.text.toString() != mcStr) edtMaxDistCust.setText(mcStr)
+            }
+            isExtraOrderEnabled = SettingsStore.isExtraOrderEnabled(this)
+            updateExtraOrderButtonUI()
+            if (::chkFakeLoc.isInitialized) {
+                val fl = SettingsStore.isFakeLocation(this)
+                if (chkFakeLoc.isChecked != fl) chkFakeLoc.isChecked = fl
+            }
+            if (::chkAndroidId.isInitialized) chkAndroidId.isChecked = SettingsStore.isSpoofAndroidId(this)
+            if (::edtAndroidId.isInitialized) {
+                val aid = SettingsStore.getSpoofedAndroidId(this)
+                if (aid.isNotEmpty() && edtAndroidId.text.toString() != aid) edtAndroidId.setText(aid)
+            }
+            updateRouteSimBannerUI()
+        } catch (_: Throwable) {}
+    }
+
     override fun onResume() {
         super.onResume()
         io.github.libxposed.service.XposedProvider.ensureServiceBinderConnected(this)
+        reloadSettingsIntoUI()
         refreshOrdersLogUI()
         refreshDiagLogsUI()
         SettingsStore.broadcastSettings(this)
@@ -4939,6 +4987,7 @@ class MainActivity : AppCompatActivity() {
         try {
             val filter = IntentFilter().apply {
                 addAction("dev.saned.assistant.UI_REFRESH_ORDERS")
+                addAction("dev.saned.assistant.UI_SETTINGS_UPDATED")
                 addAction("dev.saned.assistant.UI_REFRESH_LOGS")
                 addAction("dev.saned.assistant.ACTION_DIAG_LOG")
                 addAction("dev.jing.sanedhook.b")

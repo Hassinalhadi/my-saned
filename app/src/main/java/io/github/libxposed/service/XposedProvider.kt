@@ -535,23 +535,39 @@ class XposedProvider : ContentProvider() {
             return bundle
         }
 
-        if (method == "updateSettingsFromFloating" && extras != null) {
+        if ((method == "updateSettingsFromFloating" || method == "push_settings") && extras != null) {
             try {
                 val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
                 val ed = prefs.edit()
+                val stringKeys = setOf(
+                    "min_price", "min_order_price",
+                    "max_dist_rest", "max_dist_to_restaurant",
+                    "max_dist_cust", "max_dist_restaurant_to_customer",
+                    "fake_lat", "fake_lng",
+                    "max_orders_limit_str", "spoofed_android_id", "app_ui_language"
+                )
                 for (key in extras.keySet()) {
-                    when (val v = extras.get(key)) {
-                        is Boolean -> ed.putBoolean(key, v)
-                        is Int -> ed.putInt(key, v)
-                        is Long -> ed.putLong(key, v)
-                        is Float -> ed.putFloat(key, v)
-                        is Double -> ed.putString(key, v.toString())
-                        is String -> ed.putString(key, v)
+                    val v = extras.get(key) ?: continue
+                    if (key in stringKeys) {
+                        ed.putString(key, v.toString())
+                    } else {
+                        when (v) {
+                            is Boolean -> ed.putBoolean(key, v)
+                            is Int -> ed.putInt(key, v)
+                            is Long -> ed.putLong(key, v)
+                            is Float -> ed.putFloat(key, v)
+                            is Double -> ed.putString(key, v.toString())
+                            is String -> ed.putString(key, v)
+                        }
                     }
                 }
-                ed.apply()
+                if (!extras.containsKey("last_settings_mod_ms")) {
+                    ed.putLong("last_settings_mod_ms", System.currentTimeMillis())
+                }
+                ed.commit()
                 syncToLSPosedRemotePrefs(ctx)
                 ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
+                ctx.sendBroadcast(Intent("dev.saned.assistant.UI_SETTINGS_UPDATED"))
                 bundle.putBoolean("ok", true)
             } catch (_: Throwable) {}
             return bundle

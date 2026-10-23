@@ -378,6 +378,8 @@ object SettingsStore {
      */
     fun broadcastSettings(context: Context) {
         val appCtx = context.applicationContext ?: context
+        val modNow = System.currentTimeMillis()
+        try { getPrefs(appCtx).edit().putLong("last_settings_mod_ms", modNow).commit() } catch (_: Throwable) {}
         if (!syncPending.compareAndSet(false, true)) return
         bgSyncExecutor.execute {
             syncPending.set(false)
@@ -447,6 +449,7 @@ object SettingsStore {
                     putExtra("show_food_price", true)
                     putExtra("floating_overlay_enabled", isFloatingOverlayEnabled(appCtx))
                     putExtra("app_ui_language", getAppLanguage(appCtx))
+                    putExtra("last_settings_mod_ms", getPrefs(appCtx).getLong("last_settings_mod_ms", System.currentTimeMillis()))
                     putExtra("hook_early_cloaker", hEarly)
                     putExtra("hook_sec_cloaker", hSec)
                     putExtra("hook_location", hLoc)

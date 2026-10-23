@@ -62,6 +62,7 @@
                 <action android:name="dev.saned.assistant.ACTION_DIAG_LOG" />
                 <action android:name="dev.jing.sanedhook.b" />
                 <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
+            <action android:name="dev.saned.assistant.ACTION_UPDATE_SETTINGS_FROM_OVERLAY" />
                 <action android:name="dev.saned.assistant.ACTION_PING" />
                 <action android:name="dev.saned.assistant.ACTION_PONG" />
                 <action android:name="dev.saned.assistant.ACTION_TEST_API" />

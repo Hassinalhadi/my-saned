@@ -103,6 +103,7 @@ object OrderInterceptor {
     @Volatile var isSoundEnabled: Boolean = false
     @Volatile var isShowToasts: Boolean = false
     @Volatile var isFloatingOverlayEnabled: Boolean = true
+    @Volatile var lastLocalOverlayModMs: Long = 0L
     @Volatile var appUiLanguage: String = "ar"
 
     // Active Server Polling & Parallel Acceptance
@@ -1062,6 +1063,8 @@ object OrderInterceptor {
     }
 
     fun applySettingsFromIntent(intent: Intent) {
+        val intentMod = intent.getLongExtra("last_settings_mod_ms", System.currentTimeMillis())
+        if (intentMod >= lastLocalOverlayModMs) lastLocalOverlayModMs = intentMod
         isMasterRunning = intent.getBooleanExtra("master_running", isMasterRunning)
         isAutoAccept = intent.getBooleanExtra("auto_accept", isAutoAccept)
         isAutoReject = intent.getBooleanExtra("auto_reject", isAutoReject)
@@ -1130,37 +1133,114 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
     }
 
+    private fun readDoubleFromPrefs(p: SharedPreferences, key1: String, key2: String, fallback: Double): Double {
+        return try {
+            val raw1 = p.all[key1]
+            val raw2 = p.all[key2]
+            val v = (raw1 ?: raw2)?.toString()?.trim()?.toDoubleOrNull()
+            if (v != null && !v.isNaN() && v >= 0.0) v else fallback
+        } catch (_: Throwable) { fallback }
+    }
+
+    private fun readDoubleFromBundle(b: android.os.Bundle, key1: String, key2: String, fallback: Double): Double {
+        return try {
+            val raw1 = b.get(key1)
+            val raw2 = b.get(key2)
+            val v = (raw1 ?: raw2)?.toString()?.trim()?.toDoubleOrNull()
+            if (v != null && !v.isNaN() && v >= 0.0) v else fallback
+        } catch (_: Throwable) { fallback }
+    }
+
+    private fun applyPrefsSnapshot(p: SharedPreferences) {
+        isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
+        isAutoAccept = p.getBoolean("auto_accept", isAutoAccept)
+        isAutoReject = p.getBoolean("auto_reject", isAutoReject)
+        isDryRun = false
+        isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)
+        isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)
+        isStrictVersionCheck = false
+        licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
+        licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
+        isActivePolling = true
+        pollIntervalSec = 0.0f
+        parallelRequests = 3
+        minOrderPrice = readDoubleFromPrefs(p, "min_price", "min_order_price", minOrderPrice)
+        maxDistToRestaurant = readDoubleFromPrefs(p, "max_dist_rest", "max_dist_to_restaurant", maxDistToRestaurant)
+        maxDistCustomer = readDoubleFromPrefs(p, "max_dist_cust", "max_dist_restaurant_to_customer", maxDistCustomer)
+        val pMax = p.all["max_orders_limit_str"]?.toString()?.toIntOrNull()
+            ?: (p.all["max_orders_limit"] as? Int) ?: 0
+        isExtraOrderEnabled = p.getBoolean("extra_order_enabled", pMax >= 3)
+        maxOrdersLimit = if (isExtraOrderEnabled || pMax >= 3) 3 else 2
+        isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
+        isShowToasts = false
+        isFloatingOverlayEnabled = p.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+        p.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
+    }
+
     fun syncSettings(resolver: ContentResolver? = null) {
+        // 1. Check remotePrefs FIRST, and only apply if not older than our local overlay modifications
+        remotePrefs?.let { p ->
+            val pMod = try { p.getLong("last_settings_mod_ms", 0L) } catch (_: Throwable) { 0L }
+            if (lastLocalOverlayModMs == 0L || pMod >= lastLocalOverlayModMs) {
+                applyPrefsSnapshot(p)
+                if (pMod > lastLocalOverlayModMs) lastLocalOverlayModMs = pMod
+            }
+        }
+
+        // 2. Check local SharedPreferences inside target app (authoritative in Non-Root --embed mode or after overlay edits)
+        try {
+            val ctx = appContext ?: currentActivity
+            if (ctx != null) {
+                val localSp = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                val localMod = localSp.getLong("last_settings_mod_ms", 0L)
+                if (localMod > 0L && localMod >= lastLocalOverlayModMs) {
+                    applyPrefsSnapshot(localSp)
+                    lastLocalOverlayModMs = localMod
+                    LocationEngine.isMasterRunning = isMasterRunning
+                    LocationEngine.isFakeLocationEnabled = localSp.getBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                    LocationEngine.isTripSimulationActive = localSp.getBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 3. Check XposedProvider ContentProvider (authoritative when J-Driver MainActivity updates settings)
         val activeResolver = resolver ?: appContext?.contentResolver ?: currentActivity?.contentResolver
         if (activeResolver != null) {
             try {
                 val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
                 val bundle = activeResolver.call(uri, "getSettings", null, null)
                 if (bundle != null && !bundle.isEmpty) {
-                    isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
-                    isAutoAccept = bundle.getBoolean("auto_accept", isAutoAccept)
-                    isAutoReject = bundle.getBoolean("auto_reject", isAutoReject)
-                    isDryRun = bundle.getBoolean("dry_run", isDryRun)
-                    isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)
-                    isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)
-                    isStrictVersionCheck = bundle.getBoolean("strict_version_check", isStrictVersionCheck)
-                    licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
-                    licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
-                    isActivePolling = true
-                    pollIntervalSec = 0.0f
-                    parallelRequests = 3
-                    minOrderPrice = bundle.getString("min_price", bundle.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
-                    maxDistToRestaurant = bundle.getString("max_dist_rest", bundle.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
-                    maxDistCustomer = bundle.getString("max_dist_cust", bundle.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-                    val bMax = bundle.getString("max_orders_limit_str", null)?.toIntOrNull() ?: bundle.getInt("max_orders_limit", 0)
-                    isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", bMax >= 3)
-                    maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
-                    isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
-                    isShowToasts = false
-                    isFloatingOverlayEnabled = bundle.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
-                    bundle.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
-                    LocationEngine.applySettingsBundle(bundle)
-                    DeviceSpoofer.applySettingsBundle(bundle)
+                    val bMod = bundle.getLong("last_settings_mod_ms", 0L)
+                    if (lastLocalOverlayModMs == 0L || bMod >= lastLocalOverlayModMs) {
+                        if (bMod > lastLocalOverlayModMs) lastLocalOverlayModMs = bMod
+                        isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
+                        isAutoAccept = bundle.getBoolean("auto_accept", isAutoAccept)
+                        isAutoReject = bundle.getBoolean("auto_reject", isAutoReject)
+                        isDryRun = false
+                        isStayInBackground = bundle.getBoolean("stay_in_background_v2", isStayInBackground)
+                        isSilenceAlertTone = bundle.getBoolean("silence_alert_tone", isSilenceAlertTone)
+                        isStrictVersionCheck = false
+                        licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
+                        licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
+                        isActivePolling = true
+                        pollIntervalSec = 0.0f
+                        parallelRequests = 3
+                        minOrderPrice = readDoubleFromBundle(bundle, "min_price", "min_order_price", minOrderPrice)
+                        maxDistToRestaurant = readDoubleFromBundle(bundle, "max_dist_rest", "max_dist_to_restaurant", maxDistToRestaurant)
+                        maxDistCustomer = readDoubleFromBundle(bundle, "max_dist_cust", "max_dist_restaurant_to_customer", maxDistCustomer)
+                        val bMax = bundle.get("max_orders_limit_str")?.toString()?.toIntOrNull() ?: bundle.getInt("max_orders_limit", 0)
+                        isExtraOrderEnabled = bundle.getBoolean("extra_order_enabled", bMax >= 3)
+                        maxOrdersLimit = if (isExtraOrderEnabled || bMax >= 3) 3 else 2
+                        isSoundEnabled = bundle.getBoolean("sound_enabled", isSoundEnabled)
+                        isShowToasts = false
+                        isFloatingOverlayEnabled = bundle.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+                        bundle.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
+                        LocationEngine.applySettingsBundle(bundle)
+                        DeviceSpoofer.applySettingsBundle(bundle)
+                    } else {
+                        // Our local overlay settings are newer than XposedProvider -> push them to XposedProvider!
+                        (appContext ?: currentActivity)?.let { pushQuickSettingsUpdateToProvider(it) }
+                    }
                     if (cachedAuthToken.isEmpty()) {
                         val savedTok = bundle.getString("cached_jahez_auth_token", "")?.trim() ?: ""
                         if (savedTok.isNotEmpty()) {
@@ -1177,31 +1257,8 @@ object OrderInterceptor {
                 }
             } catch (_: Throwable) {}
         }
-        loadFallbackConfigFile()
-
-        remotePrefs?.let { p ->
-            isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
-            isAutoAccept = p.getBoolean("auto_accept", isAutoAccept)
-            isAutoReject = p.getBoolean("auto_reject", isAutoReject)
-            isDryRun = p.getBoolean("dry_run", isDryRun)
-            isStayInBackground = p.getBoolean("stay_in_background_v2", isStayInBackground)
-            isSilenceAlertTone = p.getBoolean("silence_alert_tone", isSilenceAlertTone)
-            isStrictVersionCheck = p.getBoolean("strict_version_check", isStrictVersionCheck)
-            licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
-            licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
-            isActivePolling = true
-            pollIntervalSec = 0.0f
-            parallelRequests = 3
-            minOrderPrice = p.getString("min_price", p.getString("min_order_price", minOrderPrice.toString()))?.toDoubleOrNull() ?: minOrderPrice
-            maxDistToRestaurant = p.getString("max_dist_rest", p.getString("max_dist_to_restaurant", maxDistToRestaurant.toString()))?.toDoubleOrNull() ?: maxDistToRestaurant
-            maxDistCustomer = p.getString("max_dist_cust", p.getString("max_dist_restaurant_to_customer", maxDistCustomer.toString()))?.toDoubleOrNull() ?: maxDistCustomer
-            val pMax = p.getString("max_orders_limit_str", null)?.toIntOrNull() ?: p.getInt("max_orders_limit", 0)
-            isExtraOrderEnabled = p.getBoolean("extra_order_enabled", pMax >= 3)
-            maxOrdersLimit = if (isExtraOrderEnabled || pMax >= 3) 3 else 2
-            isSoundEnabled = p.getBoolean("sound_enabled", isSoundEnabled)
-            isShowToasts = false
-            isFloatingOverlayEnabled = p.getBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
-            p.getString("app_ui_language", null)?.let { if (it.isNotBlank()) appUiLanguage = it }
+        if (lastLocalOverlayModMs == 0L) {
+            loadFallbackConfigFile()
         }
     }
 
@@ -5296,6 +5353,24 @@ object OrderInterceptor {
             val edtMaxRest = makeFilterInput(if (isAr) "المطعم" else "Pickup", maxDistToRestaurant)
             val edtMaxCust = makeFilterInput(if (isAr) "العميل" else "Customer", maxDistCustomer)
 
+            fun applyTypedFiltersImmediately() {
+                minOrderPrice = edtMinPrice.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                maxDistToRestaurant = edtMaxRest.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                maxDistCustomer = edtMaxCust.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                pushQuickSettingsUpdateToProvider(activity)
+            }
+
+            val liveFilterWatcher = object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    applyTypedFiltersImmediately()
+                }
+            }
+            edtMinPrice.addTextChangedListener(liveFilterWatcher)
+            edtMaxRest.addTextChangedListener(liveFilterWatcher)
+            edtMaxCust.addTextChangedListener(liveFilterWatcher)
+
             inputsRow.addView(edtMinPrice)
             inputsRow.addView(edtMaxRest)
             inputsRow.addView(edtMaxCust)
@@ -5319,16 +5394,10 @@ object OrderInterceptor {
                 lp.setMargins(0, dp(6f), 0, 0)
                 layoutParams = lp
                 setOnClickListener {
-                    minOrderPrice = edtMinPrice.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                    maxDistToRestaurant = edtMaxRest.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                    maxDistCustomer = edtMaxCust.text.toString().trim().toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                    SettingsStore.setMinPrice(activity, minOrderPrice)
-                    SettingsStore.setMaxDistRest(activity, maxDistToRestaurant)
-                    SettingsStore.setMaxDistCust(activity, maxDistCustomer)
-                    pushQuickSettingsUpdateToProvider(activity)
+                    applyTypedFiltersImmediately()
                     Toast.makeText(
                         activity,
-                        if (isAr) "✅ تم حفظ الفلاتر فوراً" else "✅ Filters saved immediately",
+                        if (isAr) "✅ تم حفظ وتفعيل الفلاتر فوراً" else "✅ Filters saved & active immediately",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -5349,6 +5418,7 @@ object OrderInterceptor {
                     setColor(android.graphics.Color.parseColor("#2563EB"))
                 }
                 setOnClickListener {
+                    applyTypedFiltersImmediately()
                     dialog.dismiss()
                     try {
                         val launchIntent = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
@@ -5361,6 +5431,11 @@ object OrderInterceptor {
                 }
             }
             card.addView(btnOpenFullApp)
+
+            dialog.setOnDismissListener {
+                applyTypedFiltersImmediately()
+                if (activeQuickDialog === dialog) activeQuickDialog = null
+            }
 
             rootScroll.addView(card)
             dialog.setContentView(rootScroll)
@@ -5376,37 +5451,102 @@ object OrderInterceptor {
     }
 
     private fun pushQuickSettingsUpdateToProvider(context: Context) {
+        val modNow = System.currentTimeMillis()
+        lastLocalOverlayModMs = modNow
+        isExtraOrderEnabled = maxOrdersLimit >= 3
+        LocationEngine.isMasterRunning = isMasterRunning
+        DeviceSpoofer.isMasterRunning = isMasterRunning
+
+        // 1. Write synchronously to local target-app SharedPreferences (100% reliable in all modes including Non-Root --embed)
         try {
-            val extras = android.os.Bundle().apply {
-                putBoolean("master_running", isMasterRunning)
-                putBoolean("auto_accept", isAutoAccept)
-                putBoolean("auto_reject", isAutoReject)
-                putBoolean("dry_run", isDryRun)
-                putBoolean("show_food_price", true)
-                putInt("max_orders_limit", maxOrdersLimit)
-                putFloat("max_dist_rest", maxDistToRestaurant.toFloat())
-                putFloat("max_dist_cust", maxDistCustomer.toFloat())
-                putFloat("min_price", minOrderPrice.toFloat())
-                putBoolean("polling_enabled", true)
-                putInt("polling_interval", 0)
-                putInt("parallel_requests", 3)
-                putBoolean("mock_location_enabled", LocationEngine.isFakeLocationEnabled)
-                putDouble("fake_lat", LocationEngine.currentLat)
-                putDouble("fake_lng", LocationEngine.currentLng)
-                putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
-                putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
-                putFloat("route_sim_bearing", LocationEngine.currentBearing)
-                putBoolean("spoof_id_enabled", DeviceSpoofer.isSpoofAndroidId)
-                putString("fake_android_id", DeviceSpoofer.spoofedAndroidId)
-                putString("app_language", appUiLanguage)
-                putBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
-            }
+            val sp = context.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            sp.edit()
+                .putLong("last_settings_mod_ms", modNow)
+                .putBoolean("master_running", isMasterRunning)
+                .putBoolean("enabled", isMasterRunning)
+                .putBoolean("auto_accept", isAutoAccept)
+                .putBoolean("auto_reject", isAutoReject)
+                .putBoolean("dry_run", false)
+                .putBoolean("show_food_price", true)
+                .putBoolean("extra_order_enabled", isExtraOrderEnabled)
+                .putInt("max_orders_limit", maxOrdersLimit)
+                .putString("max_orders_limit_str", maxOrdersLimit.toString())
+                .putString("min_price", minOrderPrice.toString())
+                .putString("min_order_price", minOrderPrice.toString())
+                .putBoolean("price_gate_enabled", minOrderPrice > 0.0)
+                .putString("max_dist_rest", maxDistToRestaurant.toString())
+                .putString("max_dist_to_restaurant", maxDistToRestaurant.toString())
+                .putBoolean("restaurant_gate_enabled", maxDistToRestaurant > 0.0)
+                .putString("max_dist_cust", maxDistCustomer.toString())
+                .putString("max_dist_restaurant_to_customer", maxDistCustomer.toString())
+                .putBoolean("customer_gate_enabled", maxDistCustomer > 0.0)
+                .putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                .putString("fake_lat", LocationEngine.currentLat.toString())
+                .putString("fake_lng", LocationEngine.currentLng.toString())
+                .putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                .putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                .putFloat("route_sim_bearing", LocationEngine.currentBearing)
+                .putBoolean("spoof_android_id", DeviceSpoofer.isSpoofAndroidId)
+                .putString("spoofed_android_id", DeviceSpoofer.spoofedAndroidId)
+                .putString("app_ui_language", appUiLanguage)
+                .putBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+                .commit()
+        } catch (_: Throwable) {}
+
+        // 2. Build Bundle with exact keys & String/Boolean/Int/Float types expected by XposedProvider and SettingsStore
+        val extras = android.os.Bundle().apply {
+            putLong("last_settings_mod_ms", modNow)
+            putBoolean("master_running", isMasterRunning)
+            putBoolean("enabled", isMasterRunning)
+            putBoolean("auto_accept", isAutoAccept)
+            putBoolean("auto_reject", isAutoReject)
+            putBoolean("dry_run", false)
+            putBoolean("show_food_price", true)
+            putBoolean("extra_order_enabled", isExtraOrderEnabled)
+            putInt("max_orders_limit", maxOrdersLimit)
+            putString("max_orders_limit_str", maxOrdersLimit.toString())
+            putString("min_price", minOrderPrice.toString())
+            putString("min_order_price", minOrderPrice.toString())
+            putBoolean("price_gate_enabled", minOrderPrice > 0.0)
+            putString("max_dist_rest", maxDistToRestaurant.toString())
+            putString("max_dist_to_restaurant", maxDistToRestaurant.toString())
+            putBoolean("restaurant_gate_enabled", maxDistToRestaurant > 0.0)
+            putString("max_dist_cust", maxDistCustomer.toString())
+            putString("max_dist_restaurant_to_customer", maxDistCustomer.toString())
+            putBoolean("customer_gate_enabled", maxDistCustomer > 0.0)
+            putBoolean("active_polling", true)
+            putFloat("poll_interval_sec", 0.0f)
+            putInt("parallel_requests", 3)
+            putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+            putString("fake_lat", LocationEngine.currentLat.toString())
+            putString("fake_lng", LocationEngine.currentLng.toString())
+            putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+            putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+            putFloat("route_sim_bearing", LocationEngine.currentBearing)
+            putBoolean("spoof_android_id", DeviceSpoofer.isSpoofAndroidId)
+            putString("spoofed_android_id", DeviceSpoofer.spoofedAndroidId)
+            putString("app_ui_language", appUiLanguage)
+            putBoolean("floating_overlay_enabled", isFloatingOverlayEnabled)
+        }
+
+        // 3. Push via ContentProvider ("updateSettingsFromFloating")
+        try {
             context.contentResolver.call(
                 android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
-                "push_settings",
+                "updateSettingsFromFloating",
                 null,
                 extras
             )
+        } catch (_: Throwable) {}
+
+        // 4. Also send explicit component Broadcast to SanedReceiver as fallback
+        try {
+            val bIntent = Intent("dev.saned.assistant.ACTION_UPDATE_SETTINGS_FROM_OVERLAY").apply {
+                component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                putExtras(extras)
+            }
+            context.sendBroadcast(bIntent)
         } catch (_: Throwable) {}
     }
 }

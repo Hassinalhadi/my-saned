@@ -76,6 +76,10 @@ object LocationEngine {
 
     private fun syncFromPrefs() {
         remotePrefs?.let { p ->
+            val pMod = p.getLong("last_settings_mod_ms", 0L)
+            if (OrderInterceptor.lastLocalOverlayModMs > 0L && pMod < OrderInterceptor.lastLocalOverlayModMs) {
+                return
+            }
             isMasterRunning = p.getBoolean("master_running", p.getBoolean("enabled", isMasterRunning))
             isFakeLocationEnabled = p.getBoolean("fake_location_enabled", isFakeLocationEnabled)
             isFixLocationUnknownEnabled = p.getBoolean("fix_location_unknown", p.getBoolean("high_accuracy_location", isFixLocationUnknownEnabled))
@@ -96,6 +100,10 @@ object LocationEngine {
     }
 
     fun applySettingsBundle(b: Bundle) {
+        val bMod = b.getLong("last_settings_mod_ms", 0L)
+        if (OrderInterceptor.lastLocalOverlayModMs > 0L && bMod < OrderInterceptor.lastLocalOverlayModMs) {
+            return
+        }
         isMasterRunning = b.getBoolean("master_running", b.getBoolean("enabled", isMasterRunning))
         isFakeLocationEnabled = b.getBoolean("fake_location_enabled", isFakeLocationEnabled)
         isFixLocationUnknownEnabled = b.getBoolean("fix_location_unknown", isFixLocationUnknownEnabled)
