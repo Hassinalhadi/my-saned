@@ -890,7 +890,7 @@ class MainActivity : AppCompatActivity() {
         // Server Polling card is kept initialized in memory (locked to ON, Interval=0, Parallel=3) but hidden from Settings UI
         val hiddenPollingCard = createPollingCard().apply { visibility = View.GONE }
         mainLayout.addView(hiddenPollingCard)
-        mainLayout.addView(createAndroidIdCard().apply { visibility = View.GONE })
+        mainLayout.addView(createAndroidIdCard())
         // Location Shortcut card is kept in memory with camouflaged title but hidden from Settings UI
         val hiddenLocShortcutCard = createLocationShortcutCard().apply { visibility = View.GONE }
         mainLayout.addView(hiddenLocShortcutCard)
@@ -2199,8 +2199,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = tr("📱 معرف وبصمة الجهاز", "📱 Device Identifier")
-            textSize = 16f
+            text = tr("📱 تغيير معرف الجهاز (Change Android ID)", "📱 Change Android ID")
+            textSize = 16.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
             setPadding(0, 0, 0, 8)
@@ -2209,17 +2209,20 @@ class MainActivity : AppCompatActivity() {
 
         val note = TextView(this).apply {
             text = tr(
-                "ملاحظة: يستخدم التطبيق معرف الجهاز عند تسجيل الدخول. يتيح لك هذا الخيار تخصيص أو توليد معرف جهاز جديد.",
-                "Note: The target app uses the device identifier on the login screen. Modifying this changes the reported device ID."
+                "يتيح لك هذا الخيار تفعيل أو توليد معرف جهاز (Android ID) جديد لتسجيل الدخول بدون حظر الجهاز:",
+                "Enable or generate a custom 16-character Android ID reported to the target app on login:"
             )
-            textSize = 11.5f
+            textSize = 12.5f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 12)
         }
         layout.addView(note)
 
         chkAndroidId = CheckBox(this).apply {
-            text = tr("تفعيل معرف الجهاز المخصص", "Enable Custom Device Identifier")
+            text = tr("تفعيل تغيير معرف الجهاز (Change Android ID)", "Enable Custom Android ID")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(12, 18, 12, 18)
             isChecked = SettingsStore.isSpoofAndroidId(this@MainActivity)
             setOnCheckedChangeListener { _, isChecked ->
                 SettingsStore.setSpoofAndroidId(this@MainActivity, isChecked)
@@ -2230,38 +2233,61 @@ class MainActivity : AppCompatActivity() {
         edtAndroidId = EditText(this).apply {
             hint = tr("أدخل 16 رمزاً سداسياً عشرياً", "Enter 16 hexadecimal characters")
             setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))
-            textSize = 14f
+            textSize = 15.5f
             typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#0F172A"))
+            background = roundedBg("#F8FAFC", 12f, "#CBD5E1", 2)
+            setPadding(24, 22, 24, 22)
             setSingleLine(true)
         }
         layout.addView(edtAndroidId)
 
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 8, 0, 0)
+            setPadding(0, 14, 0, 0)
         }
 
         val btnGen = Button(this).apply {
-            text = tr("🎲 توليد عشوائي", "🎲 Generate Random ID")
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            text = tr("🎲 توليد معرف جديد", "🎲 Generate New ID")
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#4F46E5"))
+            setPadding(20, 26, 20, 26)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
             setOnClickListener {
-                edtAndroidId.setText(generateRandomAndroidId())
+                val newId = generateRandomAndroidId()
+                edtAndroidId.setText(newId)
                 chkAndroidId.isChecked = true
+                SettingsStore.setSpoofAndroidId(this@MainActivity, true)
+                SettingsStore.setSpoofedAndroidId(this@MainActivity, newId)
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("✅ تم توليد وتفعيل معرف جهاز جديد: $newId", "✅ Generated & enabled new Android ID: $newId"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         btnRow.addView(btnGen)
 
         val btnCopy = Button(this).apply {
             text = tr("📋 نسخ المعرف", "📋 Copy ID")
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#0284C7"))
+            setPadding(20, 26, 20, 26)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(8, 0, 0, 0)
+            }
             setOnClickListener {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clip.setPrimaryClip(ClipData.newPlainText("Device ID", edtAndroidId.text.toString().trim()))
                 Toast.makeText(
                     this@MainActivity,
-                    tr("تم نسخ معرف الجهاز إلى الحافظة", "Device ID copied to clipboard"),
+                    tr("تم نسخ معرف الجهاز إلى الحافظة", "Android ID copied to clipboard"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
