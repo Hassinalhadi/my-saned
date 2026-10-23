@@ -3928,6 +3928,7 @@ object OrderInterceptor {
                 syncedOrdersCache[primaryKey] = order.toJson()
             }
         }
+        refreshFloatingAppOrdersIfVisible()
 
         if (ctx != null) {
             // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
@@ -4698,17 +4699,63 @@ object OrderInterceptor {
         }
     }
 
-    // =========================================================================
-    // FLOATING OVERLAY ICON (EXACT 10.JPG) & IN-SANED QUICK CONTROL PANEL
+    // ==========================================================================
+    // FLOATING OVERLAY ICON (EXACT 10.JPG) & FULL FLOATING SANED ASSISTANT APP
     // =========================================================================
     private const val FLOATING_BUBBLE_TAG = "SANED_FLOATING_OVERLAY_BUBBLE"
     private const val FLOATING_DOT_TAG = "SANED_FLOATING_STATUS_DOT"
+    private const val FLOATING_WINDOW_TAG = "SANED_FLOATING_FULL_APP_WINDOW"
     private const val FLOATING_ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAMAAAD04JH5AAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAAA/1BMVEURFh5bX2ggim7b3eEYGCUSFR0AAFUSFSAkfGZ0doEQGCcQuYIAAAD29/gRFyUEChgNuH4TwYkMJSkKEh0ONzUTV0kWZlMbpXsah2gODiEbl3Lo6u0htogZe2IRSkLGys4jrIKjp60PExsRFyIQFiIPRDwYc1plaXKRlZwPFBckl3ckKTU2O0dFSlTR1dk9Qk2ZnaS9wccio3yFiI8SFRxcYmkAADwQFB0brYC6vcLe4eUrMDtVWmR8gIaztrsQDxgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC4+W26AAAAQHRSTlOa////HcsDWP///v8A/8P//////v//////////////////MnWw/////xP/////////////Tf8Eaf////////8nAnqwWwAAB9lJREFUeNrNmwdz4joQgJ1cckUOCEvu2KYTWoC0S73k//+rp2bjjsECv71Jhst42E+r1e5aKyk3OTJ/UtpArrTHoyf61T/TupSM9uFoDE4jBOL7Zh/A06m0CxkPb27+FgMM2+DkMv4utMBcAecQ/FIAcI7hCyPkAvwCZ5TvNMDPmydwVhmmLXBm/TsCAXAFzi5XcYDv8+sH7XkMYNwAAFBYXGYACmhEnkILDJvRD/BcALQbAgAjkhaU5gxAZM4scN0cADGB0qQBQJta4KVBABIPlabWYDgHyrxJ/WQOlKdGAcBQUZoFeFHazQKMagA4mPxCiIRUXKM6O24GMEATw7Rd17Us17V909BRHoaB9nrhUQC6aVuqqmmqEPLJs2xDTz+H+r50AAfoU5fp7nTUhJC/uSaKm8EJVNWQDTCxVU0tFO3Vj5vBV9W+LhUgIIPvFOsnVtE8O1KJLLWjLpA0AKyT0Xc6ZQB0XjRvihyO65FnNR/LAjCTo9c0r28x8WL+SCE0i8+8z583pAA4urvTQH5e3akR6IiJHhi+mzCE5yM2A0xK3aAyQNBXO6GR1Vc/QAA7OzqIgW7YamxpLHQYeOFnVBsAG140x+rCRAUL1HwIETpqf+KH86JNcV0Aczf7CwMUfh1GBKETTpMVfuiUuEElAGx60bhM5JQ+iqaeml0nxW5QBYDoD7/I1vfmHTxxNeGoMa8tdIMqAIYmhq+aleYL2XH9NDKQVGHgYwEcFk6YHYOKaZearG8LB1TVB5smy6MtoIfr70GvnPax0Z9MNaLcWkyZbqeGE7piFg/Qz+qUhWubNFrUzIZ0AewPZ7mWQ5WA9wHooS8FNcquOgC2xtOLma8fUnFOCBAIB7BxnnLwcfd8e/t5t8TwVAC2iH9ZB4Tgbtbrtph07x9Xx9qhFMAJDZCZAAfc9loJ+bqDJ7CAreXHUbi6b2VksISyAXRhACNlXnjbypMfxxihFMAUCTg9/kehcb29vdtsLi4G78wTWq1nKBfAzfWAUP/XBV+FRFDoEYcTlAGIIPSK8uzffYYwvib+cYINlAeATV5SJd+unBVT1Et7HLxja3It0wI8CqpB8q9vTH82ycBVl/rBDEoDEFV1JzED8JnZf5kXGS+YbVaOLADhAm7yr71iX4MzuhK2UBaAIUrq5ExT/W8wlg/AzhnRO7OOJACH+6CWiEJkkEQuQpXwc9DrbaP4A9lSuIWSLCCKuklmBnaePuBr7zH0CLZCBnIBkpXQB11r4SzDQUukw38wxteT5QO8GLRQygW6oY3hZ6i/1fqAOzc8zAlKACzqA1oSgEXBda+3XvfIv10e6r317om8/WDRUBLAJXv3t9H+NJiSZDjWmaBjIiF/+Qf1AHT+WmfL2SPiAF8zJo9vsWJkO6Cy7WVioc6LWl8SgHBCLhuhvdt6DxPzlv4XZctaWQBgSf1+wJc9igoTEpqF0nVmGYp4akI5AJja+D0cIuZFwPun+HbMbJLIhzynZ6u6YwH4oKNgCz8I0ADBRKD+TAD4HCCQtVO6SlYd8I0GRhSPkz/ywpmnywKAX4nQC+5jsR+y1PCYjALWnn2yQwEclo9bUQKMAfCCJBWIxSKw5W1W82F2VzANwGJEt/Un6e58q04zJfYLlized0VNEAGIguwrt6xL5fR6ALwoInPNnJ8DYPjBS4P3ZWqrRs2m1LoAoi4l7v5vJVYB2Mx4Yo5mJgQQRU39ndIMAVfYm5HQ19uGefk9/Vqii/2tCZAKAOBmnZcFvzKvxzbdYexoLpAMQN7EZjHFwvx/Mo9NmAE6moFlA9D3oG03Pvr1Y87uwCWfgQcE5AMABy5vB3yPptubfQKY827J9WsmOAUAfytZrjabFQIwJ9k6en/vGqwJwA1RlOiRaOJoBjglQHHlIDpWxdXgQQBIDw7UP1XVSlu8e/eKMUAB7RT/RodsVocOqHomPhqAFFFoYvquxXq1xm/PgIeOv6Qa3g+gG1PXUsNGsUVdyqyoH/me6LG4Ndr3v1k3NNaoJZ9sVMEIWHcFtWbt3+MvBkCLqEu6E6vCrr0ZtliIAzo1AMKXqli7lvzy/FJfdMDkMnq2Uo+jbJvO2A3ftaKWdX+qY6doyei2FzUurUo9lrJliP1o/EYYV+kJgb6dn9+Rwdr7IXO1Hk9pHBBuQPOZo7teNBn0rMYEJYZOIpVvpdvn9bfrdT6fGm2YJHuyGlmYvhFM6Lv/xCDR4jV2soN2eKVsVouiUvSeceBq6VMrO56E2NWj5p5QzF/twooCma9aIjJ01PRSpY1ayzggaezLBcQNOtquZYWmr1rpERJNfTARkAjAokH83RqZVskpHtU1DlJfAQAbXrKkwWS1WeIkE50D8tMRHmFNJ+DQ/maFeuDyMvOlJEvaD1RnKKq3sMnKPKK7WgEA6bkxF+mGOfVt2/Z9dp4GHNc4bNc6T4jFCboazdtx8wcaGz/S2fCh1rly1egctG+UZi43RC7wfzjaPW90Bujx/gbn4Bc93t/8BYfmTPAi7pjMcTP6r6N7Ri9NLQEB8LOZSRixq5firlkD+seJy27DJkJA4rrfuQmu5+kbl+claM+zVz6/z5gWx1d5l17nyvn8v+De8dNZItL1sOTm9ej0sz8qv/o9H53UFdq/9tw9/8tuv7dPNfjhzd7L7/xm+nA0Grelynj0Mo++Pi7/Aeh661RPCdcgAAAAAElFTkSuQmCC"
 
     @Volatile private var cachedFloatingBitmap: android.graphics.Bitmap? = null
     @Volatile private var savedBubbleX: Int = -1
     @Volatile private var savedBubbleY: Int = -1
-    @Volatile private var activeFloatingDialog: Dialog? = null
+    @Volatile private var savedWindowY: Int = -1
+    @Volatile private var isFloatingWindowExpanded: Boolean = false
+    @Volatile private var isFloatingWindowMaximized: Boolean = false
+    @Volatile private var floatingCurrentTab: Int = 0 // 0 = Orders, 1 = Settings, 2 = Logs, 3 = Map
+
+    // Persistent 2-Point Route Simulator State inside Floating App
+    private val flRouteWaypoints = java.util.concurrent.CopyOnWriteArrayList<Pair<Double, Double>>()
+    @Volatile private var flRouteCumulativeMeters = DoubleArray(0)
+    @Volatile private var flRouteTotalMeters: Double = 0.0
+    @Volatile private var flRouteTraveledMeters: Double = 0.0
+    @Volatile private var flRouteSimSpeedKmh: Float = 45.0f
+    @Volatile private var flIsVariableSpeedMode: Boolean = true
+    @Volatile private var flRouteSimMinSpeedKmh: Float = 30.0f
+    @Volatile private var flRouteSimMaxSpeedKmh: Float = 75.0f
+    @Volatile private var flRouteSimCurrentDynamicSpeedKmh: Float = 45.0f
+    @Volatile private var flRouteTickCounter: Int = 0
+    @Volatile private var flIsRouteSimRunning: Boolean = false
+    @Volatile private var flIsRouteSimPaused: Boolean = false
+    @Volatile private var flIsRouteSimLooping: Boolean = false
+    @Volatile private var flIsRouteSimForward: Boolean = true
+    @Volatile private var flMapTapMode: String = "point2"
+    @Volatile private var flPoint1Lat: Double = 24.803508
+    @Volatile private var flPoint1Lng: Double = 46.604578
+    @Volatile private var flPoint2Lat: Double = 24.812500
+    @Volatile private var flPoint2Lng: Double = 46.615200
+    @Volatile private var flLogsFilterMode: Int = 0 // 0 = All, 1 = Errors, 2 = NavLog
+
+    // Active Floating Window UI References
+    @Volatile private var activeFloatingOrdersContainer: android.widget.LinearLayout? = null
+    @Volatile private var activeFloatingMissedContainer: android.widget.LinearLayout? = null
+    @Volatile private var activeFloatingMissedHeader: android.widget.LinearLayout? = null
+    @Volatile private var activeFloatingMissedBadge: TextView? = null
+    @Volatile private var activeFloatingEmptyOrdersTv: TextView? = null
+    @Volatile private var activeFloatingPingStatusTv: TextView? = null
+    @Volatile private var activeFloatingPingDetailsTv: TextView? = null
+    @Volatile private var activeFloatingDiagConsoleTv: TextView? = null
+    @Volatile private var activeFloatingDiagSummaryTv: TextView? = null
+    @Volatile private var activeFloatingMapWebView: android.webkit.WebView? = null
+    @Volatile private var activeFloatingRouteStatusTv: TextView? = null
+    @Volatile private var activeFloatingRouteMetricsTv: TextView? = null
+    @Volatile private var activeFloatingTwoPointSummaryTv: TextView? = null
+    @Volatile private var activeFloatingStartSimBtn: android.widget.Button? = null
+    @Volatile private var activeFloatingPauseSimBtn: android.widget.Button? = null
+    @Volatile private var activeFloatingEdtLat: android.widget.EditText? = null
+    @Volatile private var activeFloatingEdtLng: android.widget.EditText? = null
+    @Volatile private var activeFloatingChkFakeLoc: android.widget.CheckBox? = null
 
     private fun ftr(ar: String, en: String): String =
         if (appUiLanguage.lowercase(Locale.US).startsWith("en")) en else ar
@@ -4725,6 +4772,120 @@ object OrderInterceptor {
         }
     }
 
+    private fun refreshFloatingAppOrdersIfVisible() {
+        val container = activeFloatingOrdersContainer ?: return
+        mainHandler.post {
+            try {
+                val act = currentActivity ?: return@post
+                if (isFloatingWindowExpanded && container.isAttachedToWindow) {
+                    populateFloatingOrdersList(act)
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private val flRouteSimTickRunnable = object : Runnable {
+        override fun run() {
+            if (!flIsRouteSimRunning || flIsRouteSimPaused || flRouteWaypoints.size < 2 || flRouteTotalMeters <= 0.5) return
+            val tickSec = 0.5
+            flRouteTickCounter++
+
+            val currentSpdKmh: Float = if (flIsVariableSpeedMode) {
+                val minS = kotlin.math.min(flRouteSimMinSpeedKmh, flRouteSimMaxSpeedKmh).coerceAtLeast(5.0f)
+                val maxS = kotlin.math.max(flRouteSimMinSpeedKmh, flRouteSimMaxSpeedKmh).coerceAtLeast(minS + 2.0f)
+                val midS = (minS + maxS) / 2.0f
+                val halfSpan = (maxS - minS) / 2.0f
+                val wave = kotlin.math.sin(flRouteTickCounter * 0.22) * 0.65 + kotlin.math.cos(flRouteTickCounter * 0.09) * 0.35
+                (midS + (halfSpan * wave).toFloat()).coerceIn(minS, maxS)
+            } else {
+                flRouteSimSpeedKmh.coerceIn(5.0f, 220.0f)
+            }
+            flRouteSimCurrentDynamicSpeedKmh = currentSpdKmh
+
+            val speedMps = (currentSpdKmh / 3.6)
+            val stepMeters = speedMps * tickSec
+
+            if (flIsRouteSimForward) {
+                flRouteTraveledMeters += stepMeters
+                if (flRouteTraveledMeters >= flRouteTotalMeters) {
+                    if (flIsRouteSimLooping) {
+                        flRouteTraveledMeters = flRouteTotalMeters
+                        flIsRouteSimForward = false
+                    } else {
+                        flRouteTraveledMeters = flRouteTotalMeters
+                        val lastPt = flRouteWaypoints.last()
+                        val prevPt = flRouteWaypoints[flRouteWaypoints.size - 2]
+                        val finalBrg = LocationEngine.calculateBearing(prevPt.first, prevPt.second, lastPt.first, lastPt.second)
+                        LocationEngine.isFakeLocationEnabled = true
+                        LocationEngine.updateLiveRouteState(lastPt.first, lastPt.second, 0.0f, finalBrg, false)
+                        currentActivity?.let { pushFloatingSettingsToAssistant(it) }
+                        flIsRouteSimRunning = false
+                        flIsRouteSimPaused = false
+                        activeFloatingPauseSimBtn?.visibility = View.GONE
+                        activeFloatingStartSimBtn?.text = ftr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+                        updateFloatingSimCoordinateInputs(lastPt.first, lastPt.second, finalBrg)
+                        updateFloatingRouteBannerUI()
+                        updateFloatingRouteMetricsUI()
+                        return
+                    }
+                }
+            } else {
+                flRouteTraveledMeters -= stepMeters
+                if (flRouteTraveledMeters <= 0.0) {
+                    flRouteTraveledMeters = 0.0
+                    flIsRouteSimForward = true
+                }
+            }
+
+            var segIdx = 0
+            while (segIdx < flRouteCumulativeMeters.size - 2 && flRouteCumulativeMeters[segIdx + 1] < flRouteTraveledMeters) {
+                segIdx++
+            }
+            val segStartM = flRouteCumulativeMeters[segIdx]
+            val segEndM = flRouteCumulativeMeters[segIdx + 1]
+            val segLen = (segEndM - segStartM).coerceAtLeast(0.001)
+            val frac = ((flRouteTraveledMeters - segStartM) / segLen).coerceIn(0.0, 1.0)
+
+            val p1 = flRouteWaypoints[segIdx]
+            val p2 = flRouteWaypoints[segIdx + 1]
+            val curLat = p1.first + (p2.first - p1.first) * frac
+            val curLng = p1.second + (p2.second - p1.second) * frac
+            val segBearing = if (flIsRouteSimForward) {
+                LocationEngine.calculateBearing(p1.first, p1.second, p2.first, p2.second)
+            } else {
+                LocationEngine.calculateBearing(p2.first, p2.second, p1.first, p1.second)
+            }
+
+            LocationEngine.isFakeLocationEnabled = true
+            LocationEngine.updateLiveRouteState(curLat, curLng, currentSpdKmh, segBearing, true)
+            if (flRouteTickCounter % 4 == 0) {
+                currentActivity?.let { pushFloatingSettingsToAssistant(it) }
+            }
+            activeFloatingStartSimBtn?.text = ftr(
+                "🚗 يتحرك (${currentSpdKmh.toInt()} كم/س)",
+                "🚗 Moving (${currentSpdKmh.toInt()} km/h)"
+            )
+            updateFloatingSimCoordinateInputs(curLat, curLng, segBearing)
+            updateFloatingRouteBannerUI()
+            updateFloatingRouteMetricsUI()
+
+            if (flIsRouteSimRunning && !flIsRouteSimPaused) {
+                mainHandler.postDelayed(this, 500L)
+            }
+        }
+    }
+
+    private fun updateFloatingSimCoordinateInputs(lat: Double, lng: Double, bearing: Float) {
+        val rLat = String.format(Locale.US, "%.6f", lat)
+        val rLng = String.format(Locale.US, "%.6f", lng)
+        activeFloatingEdtLat?.setText(rLat)
+        activeFloatingEdtLng?.setText(rLng)
+        activeFloatingMapWebView?.let { wv ->
+            val pct = if (flRouteTotalMeters > 0) ((flRouteTraveledMeters / flRouteTotalMeters) * 100.0).coerceIn(0.0, 100.0) else 0.0
+            wv.evaluateJavascript("if(window.setDriverPin) window.setDriverPin($lat, $lng, $bearing, false, $pct);", null)
+        }
+    }
+
     fun attachFloatingOverlayToActivity(activity: Activity) {
         mainHandler.post {
             try {
@@ -4732,16 +4893,27 @@ object OrderInterceptor {
                 val decor = activity.window?.decorView as? ViewGroup ?: return@post
                 val contentFrame = decor.findViewById<ViewGroup>(android.R.id.content) ?: decor
 
-                val existing = contentFrame.findViewWithTag<View>(FLOATING_BUBBLE_TAG)
+                val existingBubble = contentFrame.findViewWithTag<View>(FLOATING_BUBBLE_TAG)
+                val existingWin = contentFrame.findViewWithTag<View>(FLOATING_WINDOW_TAG)
                 if (!isFloatingOverlayEnabled) {
-                    if (existing != null) contentFrame.removeView(existing)
+                    if (existingBubble != null) contentFrame.removeView(existingBubble)
+                    if (existingWin != null) contentFrame.removeView(existingWin)
                     return@post
                 }
 
-                if (existing != null) {
-                    existing.bringToFront()
-                    updateFloatingDotAppearance(existing)
+                if (existingBubble != null) {
+                    existingWin?.let { w ->
+                        w.visibility = if (isFloatingWindowExpanded) View.VISIBLE else View.GONE
+                        if (isFloatingWindowExpanded) w.bringToFront()
+                    }
+                    existingBubble.bringToFront()
+                    updateFloatingDotAppearance(existingBubble)
                     return@post
+                }
+
+                if (LocationEngine.currentLat != 0.0 && LocationEngine.currentLng != 0.0) {
+                    flPoint1Lat = LocationEngine.currentLat
+                    flPoint1Lng = LocationEngine.currentLng
                 }
 
                 val dm = activity.resources.displayMetrics
@@ -4756,7 +4928,7 @@ object OrderInterceptor {
 
                 val bubbleContainer = android.widget.FrameLayout(activity).apply {
                     tag = FLOATING_BUBBLE_TAG
-                    elevation = 48f * density
+                    elevation = 80f * density
                     val lp = android.widget.FrameLayout.LayoutParams(sizePx, sizePx).apply {
                         gravity = android.view.Gravity.TOP or android.view.Gravity.START
                         leftMargin = initX
@@ -4867,7 +5039,7 @@ object OrderInterceptor {
                                 savedBubbleX = snapX
                                 savedBubbleY = lp.topMargin
                             } else if (!longPressTriggered && ev.actionMasked == MotionEvent.ACTION_UP) {
-                                showFloatingControlPanel(activity, bubbleContainer)
+                                toggleFloatingFullAppWindow(activity, contentFrame, bubbleContainer)
                             }
                             true
                         }
@@ -4876,8 +5048,2012 @@ object OrderInterceptor {
                 }
 
                 contentFrame.addView(bubbleContainer)
+                if (isFloatingWindowExpanded) {
+                    ensureFloatingFullAppWindowAdded(activity, contentFrame, bubbleContainer)
+                }
                 bubbleContainer.bringToFront()
             } catch (_: Throwable) {}
+        }
+    }
+
+    private fun toggleFloatingFullAppWindow(activity: Activity, contentFrame: ViewGroup, bubbleContainer: View) {
+        val existingWin = contentFrame.findViewWithTag<View>(FLOATING_WINDOW_TAG)
+        if (existingWin != null) {
+            if (existingWin.visibility == View.VISIBLE) {
+                existingWin.visibility = View.GONE
+                isFloatingWindowExpanded = false
+            } else {
+                existingWin.visibility = View.VISIBLE
+                isFloatingWindowExpanded = true
+                existingWin.bringToFront()
+                bubbleContainer.bringToFront()
+                populateFloatingOrdersList(activity)
+                if (floatingCurrentTab == 3) {
+                    activeFloatingMapWebView?.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)
+                }
+            }
+            return
+        }
+        isFloatingWindowExpanded = true
+        ensureFloatingFullAppWindowAdded(activity, contentFrame, bubbleContainer)
+    }
+
+    private fun rebuildFloatingFullAppWindow(activity: Activity, contentFrame: ViewGroup, bubbleContainer: View) {
+        try {
+            val oldWin = contentFrame.findViewWithTag<View>(FLOATING_WINDOW_TAG)
+            if (oldWin != null) contentFrame.removeView(oldWin)
+            isFloatingWindowExpanded = true
+            ensureFloatingFullAppWindowAdded(activity, contentFrame, bubbleContainer)
+        } catch (_: Throwable) {}
+    }
+
+    private fun ensureFloatingFullAppWindowAdded(activity: Activity, contentFrame: ViewGroup, bubbleContainer: View) {
+        try {
+            val existing = contentFrame.findViewWithTag<View>(FLOATING_WINDOW_TAG)
+            if (existing != null) {
+                existing.visibility = View.VISIBLE
+                existing.bringToFront()
+                bubbleContainer.bringToFront()
+                return
+            }
+
+            val dm = activity.resources.displayMetrics
+            val density = dm.density
+            fun dp(v: Float): Int = (v * density).toInt()
+            fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+                return android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = radiusDp * density
+                    setColor(android.graphics.Color.parseColor(hex))
+                    if (strokeHex != null && strokePx > 0) {
+                        setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                    }
+                }
+            }
+
+            val isAr = !appUiLanguage.lowercase(Locale.US).startsWith("en")
+            val winW = if (isFloatingWindowMaximized) (dm.widthPixels * 0.98f).toInt() else (dm.widthPixels * 0.94f).toInt()
+            val winH = if (isFloatingWindowMaximized) (dm.heightPixels * 0.90f).toInt() else (dm.heightPixels * 0.80f).toInt()
+            val initTop = if (savedWindowY >= 0) savedWindowY.coerceIn(dp(16f), (dm.heightPixels - winH).coerceAtLeast(dp(16f))) else ((dm.heightPixels - winH) / 2).coerceAtLeast(dp(20f))
+
+            val windowCard = android.widget.LinearLayout(activity).apply {
+                tag = FLOATING_WINDOW_TAG
+                orientation = android.widget.LinearLayout.VERTICAL
+                layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+                background = roundBg("#F8F7FC", 20f, "#6366F1", dp(2f))
+                elevation = 64f * density
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, 20f * density)
+                    }
+                }
+                layoutParams = android.widget.FrameLayout.LayoutParams(winW, winH).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+                    topMargin = initTop
+                }
+            }
+
+            // ================= 1. TOP BAR (Draggable Floating Header + Full App Controls) =================
+            val topBar = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setBackgroundColor(android.graphics.Color.WHITE)
+                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                elevation = 4f * density
+            }
+
+            val topIcon = android.widget.ImageView(activity).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(dp(30f), dp(30f)).apply {
+                    setMargins(dp(4f), 0, dp(8f), 0)
+                }
+                getFloatingIconBitmap()?.let { setImageBitmap(it) }
+            }
+            topBar.addView(topIcon)
+
+            val appTitle = TextView(activity).apply {
+                text = ftr("مساعد ساند", "Saned Assistant")
+                textSize = 16.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#1E1B2E"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            topBar.addView(appTitle)
+
+            // Dragging the topBar moves the floating window vertically on Saned's screen
+            var winDownRawY = 0f
+            var winStartTop = 0
+            topBar.setOnTouchListener { _, ev ->
+                val lp = windowCard.layoutParams as? android.widget.FrameLayout.LayoutParams ?: return@setOnTouchListener false
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        winDownRawY = ev.rawY
+                        winStartTop = lp.topMargin
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = (ev.rawY - winDownRawY).toInt()
+                        val maxTop = (dm.heightPixels - lp.height - dp(12f)).coerceAtLeast(dp(12f))
+                        lp.topMargin = (winStartTop + dy).coerceIn(dp(12f), maxTop)
+                        windowCard.layoutParams = lp
+                        savedWindowY = lp.topMargin
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            val btnLangSwitch = TextView(activity).apply {
+                text = if (isAr) "EN 🌐" else "عربي 🌐"
+                textSize = 11.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#4F46E5"))
+                background = roundBg("#EDE9FE", 8f)
+                setPadding(dp(8f), dp(5f), dp(8f), dp(5f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(dp(3f), 0, dp(3f), 0) }
+                setOnClickListener {
+                    appUiLanguage = if (isAr) "en" else "ar"
+                    pushFloatingSettingsToAssistant(activity)
+                    rebuildFloatingFullAppWindow(activity, contentFrame, bubbleContainer)
+                }
+            }
+            topBar.addView(btnLangSwitch)
+
+            val btnSimTop = TextView(activity).apply {
+                text = "⚡"
+                textSize = 15f
+                setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                setOnClickListener {
+                    simulateTestOrder()
+                    populateFloatingOrdersList(activity)
+                }
+            }
+            topBar.addView(btnSimTop)
+
+            val btnClearTop = TextView(activity).apply {
+                text = "🗑️"
+                textSize = 15f
+                setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                setOnClickListener {
+                    synchronized(syncedOrdersCache) { syncedOrdersCache.clear() }
+                    loggedOrderIds.clear()
+                    liveActiveOrderMap.clear()
+                    try { File("/data/local/tmp/saned_orders.json").writeText("[]") } catch (_: Throwable) {}
+                    populateFloatingOrdersList(activity)
+                }
+            }
+            topBar.addView(btnClearTop)
+
+            val btnResizeWin = TextView(activity).apply {
+                text = if (isFloatingWindowMaximized) "🗗" else "⛶"
+                textSize = 15f
+                setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                setOnClickListener {
+                    isFloatingWindowMaximized = !isFloatingWindowMaximized
+                    rebuildFloatingFullAppWindow(activity, contentFrame, bubbleContainer)
+                }
+            }
+            topBar.addView(btnResizeWin)
+
+            val btnMinimizeWin = TextView(activity).apply {
+                text = "➖"
+                textSize = 15f
+                setTextColor(android.graphics.Color.WHITE)
+                background = roundBg("#0F172A", 8f)
+                setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(dp(4f), 0, 0, 0) }
+                setOnClickListener {
+                    windowCard.visibility = View.GONE
+                    isFloatingWindowExpanded = false
+                }
+            }
+            topBar.addView(btnMinimizeWin)
+            windowCard.addView(topBar)
+
+            // ================= 2. TAB VIEWS CONTAINER =================
+            val tabsFrame = android.widget.FrameLayout(activity).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            }
+
+            lateinit var switchFloatingTab: (Int) -> Unit
+
+            val tabOrders = buildFloatingOrdersTabView(activity) { targetTab ->
+                switchFloatingTab(targetTab)
+            }
+            val tabMap = buildFloatingMapTabView(activity)
+            val tabSettings = buildFloatingSettingsTabView(activity, bubbleContainer)
+            val tabLogs = buildFloatingLogsTabView(activity)
+
+            tabsFrame.addView(tabOrders)
+            tabsFrame.addView(tabMap)
+            tabsFrame.addView(tabSettings)
+            tabsFrame.addView(tabLogs)
+            windowCard.addView(tabsFrame)
+
+            // ================= 3. BOTTOM 4-TAB NAVIGATION BAR (Identical to MainActivity) =================
+            val bottomNav = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER
+                setBackgroundColor(android.graphics.Color.WHITE)
+                setPadding(dp(8f), dp(8f), dp(8f), dp(10f))
+                elevation = 12f * density
+            }
+
+            fun makeNavBtn(iconStr: String, labelAr: String, labelEn: String, tabIdx: Int): Triple<android.widget.LinearLayout, TextView, TextView> {
+                val btn = android.widget.LinearLayout(activity).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener { switchFloatingTab(tabIdx) }
+                }
+                val iconTv = TextView(activity).apply {
+                    text = iconStr
+                    textSize = 14.5f
+                    gravity = android.view.Gravity.CENTER
+                    setPadding(dp(16f), dp(4f), dp(16f), dp(4f))
+                }
+                val lblTv = TextView(activity).apply {
+                    text = ftr(labelAr, labelEn)
+                    textSize = 11.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(2f), 0, 0)
+                }
+                btn.addView(iconTv)
+                btn.addView(lblTv)
+                return Triple(btn, iconTv, lblTv)
+            }
+
+            val (navOrdBtn, navOrdIcon, navOrdLbl) = makeNavBtn("🏠", "الطلبات", "Orders", 0)
+            val (navMapBtn, navMapIcon, navMapLbl) = makeNavBtn("🗺️", "الخريطة", "Map", 3)
+            val (navSetBtn, navSetIcon, navSetLbl) = makeNavBtn("⚙️", "الإعدادات", "Settings", 1)
+            val (navLogBtn, navLogIcon, navLogLbl) = makeNavBtn("📋", "السجلات", "Logs", 2)
+
+            bottomNav.addView(navOrdBtn)
+            bottomNav.addView(navMapBtn)
+            bottomNav.addView(navSetBtn)
+            bottomNav.addView(navLogBtn)
+            windowCard.addView(bottomNav)
+
+            switchFloatingTab = { tabIdx ->
+                floatingCurrentTab = tabIdx
+                tabOrders.visibility = if (tabIdx == 0) View.VISIBLE else View.GONE
+                tabSettings.visibility = if (tabIdx == 1) View.VISIBLE else View.GONE
+                tabLogs.visibility = if (tabIdx == 2) View.VISIBLE else View.GONE
+                tabMap.visibility = if (tabIdx == 3) View.VISIBLE else View.GONE
+
+                navOrdIcon.background = if (tabIdx == 0) roundBg("#EDE9FE", 16f) else null
+                navSetIcon.background = if (tabIdx == 1) roundBg("#EDE9FE", 16f) else null
+                navLogIcon.background = if (tabIdx == 2) roundBg("#EDE9FE", 16f) else null
+                navMapIcon.background = if (tabIdx == 3) roundBg("#EDE9FE", 16f) else null
+
+                navOrdLbl.setTextColor(android.graphics.Color.parseColor(if (tabIdx == 0) "#4C1D95" else "#64748B"))
+                navSetLbl.setTextColor(android.graphics.Color.parseColor(if (tabIdx == 1) "#4C1D95" else "#64748B"))
+                navLogLbl.setTextColor(android.graphics.Color.parseColor(if (tabIdx == 2) "#4C1D95" else "#64748B"))
+                navMapLbl.setTextColor(android.graphics.Color.parseColor(if (tabIdx == 3) "#4C1D95" else "#64748B"))
+
+                if (tabIdx == 0) populateFloatingOrdersList(activity)
+                if (tabIdx == 2) refreshFloatingDiagLogs(activity)
+                if (tabIdx == 3) {
+                    activeFloatingMapWebView?.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)
+                }
+            }
+
+            contentFrame.addView(windowCard)
+            windowCard.bringToFront()
+            bubbleContainer.bringToFront()
+            switchFloatingTab(floatingCurrentTab)
+        } catch (_: Throwable) {}
+    }
+
+    private fun createFloatingCardContainer(context: Context): android.widget.LinearLayout {
+        val density = context.resources.displayMetrics.density
+        val pad = (14f * density).toInt()
+        val bg = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = 14f * density
+            setColor(android.graphics.Color.WHITE)
+            setStroke((1f * density).toInt().coerceAtLeast(1), android.graphics.Color.parseColor("#E2E8F0"))
+        }
+        return android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            background = bg
+            elevation = 3f * density
+            setPadding(pad, pad, pad, pad)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, (12f * density).toInt())
+            }
+        }
+    }
+
+    // =========================================================================
+    // FLOATING TAB 0: FULL ORDERS TAB (Connection Card + Active & Missed Orders)
+    // =========================================================================
+    private fun buildFloatingOrdersTabView(activity: Activity, onNavigateTab: (Int) -> Unit): android.widget.ScrollView {
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * density).toInt()
+        fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = radiusDp * density
+                setColor(android.graphics.Color.parseColor(hex))
+                if (strokeHex != null && strokePx > 0) {
+                    setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                }
+            }
+        }
+
+        val scroll = android.widget.ScrollView(activity).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#F8F7FC"))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val container = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(12f), dp(12f), dp(12f), dp(28f))
+        }
+
+        // 1. Live Connection & Server Probe Card
+        val connCard = createFloatingCardContainer(activity)
+        val tvPingStatus = TextView(activity).apply {
+            text = ftr("متصل بالتطبيق مباشرة (الاستجابة: 0.0 ملي ثانية) 🟢", "Connected to Target App (Ping: 0.0 ms) 🟢")
+            textSize = 13.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#059669"))
+        }
+        activeFloatingPingStatusTv = tvPingStatus
+        connCard.addView(tvPingStatus)
+
+        val tvPingDetails = TextView(activity).apply {
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.parseColor("#475569"))
+            setPadding(0, dp(4f), 0, dp(8f))
+        }
+        activeFloatingPingDetailsTv = tvPingDetails
+        connCard.addView(tvPingDetails)
+
+        val actionBtnsRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+        }
+        val btnRefreshConn = android.widget.Button(activity).apply {
+            text = ftr("🔄 تحديث", "🔄 Refresh")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#0284C7", 9f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1f).apply {
+                setMargins(dp(2f), 0, dp(2f), 0)
+            }
+            setOnClickListener {
+                CoroutineScope(Dispatchers.IO).launch {
+                    try { scanJahezDatabases(activity) } catch (_: Throwable) {}
+                    try { readExactJahezEncryptedPrefs(activity) } catch (_: Throwable) {}
+                    mainHandler.post { populateFloatingOrdersList(activity) }
+                }
+            }
+        }
+        val btnTestServer = android.widget.Button(activity).apply {
+            text = ftr("🧪 فحص السيرفر", "🧪 Test Server")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#059669", 9f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1f).apply {
+                setMargins(dp(2f), 0, dp(2f), 0)
+            }
+            setOnClickListener {
+                runFloatingServerProbeDialog(activity)
+            }
+        }
+        val btnOpenDeliverMap = android.widget.Button(activity).apply {
+            text = ftr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#4F46E5", 9f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1.15f).apply {
+                setMargins(dp(2f), 0, dp(2f), 0)
+            }
+            setOnClickListener {
+                onNavigateTab(3)
+            }
+        }
+        actionBtnsRow.addView(btnRefreshConn)
+        actionBtnsRow.addView(btnTestServer)
+        actionBtnsRow.addView(btnOpenDeliverMap)
+        connCard.addView(actionBtnsRow)
+        container.addView(connCard)
+
+        // 2. Active Orders Section
+        val activeHdr = TextView(activity).apply {
+            text = ftr("📦 الطلبات النشطة والمقبولة", "📦 Active & Accepted Orders")
+            textSize = 14.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#0F172A"))
+            setPadding(dp(4f), dp(4f), dp(4f), dp(6f))
+        }
+        container.addView(activeHdr)
+
+        val emptyTv = TextView(activity).apply {
+            text = ftr(
+                "لا توجد طلبات مسجلة حالياً.\nبمجرد وصول أي طلب في ساند سيتم قبوله خلال 0.0ms وعرض كافة تفاصيله وموقع العميل وسعر الطعام هنا فوراً.",
+                "No orders logged yet.\nAs soon as an order arrives in Saned, it will be processed in 0.0ms and shown here with customer coords & Food Price."
+            )
+            textSize = 12.5f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(android.graphics.Color.parseColor("#64748B"))
+            background = roundBg("#FFFFFF", 14f, "#E2E8F0", dp(1f))
+            setPadding(dp(18f), dp(22f), dp(18f), dp(22f))
+        }
+        activeFloatingEmptyOrdersTv = emptyTv
+        container.addView(emptyTv)
+
+        val activeListCol = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        activeFloatingOrdersContainer = activeListCol
+        container.addView(activeListCol)
+
+        // 3. Missed / Rejected Orders Section
+        val missedHdrRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(4f), dp(10f), dp(4f), dp(6f))
+            visibility = View.GONE
+        }
+        val missedTitle = TextView(activity).apply {
+            text = ftr("🚫 الطلبات المرفوضة أو الفائتة", "🚫 Rejected / Missed Orders")
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#B91C1C"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val missedBadge = TextView(activity).apply {
+            text = "0"
+            textSize = 11.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#DC2626", 10f)
+            setPadding(dp(8f), dp(2f), dp(8f), dp(2f))
+        }
+        missedHdrRow.addView(missedTitle)
+        missedHdrRow.addView(missedBadge)
+        activeFloatingMissedHeader = missedHdrRow
+        activeFloatingMissedBadge = missedBadge
+        container.addView(missedHdrRow)
+
+        val missedListCol = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        activeFloatingMissedContainer = missedListCol
+        container.addView(missedListCol)
+
+        scroll.addView(container)
+        populateFloatingOrdersList(activity)
+        return scroll
+    }
+
+    private fun populateFloatingOrdersList(activity: Activity) {
+        val activeCol = activeFloatingOrdersContainer ?: return
+        val missedCol = activeFloatingMissedContainer ?: return
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * density).toInt()
+        fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = radiusDp * density
+                setColor(android.graphics.Color.parseColor(hex))
+                if (strokeHex != null && strokePx > 0) {
+                    setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                }
+            }
+        }
+
+        val models = mutableListOf<OrderModel>()
+        val seenKeys = HashSet<String>()
+        synchronized(syncedOrdersCache) {
+            for (obj in syncedOrdersCache.values.toList().reversed()) {
+                val m = OrderModel.fromJson(obj)
+                val r = m.reference.replace("#", "").trim()
+                val idStr = if (m.id != 0) m.id.toString() else ""
+                if ((r.isNotEmpty() && seenKeys.contains(r)) || (idStr.isNotEmpty() && seenKeys.contains(idStr))) continue
+                if (r.isNotEmpty()) seenKeys.add(r)
+                if (idStr.isNotEmpty()) seenKeys.add(idStr)
+                models.add(m)
+            }
+        }
+
+        val tokStatus = if (cachedAuthToken.isNotEmpty()) ftr("الجلسة متصلة ✅", "Token Cached ✅") else ftr("بانتظار الجلسة ⏳", "Waiting ⏳")
+        val limitNum = if (isExtraOrderEnabled) 3 else 2
+        activeFloatingPingDetailsTv?.text = ftr(
+            "النظام: ${if (isMasterRunning) "نشط ⚡" else "متوقف مؤقتاً"} • المصادقة: $tokStatus • الحد: $limitNum طلبات • المسجلة: ${models.size}",
+            "System: ${if (isMasterRunning) "Active ⚡" else "Paused"} • Auth: $tokStatus • Limit: $limitNum • Logged: ${models.size}"
+        )
+
+        activeCol.removeAllViews()
+        missedCol.removeAllViews()
+
+        if (models.isEmpty()) {
+            activeFloatingEmptyOrdersTv?.visibility = View.VISIBLE
+            activeFloatingMissedHeader?.visibility = View.GONE
+            return
+        }
+        activeFloatingEmptyOrdersTv?.visibility = View.GONE
+
+        var missedCount = 0
+        for (order in models) {
+            val card = createFloatingCardContainer(activity)
+
+            // Header Row: Restaurant + Status Badge
+            val topRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val tvRest = TextView(activity).apply {
+                text = order.restaurant.ifEmpty { ftr("مطعم / متجر", "Restaurant / Store") }
+                textSize = 14.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#0F172A"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val isRejected = order.isMissedOrRejected
+            val statusBadge = TextView(activity).apply {
+                text = order.status.ifEmpty { if (isRejected) ftr("مرفوض ❌", "Rejected ❌") else ftr("مقبول ✅", "Accepted ✅") }
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor(if (isRejected) "#B91C1C" else "#047857"))
+                background = roundBg(if (isRejected) "#FEE2E2" else "#DCFCE7", 8f)
+                setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+            }
+            topRow.addView(tvRest)
+            topRow.addView(statusBadge)
+            card.addView(topRow)
+
+            // Subheader: Order Reference + Time + Refresh Details button
+            val refRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4f), 0, dp(6f))
+            }
+            val dispRef = order.reference.ifEmpty { if (order.id != 0) "#${order.id}" else "#" }
+            val tvRef = TextView(activity).apply {
+                text = ftr("رقم الطلب: #$dispRef • ${order.time}", "Order: #$dispRef • ${order.time}")
+                textSize = 11.5f
+                setTextColor(android.graphics.Color.parseColor("#64748B"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val btnRefDetails = TextView(activity).apply {
+                text = ftr("🔄 تحديث البيانات", "🔄 Refresh Info")
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#2563EB"))
+                background = roundBg("#EFF6FF", 8f, "#BFDBFE", dp(1f))
+                setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+                setOnClickListener {
+                    val oid = if (order.id != 0) order.id.toString() else dispRef
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try { scanJahezDatabases(activity) } catch (_: Throwable) {}
+                        fetchOrderCustomerDetailsAsync(oid, force = true)
+                        if (dispRef != oid) fetchOrderCustomerDetailsAsync(dispRef, force = true)
+                        delay(700)
+                        mainHandler.post { populateFloatingOrdersList(activity) }
+                    }
+                }
+            }
+            refRow.addView(tvRef)
+            refRow.addView(btnRefDetails)
+            card.addView(refRow)
+
+            // Metrics Row: Delivery Price + Food Price (Always ON!) + Payment Method
+            val effFoodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
+            val foodPriceStr = String.format(Locale.US, "%.2f", effFoodPrice)
+            val delivPriceStr = String.format(Locale.US, "%.2f", order.price)
+            val payMethodText = when {
+                order.paymentMethod.contains("CASH", ignoreCase = true) || order.cashAmount > 0.0 -> ftr("نقدي (كاش) 💵", "CASH 💵")
+                order.paymentMethod.isNotEmpty() -> ftr("دفع إلكتروني 💳 (${order.paymentMethod})", "Online 💳 (${order.paymentMethod})")
+                else -> ftr("مسبق الدفع / إلكتروني 💳", "Prepaid / Online 💳")
+            }
+
+            val priceBox = TextView(activity).apply {
+                text = ftr(
+                    "💰 التوصيل: $delivPriceStr ر.س   •   🍔 سعر الطعام: $foodPriceStr ر.س   •   $payMethodText",
+                    "💰 Delivery: $delivPriceStr SAR   •   🍔 Food Price: $foodPriceStr SAR   •   $payMethodText"
+                )
+                textSize = 12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#065F46"))
+                background = roundBg("#ECFDF5", 10f, "#A7F3D0", dp(1f))
+                setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
+            }
+            card.addView(priceBox)
+
+            // Distances Row
+            val restDistStr = String.format(Locale.US, "%.2f", order.distanceKm)
+            val custDistStr = String.format(Locale.US, "%.2f", order.customerDistanceKm)
+            val tvDists = TextView(activity).apply {
+                text = ftr(
+                    "📏 بعد المطعم: $restDistStr كم   •   🏠 المسافة للعميل: $custDistStr كم",
+                    "📏 To Restaurant: $restDistStr km   •   🏠 To Customer: $custDistStr km"
+                )
+                textSize = 11.5f
+                setTextColor(android.graphics.Color.parseColor("#334155"))
+                setPadding(0, dp(6f), 0, dp(4f))
+            }
+            card.addView(tvDists)
+
+            // Pickup & Pre-Pickup Customer Navigation Row
+            val navBox = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                background = roundBg("#F8FAFC", 10f, "#E2E8F0", dp(1f))
+                setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
+            }
+
+            val addrDisplay = if (order.address.isNotEmpty() && order.address != "Location on map") {
+                order.address
+            } else if (order.destLat != 0.0 && order.destLng != 0.0) {
+                ftr("📍 إحداثيات العميل قبل الاستلام: ${String.format(Locale.US, "%.5f, %.5f", order.destLat, order.destLng)}",
+                    "📍 Pre-Pickup Customer Coords: ${String.format(Locale.US, "%.5f, %.5f", order.destLat, order.destLng)}")
+            } else {
+                ftr("الموقع على الخريطة", "Location on map")
+            }
+
+            val tvAddr = TextView(activity).apply {
+                text = ftr("🏠 وجهة العميل: $addrDisplay", "🏠 Customer Drop-off: $addrDisplay")
+                textSize = 11.5f
+                setTextColor(android.graphics.Color.parseColor("#1E293B"))
+                setPadding(0, 0, 0, dp(6f))
+            }
+            navBox.addView(tvAddr)
+
+            val navBtnsRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
+                val btnNavRest = android.widget.Button(activity).apply {
+                    text = ftr("🏪 توجيه للمطعم ↗", "🏪 Pickup Map ↗")
+                    isAllCaps = false
+                    textSize = 11f
+                    setTextColor(android.graphics.Color.WHITE)
+                    background = roundBg("#0284C7", 8f)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply {
+                        setMargins(dp(2f), 0, dp(2f), 0)
+                    }
+                    setOnClickListener {
+                        openDirectGoogleMaps(activity, order.pickupLat, order.pickupLng)
+                    }
+                }
+                navBtnsRow.addView(btnNavRest)
+            }
+            if (order.destLat != 0.0 && order.destLng != 0.0) {
+                val btnNavCust = android.widget.Button(activity).apply {
+                    text = ftr("🏠 موقع العميل ↗", "🏠 Customer Map ↗")
+                    isAllCaps = false
+                    textSize = 11f
+                    setTextColor(android.graphics.Color.WHITE)
+                    background = roundBg("#059669", 8f)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply {
+                        setMargins(dp(2f), 0, dp(2f), 0)
+                    }
+                    setOnClickListener {
+                        openDirectGoogleMaps(activity, order.destLat, order.destLng)
+                    }
+                }
+                navBtnsRow.addView(btnNavCust)
+            }
+            if ((order.pickupLat != 0.0 && order.pickupLng != 0.0) || (order.destLat != 0.0 && order.destLng != 0.0)) {
+                val btnLoadToDeliver = android.widget.Button(activity).apply {
+                    text = ftr("🚗 إرسال لخريطة التوصيل", "🚗 Load to DELIVER Map")
+                    isAllCaps = false
+                    textSize = 11f
+                    setTextColor(android.graphics.Color.WHITE)
+                    background = roundBg("#4F46E5", 8f)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1.15f).apply {
+                        setMargins(dp(2f), 0, dp(2f), 0)
+                    }
+                    setOnClickListener {
+                        if (order.pickupLat != 0.0 && order.pickupLng != 0.0) {
+                            flPoint1Lat = order.pickupLat
+                            flPoint1Lng = order.pickupLng
+                        }
+                        if (order.destLat != 0.0 && order.destLng != 0.0) {
+                            flPoint2Lat = order.destLat
+                            flPoint2Lng = order.destLng
+                        }
+                        activeFloatingMapWebView?.evaluateJavascript(
+                            "if(window.buildStreetRoute) window.buildStreetRoute($flPoint1Lat, $flPoint1Lng, $flPoint2Lat, $flPoint2Lng, false);",
+                            null
+                        )
+                        updateFloatingTwoPointSummaryUI()
+                    }
+                }
+                navBtnsRow.addView(btnLoadToDeliver)
+            }
+            navBox.addView(navBtnsRow)
+            card.addView(navBox)
+
+            // Customer Name & Phone Row
+            if (order.customerName.isNotEmpty() || order.customerPhone.isNotEmpty()) {
+                val custRow = android.widget.LinearLayout(activity).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(4f), 0, 0)
+                }
+                val tvCustInfo = TextView(activity).apply {
+                    val nm = order.customerName.ifEmpty { ftr("العميل", "Customer") }
+                    val ph = order.customerPhone.ifEmpty { "—" }
+                    text = "👤 $nm  •  📞 $ph"
+                    textSize = 12f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(android.graphics.Color.parseColor("#0F172A"))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                custRow.addView(tvCustInfo)
+
+                if (order.customerPhone.isNotEmpty()) {
+                    val btnCopyPhone = TextView(activity).apply {
+                        text = ftr("📋 نسخ", "📋 Copy")
+                        textSize = 11f
+                        setTextColor(android.graphics.Color.parseColor("#334155"))
+                        background = roundBg("#E2E8F0", 7f)
+                        setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                        layoutParams = android.widget.LinearLayout.LayoutParams(
+                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { setMargins(dp(3f), 0, dp(3f), 0) }
+                        setOnClickListener {
+                            try {
+                                val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                cm?.setPrimaryClip(android.content.ClipData.newPlainText("phone", order.customerPhone))
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                    val btnCallPhone = TextView(activity).apply {
+                        text = ftr("📞 اتصال", "📞 Call")
+                        textSize = 11f
+                        setTextColor(android.graphics.Color.WHITE)
+                        background = roundBg("#059669", 7f)
+                        setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                        setOnClickListener {
+                            try {
+                                val dial = Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:${order.customerPhone}")).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                activity.startActivity(dial)
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                    custRow.addView(btnCopyPhone)
+                    custRow.addView(btnCallPhone)
+                }
+                card.addView(custRow)
+            }
+
+            if (isRejected) {
+                missedCount++
+                missedCol.addView(card)
+            } else {
+                activeCol.addView(card)
+            }
+        }
+
+        if (missedCount > 0) {
+            activeFloatingMissedHeader?.visibility = View.VISIBLE
+            activeFloatingMissedBadge?.text = missedCount.toString()
+        } else {
+            activeFloatingMissedHeader?.visibility = View.GONE
+        }
+    }
+
+    private fun runFloatingServerProbeDialog(activity: Activity) {
+        if (cachedAuthToken.isEmpty()) readExactJahezEncryptedPrefs(activity)
+        val token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+        CoroutineScope(Dispatchers.IO).launch {
+            val start = System.currentTimeMillis()
+            var code = -1
+            var snippet = ""
+            var targetUrl = "https://gateway.saned.io/api/v1/dispatch/active"
+            if (token.isEmpty()) {
+                snippet = ftr("بانتظار تسجيل الدخول في تطبيق ساند لقراءة التوكن تلقائياً.", "Waiting for login inside Saned app to read session token.")
+            } else {
+                try {
+                    val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+                    val spec = Native.safeB(2, 0, rawTok, cachedLanguage, capturedDriverCipherB64)
+                    if (spec.size >= 2 && spec[1].startsWith("http")) {
+                        targetUrl = spec[1]
+                        val rb = Request.Builder().url(targetUrl).get()
+                        var i = 2
+                        while (i + 1 < spec.size) { rb.header(spec[i], spec[i + 1]); i += 2 }
+                        val resp = httpClient.newCall(rb.build()).execute()
+                        code = resp.code
+                        val body = resp.body?.string() ?: ""
+                        resp.close()
+                        snippet = if (body.length > 260) body.substring(0, 260) + "..." else body.ifEmpty { "HTTP $code OK" }
+                    }
+                } catch (t: Throwable) {
+                    snippet = "Error: ${t.message}"
+                }
+            }
+            val latMs = System.currentTimeMillis() - start
+            mainHandler.post {
+                try {
+                    val density = activity.resources.displayMetrics.density
+                    fun dp(v: Float): Int = (v * density).toInt()
+                    val dlg = Dialog(activity)
+                    dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+                    val box = android.widget.LinearLayout(activity).apply {
+                        orientation = android.widget.LinearLayout.VERTICAL
+                        setBackgroundColor(android.graphics.Color.WHITE)
+                        setPadding(dp(18f), dp(16f), dp(18f), dp(14f))
+                    }
+                    box.addView(TextView(activity).apply {
+                        text = ftr("🧪 نتيجة فحص اتصال السيرفر", "🧪 Server API Probe Result")
+                        textSize = 15f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(android.graphics.Color.parseColor("#0F172A"))
+                        setPadding(0, 0, 0, dp(8f))
+                    })
+                    box.addView(TextView(activity).apply {
+                        text = "HTTP $code (${latMs}ms)\nURL: $targetUrl\n\n$snippet"
+                        textSize = 12.5f
+                        setTextColor(android.graphics.Color.parseColor("#334155"))
+                        setPadding(0, 0, 0, dp(12f))
+                    })
+                    box.addView(android.widget.Button(activity).apply {
+                        text = ftr("حسناً", "OK")
+                        isAllCaps = false
+                        setTextColor(android.graphics.Color.WHITE)
+                        setBackgroundColor(android.graphics.Color.parseColor("#059669"))
+                        setOnClickListener { dlg.dismiss() }
+                    })
+                    dlg.setContentView(box)
+                    dlg.show()
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    // =========================================================================
+    // FLOATING TAB 3: FULL DELIVER ORDER INTERACTIVE MAP & 2-POINT SIMULATOR
+    // =========================================================================
+    private fun buildFloatingMapTabView(activity: Activity): android.widget.ScrollView {
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * density).toInt()
+        fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = radiusDp * density
+                setColor(android.graphics.Color.parseColor(hex))
+                if (strokeHex != null && strokePx > 0) {
+                    setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                }
+            }
+        }
+
+        val scroll = android.widget.ScrollView(activity).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#F8F7FC"))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val container = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(12f), dp(12f), dp(12f), dp(28f))
+        }
+
+        val mapCard = createFloatingCardContainer(activity)
+        val title = TextView(activity).apply {
+            text = ftr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+            textSize = 15.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, dp(6f))
+        }
+        mapCard.addView(title)
+
+        val tvBanner = TextView(activity).apply {
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+        }
+        activeFloatingRouteStatusTv = tvBanner
+        mapCard.addView(tvBanner)
+
+        val chkFake = android.widget.CheckBox(activity).apply {
+            text = ftr("تفعيل توصيل الطلب", "Enable DELIVER ORDER")
+            isChecked = LocationEngine.isFakeLocationEnabled
+            setOnCheckedChangeListener { _, isChecked ->
+                LocationEngine.isFakeLocationEnabled = isChecked
+                if (isChecked) LocationEngine.pushSpoofedLocationToAllCallbacks()
+                pushFloatingSettingsToAssistant(activity)
+                updateFloatingRouteBannerUI()
+            }
+        }
+        activeFloatingChkFakeLoc = chkFake
+        mapCard.addView(chkFake)
+
+        val chkFix = android.widget.CheckBox(activity).apply {
+            text = ftr("تثبيت دقة الموقع ومنع انقطاع الإشارة", "Lock High-Accuracy GPS Signal")
+            isChecked = LocationEngine.isFixLocationUnknownEnabled
+            setOnCheckedChangeListener { _, isChecked ->
+                LocationEngine.isFixLocationUnknownEnabled = isChecked
+                pushFloatingSettingsToAssistant(activity)
+            }
+        }
+        mapCard.addView(chkFix)
+
+        // Search Row + My Location
+        val searchRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4f), 0, dp(6f))
+        }
+        val edtSearch = android.widget.EditText(activity).apply {
+            hint = ftr("🔍 ابحث عن حي أو مكان أو إحداثيات...", "🔍 Search area, place, or coords...")
+            textSize = 12f
+            setSingleLine(true)
+            background = roundBg("#F1F5F9", 9f, "#CBD5E1", dp(1f))
+            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1f).apply {
+                setMargins(0, 0, dp(4f), 0)
+            }
+        }
+        val btnSearchGo = android.widget.Button(activity).apply {
+            text = ftr("بحث", "Go")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#2563EB", 9f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(58f), dp(36f)).apply {
+                setMargins(dp(2f), 0, dp(2f), 0)
+            }
+            setOnClickListener {
+                val q = edtSearch.text.toString().trim().replace("'", "")
+                if (q.isNotEmpty()) {
+                    activeFloatingMapWebView?.evaluateJavascript("if(window.searchPlaceOnMap) window.searchPlaceOnMap('$q');", null)
+                }
+            }
+        }
+        val btnMyLoc = android.widget.Button(activity).apply {
+            text = "📍"
+            textSize = 13f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#059669", 9f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(42f), dp(36f))
+            setOnClickListener {
+                val rLat = if (LocationEngine.lastRealLat != 0.0) LocationEngine.lastRealLat else 24.7136
+                val rLng = if (LocationEngine.lastRealLng != 0.0) LocationEngine.lastRealLng else 46.6753
+                flPoint1Lat = rLat
+                flPoint1Lng = rLng
+                activeFloatingMapWebView?.evaluateJavascript("if(window.centerOnCoords) window.centerOnCoords($rLat, $rLng);", null)
+            }
+        }
+        searchRow.addView(edtSearch)
+        searchRow.addView(btnSearchGo)
+        searchRow.addView(btnMyLoc)
+        mapCard.addView(searchRow)
+
+        // 3 Mode Selector Buttons (Point 1 / Point 2 / Direct Teleport)
+        val modeRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(6f))
+        }
+        lateinit var btnM1: android.widget.Button
+        lateinit var btnM2: android.widget.Button
+        lateinit var btnMT: android.widget.Button
+
+        fun refreshModeButtons() {
+            btnM1.background = roundBg(if (flMapTapMode == "point1") "#059669" else "#E2E8F0", 8f)
+            btnM1.setTextColor(if (flMapTapMode == "point1") android.graphics.Color.WHITE else android.graphics.Color.parseColor("#1E293B"))
+            btnM2.background = roundBg(if (flMapTapMode == "point2") "#DC2626" else "#E2E8F0", 8f)
+            btnM2.setTextColor(if (flMapTapMode == "point2") android.graphics.Color.WHITE else android.graphics.Color.parseColor("#1E293B"))
+            btnMT.background = roundBg(if (flMapTapMode == "teleport") "#2563EB" else "#E2E8F0", 8f)
+            btnMT.setTextColor(if (flMapTapMode == "teleport") android.graphics.Color.WHITE else android.graphics.Color.parseColor("#1E293B"))
+            activeFloatingMapWebView?.evaluateJavascript("if(window.setClickMode) window.setClickMode('$flMapTapMode');", null)
+        }
+
+        btnM1 = android.widget.Button(activity).apply {
+            text = ftr("1️⃣ الاستلام (1)", "1️⃣ Point 1")
+            isAllCaps = false
+            textSize = 11f
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener { flMapTapMode = "point1"; refreshModeButtons() }
+        }
+        btnM2 = android.widget.Button(activity).apply {
+            text = ftr("2️⃣ التسليم (2)", "2️⃣ Point 2")
+            isAllCaps = false
+            textSize = 11f
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener { flMapTapMode = "point2"; refreshModeButtons() }
+        }
+        btnMT = android.widget.Button(activity).apply {
+            text = ftr("⚡ تثبيت فوري", "⚡ Direct Pin")
+            isAllCaps = false
+            textSize = 11f
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener { flMapTapMode = "teleport"; refreshModeButtons() }
+        }
+        modeRow.addView(btnM1)
+        modeRow.addView(btnM2)
+        modeRow.addView(btnMT)
+        mapCard.addView(modeRow)
+
+        // Interactive Google Maps / Leaflet + OSRM WebView (Touch-intercepted for smooth dragging inside ScrollView)
+        val wvContainer = android.widget.FrameLayout(activity).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(275f)
+            ).apply { setMargins(0, dp(4f), 0, dp(6f)) }
+            background = roundBg("#E2E8F0", 12f, "#94A3B8", dp(1f))
+        }
+
+        val webView = object : android.webkit.WebView(activity) {
+            override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return super.dispatchTouchEvent(ev)
+            }
+        }.apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient = android.webkit.WebViewClient()
+            addJavascriptInterface(FloatingMapJsBridge(activity), "AndroidBridge")
+        }
+        activeFloatingMapWebView = webView
+        wvContainer.addView(webView)
+        mapCard.addView(wvContainer)
+        refreshModeButtons()
+
+        // 2-Point Summary & Speed Customization Badge
+        val tvTwoPt = TextView(activity).apply {
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.parseColor("#334155"))
+            setPadding(0, dp(2f), 0, dp(4f))
+        }
+        activeFloatingTwoPointSummaryTv = tvTwoPt
+        mapCard.addView(tvTwoPt)
+
+        val tvMetrics = TextView(activity).apply {
+            textSize = 11.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#1E40AF"))
+            background = roundBg("#EFF6FF", 10f, "#BFDBFE", dp(1f))
+            setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+            setOnClickListener {
+                showFloatingSpeedCustomizationDialog(activity, startImmediately = false)
+            }
+        }
+        activeFloatingRouteMetricsTv = tvMetrics
+        mapCard.addView(tvMetrics)
+
+        // Route Simulation Control Buttons Row
+        val simBtnsRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(0, dp(8f), 0, dp(6f))
+        }
+        val btnStartSim = android.widget.Button(activity).apply {
+            text = ftr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+            isAllCaps = false
+            textSize = 12.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#059669", 10f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(40f), 1.5f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                showFloatingSpeedCustomizationDialog(activity, startImmediately = true)
+            }
+        }
+        activeFloatingStartSimBtn = btnStartSim
+
+        val btnPauseSim = android.widget.Button(activity).apply {
+            text = "⏸️"
+            textSize = 13f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#D97706", 10f)
+            visibility = if (flIsRouteSimRunning) View.VISIBLE else View.GONE
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(46f), dp(40f)).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                if (!flIsRouteSimRunning) return@setOnClickListener
+                flIsRouteSimPaused = !flIsRouteSimPaused
+                if (flIsRouteSimPaused) {
+                    mainHandler.removeCallbacks(flRouteSimTickRunnable)
+                    text = "▶️"
+                } else {
+                    text = "⏸️"
+                    mainHandler.post(flRouteSimTickRunnable)
+                }
+                updateFloatingRouteBannerUI()
+            }
+        }
+        activeFloatingPauseSimBtn = btnPauseSim
+
+        val btnStopSim = android.widget.Button(activity).apply {
+            text = ftr("⏹️ إيقاف", "⏹️ Stop")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#DC2626", 10f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(40f), 0.9f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                flIsRouteSimRunning = false
+                flIsRouteSimPaused = false
+                flRouteTraveledMeters = 0.0
+                mainHandler.removeCallbacks(flRouteSimTickRunnable)
+                LocationEngine.isTripSimulationActive = false
+                pushFloatingSettingsToAssistant(activity)
+                btnPauseSim.visibility = View.GONE
+                btnStartSim.text = ftr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+                updateFloatingRouteBannerUI()
+                updateFloatingRouteMetricsUI()
+            }
+        }
+
+        val btnLoopSim = android.widget.Button(activity).apply {
+            isAllCaps = false
+            textSize = 11f
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(40f), 0.85f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            fun refreshLoop() {
+                text = if (flIsRouteSimLooping) ftr("🔁 تكرار: نعم", "🔁 Loop: ON") else ftr("🔁 تكرار: لا", "🔁 Loop: OFF")
+                background = roundBg(if (flIsRouteSimLooping) "#4F46E5" else "#64748B", 10f)
+                setTextColor(android.graphics.Color.WHITE)
+            }
+            refreshLoop()
+            setOnClickListener {
+                flIsRouteSimLooping = !flIsRouteSimLooping
+                refreshLoop()
+            }
+        }
+
+        simBtnsRow.addView(btnStartSim)
+        simBtnsRow.addView(btnPauseSim)
+        simBtnsRow.addView(btnStopSim)
+        simBtnsRow.addView(btnLoopSim)
+        mapCard.addView(simBtnsRow)
+
+        // Manual Lat / Lng Inputs + Apply Now
+        val coordsRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(0, dp(4f), 0, 0)
+        }
+        val edtLat = android.widget.EditText(activity).apply {
+            setText(String.format(Locale.US, "%.6f", flPoint1Lat))
+            textSize = 12f
+            setSingleLine(true)
+            background = roundBg("#F1F5F9", 8f, "#CBD5E1", dp(1f))
+            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+        }
+        val edtLng = android.widget.EditText(activity).apply {
+            setText(String.format(Locale.US, "%.6f", flPoint1Lng))
+            textSize = 12f
+            setSingleLine(true)
+            background = roundBg("#F1F5F9", 8f, "#CBD5E1", dp(1f))
+            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(36f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+        }
+        activeFloatingEdtLat = edtLat
+        activeFloatingEdtLng = edtLng
+
+        val btnApplyCoords = android.widget.Button(activity).apply {
+            text = ftr("📍 تثبيت", "📍 Pin")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#0F172A", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(74f), dp(36f)).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                val lt = edtLat.text.toString().toDoubleOrNull() ?: return@setOnClickListener
+                val lg = edtLng.text.toString().toDoubleOrNull() ?: return@setOnClickListener
+                flPoint1Lat = lt
+                flPoint1Lng = lg
+                LocationEngine.isFakeLocationEnabled = true
+                chkFake.isChecked = true
+                LocationEngine.updateLiveRouteState(lt, lg, 0.0f, 0.0f, false)
+                pushFloatingSettingsToAssistant(activity)
+                activeFloatingMapWebView?.evaluateJavascript("if(window.centerOnCoords) window.centerOnCoords($lt, $lg);", null)
+                updateFloatingRouteBannerUI()
+            }
+        }
+        coordsRow.addView(edtLat)
+        coordsRow.addView(edtLng)
+        coordsRow.addView(btnApplyCoords)
+        mapCard.addView(coordsRow)
+
+        container.addView(mapCard)
+        scroll.addView(container)
+
+        loadFloatingGoogleMapHtml(webView)
+        updateFloatingTwoPointSummaryUI()
+        updateFloatingRouteBannerUI()
+        updateFloatingRouteMetricsUI()
+        return scroll
+    }
+
+    private class FloatingMapJsBridge(private val activity: Activity) {
+        @android.webkit.JavascriptInterface
+        fun onLocationMoved(lat: Double, lng: Double) {
+            mainHandler.post {
+                flPoint1Lat = lat
+                flPoint1Lng = lng
+                activeFloatingEdtLat?.setText(String.format(Locale.US, "%.6f", lat))
+                activeFloatingEdtLng?.setText(String.format(Locale.US, "%.6f", lng))
+                LocationEngine.isFakeLocationEnabled = true
+                activeFloatingChkFakeLoc?.isChecked = true
+                LocationEngine.updateLiveRouteState(lat, lng, 0.0f, 0.0f, false)
+                pushFloatingSettingsToAssistant(activity)
+                updateFloatingRouteBannerUI()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onTwoPointsUpdated(p1Lat: Double, p1Lng: Double, p2Lat: Double, p2Lng: Double, autoSwitchToPoint2: Boolean) {
+            mainHandler.post {
+                flPoint1Lat = p1Lat
+                flPoint1Lng = p1Lng
+                flPoint2Lat = p2Lat
+                flPoint2Lng = p2Lng
+                activeFloatingEdtLat?.setText(String.format(Locale.US, "%.6f", p1Lat))
+                activeFloatingEdtLng?.setText(String.format(Locale.US, "%.6f", p1Lng))
+                LocationEngine.isFakeLocationEnabled = true
+                activeFloatingChkFakeLoc?.isChecked = true
+                LocationEngine.updateLiveRouteState(p1Lat, p1Lng, 0.0f, 0.0f, false)
+                pushFloatingSettingsToAssistant(activity)
+                if (autoSwitchToPoint2) {
+                    flMapTapMode = "point2"
+                    activeFloatingMapWebView?.evaluateJavascript("if(window.setClickMode) window.setClickMode('point2');", null)
+                }
+                updateFloatingTwoPointSummaryUI()
+                updateFloatingRouteBannerUI()
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onRoutePathReady(coordsJson: String, promptSpeedDialog: Boolean) {
+            mainHandler.post {
+                try {
+                    val arr = JSONArray(coordsJson)
+                    if (arr.length() < 2) return@post
+                    val pts = ArrayList<Pair<Double, Double>>(arr.length())
+                    for (i in 0 until arr.length()) {
+                        val pt = arr.optJSONArray(i) ?: continue
+                        val lt = pt.optDouble(0, 0.0)
+                        val lg = pt.optDouble(1, 0.0)
+                        if (lt != 0.0 && lg != 0.0) pts.add(lt to lg)
+                    }
+                    if (pts.size < 2) return@post
+                    flRouteWaypoints.clear()
+                    flRouteWaypoints.addAll(pts)
+                    val cum = DoubleArray(pts.size)
+                    var totalM = 0.0
+                    cum[0] = 0.0
+                    for (i in 1 until pts.size) {
+                        val prev = pts[i - 1]
+                        val curr = pts[i]
+                        totalM += LocationEngine.calculateDistance(prev.first, prev.second, curr.first, curr.second) * 1000.0
+                        cum[i] = totalM
+                    }
+                    flRouteCumulativeMeters = cum
+                    flRouteTotalMeters = totalM
+                    flRouteTraveledMeters = 0.0
+                    flIsRouteSimForward = true
+                    flPoint1Lat = pts.first().first
+                    flPoint1Lng = pts.first().second
+                    flPoint2Lat = pts.last().first
+                    flPoint2Lng = pts.last().second
+                    updateFloatingTwoPointSummaryUI()
+                    updateFloatingRouteMetricsUI()
+                    if (promptSpeedDialog) {
+                        showFloatingSpeedCustomizationDialog(activity, startImmediately = true)
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    private fun showFloatingSpeedCustomizationDialog(activity: Activity, startImmediately: Boolean) {
+        try {
+            val density = activity.resources.displayMetrics.density
+            fun dp(v: Float): Int = (v * density).toInt()
+            val isAr = !appUiLanguage.lowercase(Locale.US).startsWith("en")
+
+            val box = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+                setPadding(dp(18f), dp(14f), dp(18f), dp(10f))
+            }
+
+            val rbVar = android.widget.RadioButton(activity).apply {
+                text = ftr("سرعات متغيرة طبيعية (تلقائياً بين حد أدنى وأقصى)", "Natural Variable Speeds (Min - Max km/h)")
+                isChecked = flIsVariableSpeedMode
+            }
+            val rbFixed = android.widget.RadioButton(activity).apply {
+                text = ftr("سرعة مخصصة ثابتة (كم/س)", "Custom Fixed Speed (km/h)")
+                isChecked = !flIsVariableSpeedMode
+            }
+            val rg = android.widget.RadioGroup(activity).apply {
+                addView(rbVar)
+                addView(rbFixed)
+            }
+            box.addView(rg)
+
+            val edtMin = android.widget.EditText(activity).apply {
+                hint = ftr("الحد الأدنى للسرعة (مثال 30)", "Min Speed km/h (e.g. 30)")
+                setText(flRouteSimMinSpeedKmh.toInt().toString())
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            }
+            val edtMax = android.widget.EditText(activity).apply {
+                hint = ftr("الحد الأقصى للسرعة (مثال 75)", "Max Speed km/h (e.g. 75)")
+                setText(flRouteSimMaxSpeedKmh.toInt().toString())
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            }
+            val edtFixed = android.widget.EditText(activity).apply {
+                hint = ftr("السرعة الثابتة كم/س (مثال 45)", "Fixed Speed km/h (e.g. 45)")
+                setText(flRouteSimSpeedKmh.toInt().toString())
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            }
+            box.addView(edtMin)
+            box.addView(edtMax)
+            box.addView(edtFixed)
+
+            val dlg = Dialog(activity)
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            box.setBackgroundColor(android.graphics.Color.WHITE)
+            val hdrTv = TextView(activity).apply {
+                text = ftr("⚡ إعدادات سرعة توصيل الطلب", "⚡ DELIVER ORDER Speed Settings")
+                textSize = 15f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.parseColor("#0F172A"))
+                setPadding(0, 0, 0, dp(8f))
+            }
+            box.addView(hdrTv, 0)
+            val btnRow = android.widget.LinearLayout(activity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                setPadding(0, dp(10f), 0, 0)
+            }
+            val btnOk = android.widget.Button(activity).apply {
+                text = if (startImmediately) ftr("🚗 بدء التوصيل الآن", "🚗 Start Delivery Now") else ftr("💾 حفظ السرعة", "💾 Save Speed")
+                isAllCaps = false
+                setTextColor(android.graphics.Color.WHITE)
+                setBackgroundColor(android.graphics.Color.parseColor("#059669"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(40f), 1.3f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+                setOnClickListener {
+                    flIsVariableSpeedMode = rbVar.isChecked
+                    flRouteSimMinSpeedKmh = (edtMin.text.toString().toFloatOrNull() ?: 30f).coerceIn(5f, 200f)
+                    flRouteSimMaxSpeedKmh = (edtMax.text.toString().toFloatOrNull() ?: 75f).coerceIn(flRouteSimMinSpeedKmh + 1f, 220f)
+                    flRouteSimSpeedKmh = (edtFixed.text.toString().toFloatOrNull() ?: 45f).coerceIn(5f, 220f)
+                    updateFloatingRouteMetricsUI()
+                    dlg.dismiss()
+                    if (startImmediately) {
+                        startFloatingRouteSimulation(activity)
+                    }
+                }
+            }
+            val btnCancel = android.widget.Button(activity).apply {
+                text = ftr("إلغاء", "Cancel")
+                isAllCaps = false
+                setTextColor(android.graphics.Color.WHITE)
+                setBackgroundColor(android.graphics.Color.parseColor("#64748B"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(40f), 0.7f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+                setOnClickListener { dlg.dismiss() }
+            }
+            btnRow.addView(btnOk)
+            btnRow.addView(btnCancel)
+            box.addView(btnRow)
+            dlg.setContentView(box)
+            dlg.show()
+        } catch (_: Throwable) {}
+    }
+
+    private fun startFloatingRouteSimulation(activity: Activity) {
+        if (flRouteWaypoints.size < 2 || flRouteTotalMeters <= 0.5) {
+            activeFloatingMapWebView?.evaluateJavascript(
+                "if(window.buildStreetRoute) window.buildStreetRoute($flPoint1Lat, $flPoint1Lng, $flPoint2Lat, $flPoint2Lng, false);",
+                null
+            )
+            mainHandler.postDelayed({
+                if (flRouteWaypoints.size >= 2 && flRouteTotalMeters > 0.5) {
+                    startFloatingRouteSimulation(activity)
+                }
+            }, 850L)
+            return
+        }
+        LocationEngine.isFakeLocationEnabled = true
+        activeFloatingChkFakeLoc?.isChecked = true
+        if (flRouteTraveledMeters >= flRouteTotalMeters - 1.0) {
+            flRouteTraveledMeters = 0.0
+            flIsRouteSimForward = true
+        }
+        flIsRouteSimRunning = true
+        flIsRouteSimPaused = false
+        activeFloatingPauseSimBtn?.visibility = View.VISIBLE
+        activeFloatingPauseSimBtn?.text = "⏸️"
+        mainHandler.removeCallbacks(flRouteSimTickRunnable)
+        mainHandler.post(flRouteSimTickRunnable)
+        updateFloatingRouteBannerUI()
+        updateFloatingRouteMetricsUI()
+    }
+
+    private fun updateFloatingTwoPointSummaryUI() {
+        activeFloatingTwoPointSummaryTv?.text = String.format(
+            Locale.US,
+            "1️⃣ %.5f, %.5f   ➔   2️⃣ %.5f, %.5f",
+            flPoint1Lat, flPoint1Lng, flPoint2Lat, flPoint2Lng
+        )
+    }
+
+    private fun updateFloatingRouteBannerUI() {
+        val tv = activeFloatingRouteStatusTv ?: return
+        val lat = String.format(Locale.US, "%.5f", LocationEngine.currentLat.takeIf { it != 0.0 } ?: flPoint1Lat)
+        val lng = String.format(Locale.US, "%.5f", LocationEngine.currentLng.takeIf { it != 0.0 } ?: flPoint1Lng)
+        when {
+            flIsRouteSimRunning && !flIsRouteSimPaused -> {
+                val remM = (flRouteTotalMeters - flRouteTraveledMeters).coerceAtLeast(0.0)
+                val spd = if (flIsVariableSpeedMode) flRouteSimCurrentDynamicSpeedKmh else flRouteSimSpeedKmh
+                tv.text = ftr(
+                    "🚗 جاري توصيل الطلب • السرعة: ${spd.toInt()} كم/س • المتبقي: ${String.format(Locale.US, "%.2f", remM / 1000.0)} كم • 📍 $lat, $lng",
+                    "🚗 Delivering Order • Speed: ${spd.toInt()} km/h • Rem: ${String.format(Locale.US, "%.2f", remM / 1000.0)} km • 📍 $lat, $lng"
+                )
+                tv.setTextColor(android.graphics.Color.parseColor("#047857"))
+            }
+            LocationEngine.isFakeLocationEnabled -> {
+                tv.text = ftr("🟢 موقع التوصيل نشط عند 📍 $lat, $lng", "🟢 Delivery location active at 📍 $lat, $lng")
+                tv.setTextColor(android.graphics.Color.parseColor("#059669"))
+            }
+            else -> {
+                tv.text = ftr("⚪ حدد نقطة الاستلام (1) والتسليم (2) على الخريطة لبدء التوصيل", "⚪ Tap Point 1 & Point 2 on the map to start delivery")
+                tv.setTextColor(android.graphics.Color.parseColor("#475569"))
+            }
+        }
+    }
+
+    private fun updateFloatingRouteMetricsUI() {
+        val tv = activeFloatingRouteMetricsTv ?: return
+        val spdDesc = if (flIsVariableSpeedMode) {
+            ftr("سرعة متغيرة (${flRouteSimMinSpeedKmh.toInt()}-${flRouteSimMaxSpeedKmh.toInt()} كم/س)", "Variable (${flRouteSimMinSpeedKmh.toInt()}-${flRouteSimMaxSpeedKmh.toInt()} km/h)")
+        } else {
+            ftr("سرعة ثابتة (${flRouteSimSpeedKmh.toInt()} كم/س)", "Fixed (${flRouteSimSpeedKmh.toInt()} km/h)")
+        }
+        if (flRouteTotalMeters > 1.0 && flRouteWaypoints.size >= 2) {
+            val totKm = flRouteTotalMeters / 1000.0
+            val remKm = (flRouteTotalMeters - flRouteTraveledMeters).coerceAtLeast(0.0) / 1000.0
+            tv.text = ftr(
+                "🛣️ المسار: ${String.format(Locale.US, "%.2f", totKm)} كم (المتبقي ${String.format(Locale.US, "%.2f", remKm)} كم) • $spdDesc (اضغط لتعديل السرعة ⚡)",
+                "🛣️ Route: ${String.format(Locale.US, "%.2f", totKm)} km (Rem ${String.format(Locale.US, "%.2f", remKm)} km) • $spdDesc (Tap to edit ⚡)"
+            )
+        } else {
+            tv.text = ftr(
+                "🛣️ الوضع الحالي: $spdDesc • اضغط هنا لتخصيص السرعة ⚡",
+                "🛣️ Mode: $spdDesc • Tap here to customize speed ⚡"
+            )
+        }
+    }
+
+    private fun loadFloatingGoogleMapHtml(webView: android.webkit.WebView) {
+        val isAr = !appUiLanguage.lowercase(Locale.US).startsWith("en")
+        val mapLang = if (isAr) "ar" else "en"
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                <style>
+                    body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #e5e3df; }
+                    .car-icon { display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:#1a73e8;color:#fff;font-size:18px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4); }
+                    .p1-icon { display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#059669;color:#fff;font-size:13px;font-weight:bold;border:2px solid #fff; }
+                    .p2-icon { display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#dc2626;color:#fff;font-size:13px;font-weight:bold;border:2px solid #fff; }
+                </style>
+            </head>
+            <body>
+                <div id="map"></div>
+                <script>
+                    var pt1Lat = $flPoint1Lat, pt1Lng = $flPoint1Lng;
+                    var pt2Lat = $flPoint2Lat, pt2Lng = $flPoint2Lng;
+                    var curLat = pt1Lat, curLng = pt1Lng;
+                    var clickMode = '$flMapTapMode';
+                    var map = L.map('map', { zoomControl: true }).setView([pt1Lat, pt1Lng], 14);
+                    L.tileLayer('https://mt1.google.com/vt/lyrs=m&hl=$mapLang&x={x}&y={y}&z={z}', { maxZoom: 21 }).addTo(map);
+                    var p1Icon = L.divIcon({ className: '', html: '<div class="p1-icon">1</div>', iconSize: [28,28], iconAnchor: [14,14] });
+                    var p2Icon = L.divIcon({ className: '', html: '<div class="p2-icon">2</div>', iconSize: [28,28], iconAnchor: [14,14] });
+                    var carIcon = L.divIcon({ className: '', html: '<div class="car-icon">🚗</div>', iconSize: [34,34], iconAnchor: [17,17] });
+                    var point1Marker = L.marker([pt1Lat, pt1Lng], { icon: p1Icon, draggable: true }).addTo(map);
+                    var point2Marker = L.marker([pt2Lat, pt2Lng], { icon: p2Icon, draggable: true }).addTo(map);
+                    var driverMarker = L.marker([curLat, curLng], { icon: carIcon, draggable: true, zIndexOffset: 500 }).addTo(map);
+                    var routePolyline = null;
+                    window.setClickMode = function(m) { clickMode = m; };
+                    window.invalidateMapSize = function() { setTimeout(function(){ map.invalidateSize(); }, 120); };
+                    window.centerOnCoords = function(lt, lg) {
+                        curLat = lt; curLng = lg;
+                        driverMarker.setLatLng([lt, lg]);
+                        map.panTo([lt, lg]);
+                    };
+                    window.setDriverPin = function(lt, lg, brg, pan, pct) {
+                        curLat = lt; curLng = lg;
+                        driverMarker.setLatLng([lt, lg]);
+                        if (pan) map.panTo([lt, lg]);
+                    };
+                    window.buildStreetRoute = function(lat1, lng1, lat2, lng2, promptSpeed) {
+                        var url = 'https://router.project-osrm.org/route/v1/driving/' + lng1 + ',' + lat1 + ';' + lng2 + ',' + lat2 + '?overview=full&geometries=geojson';
+                        fetch(url).then(function(r){ return r.json(); }).then(function(d){
+                            var pts = [];
+                            if (d && d.routes && d.routes[0] && d.routes[0].geometry && d.routes[0].geometry.coordinates) {
+                                var cs = d.routes[0].geometry.coordinates;
+                                for (var i=0; i<cs.length; i++) pts.push([cs[i][1], cs[i][0]]);
+                            } else {
+                                pts = [[lat1, lng1], [lat2, lng2]];
+                            }
+                            if (routePolyline) map.removeLayer(routePolyline);
+                            routePolyline = L.polyline(pts, { color: '#1a73e8', weight: 6, opacity: 0.9 }).addTo(map);
+                            map.fitBounds(routePolyline.getBounds(), { padding: [25, 25] });
+                            if (window.AndroidBridge && window.AndroidBridge.onRoutePathReady) {
+                                window.AndroidBridge.onRoutePathReady(JSON.stringify(pts), !!promptSpeed);
+                            }
+                        }).catch(function(){
+                            var pts = [[lat1, lng1], [lat2, lng2]];
+                            if (routePolyline) map.removeLayer(routePolyline);
+                            routePolyline = L.polyline(pts, { color: '#1a73e8', weight: 6, opacity: 0.9 }).addTo(map);
+                            if (window.AndroidBridge && window.AndroidBridge.onRoutePathReady) {
+                                window.AndroidBridge.onRoutePathReady(JSON.stringify(pts), !!promptSpeed);
+                            }
+                        });
+                    };
+                    window.searchPlaceOnMap = function(q) {
+                        fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(q))
+                            .then(function(r){ return r.json(); })
+                            .then(function(arr){
+                                if (arr && arr.length > 0) {
+                                    var lt = parseFloat(arr[0].lat), lg = parseFloat(arr[0].lon);
+                                    map.setView([lt, lg], 15);
+                                }
+                            }).catch(function(){});
+                    };
+                    map.on('click', function(e) {
+                        var tLat = e.latlng.lat, tLng = e.latlng.lng;
+                        if (clickMode === 'teleport') {
+                            curLat = tLat; curLng = tLng;
+                            driverMarker.setLatLng([curLat, curLng]);
+                            if (window.AndroidBridge) window.AndroidBridge.onLocationMoved(curLat, curLng);
+                        } else if (clickMode === 'point1') {
+                            pt1Lat = tLat; pt1Lng = tLng; curLat = tLat; curLng = tLng;
+                            point1Marker.setLatLng([pt1Lat, pt1Lng]);
+                            driverMarker.setLatLng([pt1Lat, pt1Lng]);
+                            if (window.AndroidBridge) window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
+                            window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                        } else {
+                            pt2Lat = tLat; pt2Lng = tLng;
+                            point2Marker.setLatLng([pt2Lat, pt2Lng]);
+                            if (window.AndroidBridge) window.AndroidBridge.onTwoPointsUpdated(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false);
+                            window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, true);
+                        }
+                    });
+                    setTimeout(function(){ window.buildStreetRoute(pt1Lat, pt1Lng, pt2Lat, pt2Lng, false); }, 300);
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+        webView.loadDataWithBaseURL("https://maps.google.com/", html, "text/html", "UTF-8", null)
+    }
+
+    // =========================================================================
+    // FLOATING TAB 1: FULL SETTINGS TAB (Master, Filters, Extra Order, Android ID, Diagnostics)
+    // =========================================================================
+    private fun buildFloatingSettingsTabView(activity: Activity, bubbleContainer: View): android.widget.ScrollView {
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * density).toInt()
+        fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = radiusDp * density
+                setColor(android.graphics.Color.parseColor(hex))
+                if (strokeHex != null && strokePx > 0) {
+                    setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                }
+            }
+        }
+
+        val scroll = android.widget.ScrollView(activity).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#F8F7FC"))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val container = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(12f), dp(12f), dp(12f), dp(28f))
+        }
+
+        // 1. Master Switch Card
+        val masterCard = createFloatingCardContainer(activity)
+        val swMaster = android.widget.Switch(activity).apply {
+            text = ftr("⚡ تشغيل النظام الرئيسي (Master Switch)", "⚡ Master System Switch")
+            textSize = 14.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            isChecked = isMasterRunning
+            setOnCheckedChangeListener { _, isChecked ->
+                isMasterRunning = isChecked
+                LocationEngine.isMasterRunning = isChecked
+                DeviceSpoofer.isMasterRunning = isChecked
+                updateFloatingDotAppearance(bubbleContainer)
+                pushFloatingSettingsToAssistant(activity)
+            }
+        }
+        masterCard.addView(swMaster)
+        container.addView(masterCard)
+
+        // 2. Auto-Accept & Filters Card
+        val filtersCard = createFloatingCardContainer(activity)
+        val tvFilterTitle = TextView(activity).apply {
+            text = ftr("⚡ القبول التلقائي وفلاتر المسافة والسعر", "⚡ Auto-Accept & Distance / Price Filters")
+            textSize = 14.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, dp(6f))
+        }
+        filtersCard.addView(tvFilterTitle)
+
+        val chkAutoAcc = android.widget.CheckBox(activity).apply {
+            text = ftr("تفعيل القبول التلقائي الفوري للطلبات المطابقة للشروط", "Enable Instant Auto-Accept for Matching Orders")
+            isChecked = isAutoAccept
+            setOnCheckedChangeListener { _, v -> isAutoAccept = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkAutoRej = android.widget.CheckBox(activity).apply {
+            text = ftr("تفعيل الرفض التلقائي الفوري للطلبات المخالفة للمسافة أو السعر", "Enable Instant Auto-Reject for Orders Outside Limits")
+            isChecked = isAutoReject
+            setOnCheckedChangeListener { _, v -> isAutoReject = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkDry = android.widget.CheckBox(activity).apply {
+            text = ftr("وضع التجربة فقط (تسجيل وإشعار بدون قبول أو رفض فعلي)", "Dry-Run Mode (Log & notify without accepting/rejecting)")
+            isChecked = isDryRun
+            setOnCheckedChangeListener { _, v -> isDryRun = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkBg = android.widget.CheckBox(activity).apply {
+            text = ftr("عدم فتح شاشة الطلب عند معالجته تلقائياً (البقاء في الخلفية)", "Stay in Background When Orders Are Handled Automatically")
+            isChecked = isStayInBackground
+            setOnCheckedChangeListener { _, v -> isStayInBackground = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkSilence = android.widget.CheckBox(activity).apply {
+            text = ftr("كتم صوت تنبيه الطلب المزعج عند معالجته تلقائياً", "Silence Order Alert Tone When Handled Automatically")
+            isChecked = isSilenceAlertTone
+            setOnCheckedChangeListener { _, v -> isSilenceAlertTone = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkSound = android.widget.CheckBox(activity).apply {
+            text = ftr("تشغيل نغمة تنبيه خفيفة عند قبول الطلب تلقائياً", "Play Short Beep When an Order Is Auto-Accepted")
+            isChecked = isSoundEnabled
+            setOnCheckedChangeListener { _, v -> isSoundEnabled = v; pushFloatingSettingsToAssistant(activity) }
+        }
+        val chkStrictVer = android.widget.CheckBox(activity).apply {
+            text = ftr("التحقق الصارم من توافق إصدار التطبيق قبل التشغيل", "Strict Target App Version Verification")
+            isChecked = isStrictVersionCheck
+            setOnCheckedChangeListener { _, v -> isStrictVersionCheck = v; pushFloatingSettingsToAssistant(activity) }
+        }
+
+        filtersCard.addView(chkAutoAcc)
+        filtersCard.addView(chkAutoRej)
+        filtersCard.addView(chkDry)
+        filtersCard.addView(chkBg)
+        filtersCard.addView(chkSilence)
+        filtersCard.addView(chkSound)
+        filtersCard.addView(chkStrictVer)
+
+        fun makeFilterLabel(t: String): TextView = TextView(activity).apply {
+            text = t
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.parseColor("#475569"))
+            setPadding(0, dp(8f), 0, dp(3f))
+        }
+        fun makeFilterInput(initVal: Double): android.widget.EditText = android.widget.EditText(activity).apply {
+            setText(if (initVal == 0.0) "0" else initVal.toString())
+            textSize = 13f
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            background = roundBg("#F1F5F9", 8f, "#CBD5E1", dp(1f))
+            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+        }
+
+        filtersCard.addView(makeFilterLabel(ftr("الحد الأدنى لسعر التوصيل (ضع 0 لإلغاء الشرط):", "Minimum Delivery Price (Set 0 to disable limit):")))
+        val edtMinP = makeFilterInput(minOrderPrice)
+        filtersCard.addView(edtMinP)
+
+        filtersCard.addView(makeFilterLabel(ftr("الحد الأقصى لبعد المطعم عنك بالكيلومتر (ضع 0 لإلغاء الشرط):", "Max Distance to Restaurant in km (Set 0 to disable limit):")))
+        val edtMaxR = makeFilterInput(maxDistToRestaurant)
+        filtersCard.addView(edtMaxR)
+
+        filtersCard.addView(makeFilterLabel(ftr("الحد الأقصى لبعد العميل عن المطعم بالكيلومتر (ضع 0 لإلغاء الشرط):", "Max Distance to Customer in km (Set 0 to disable limit):")))
+        val edtMaxC = makeFilterInput(maxDistCustomer)
+        filtersCard.addView(edtMaxC)
+
+        // Extra Order Button (OFF = 2 orders, ON = 3 orders)
+        filtersCard.addView(makeFilterLabel(ftr("عدد الطلبات المسموح بها (مغلق = 2 طلبات • مفعل = 3 طلبات):", "Allowed Orders Count (OFF = 2 Orders • ON = 3 Orders):")))
+        val btnExtra = android.widget.Button(activity).apply {
+            isAllCaps = false
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(44f)
+            ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
+        }
+        fun refreshExtraBtn() {
+            if (isExtraOrderEnabled) {
+                btnExtra.text = ftr("➕ طلب إضافي: مفعل ✅ (عدد الطلبات: 3)", "➕ Extra Order: ON ✅ (Orders: 3)")
+                btnExtra.background = roundBg("#059669", 10f)
+            } else {
+                btnExtra.text = ftr("➕ طلب إضافي: مغلق (عدد الطلبات: 2)", "➕ Extra Order: OFF (Orders: 2)")
+                btnExtra.background = roundBg("#475569", 10f)
+            }
+        }
+        refreshExtraBtn()
+        btnExtra.setOnClickListener {
+            isExtraOrderEnabled = !isExtraOrderEnabled
+            maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
+            refreshExtraBtn()
+            pushFloatingSettingsToAssistant(activity)
+        }
+        filtersCard.addView(btnExtra)
+        container.addView(filtersCard)
+
+        // 3. Android ID Spoofer Card
+        val idCard = createFloatingCardContainer(activity)
+        val tvIdTitle = TextView(activity).apply {
+            text = ftr("🆔 تمويه معرف الجهاز (Android ID)", "🆔 Device Android ID Spoofer")
+            textSize = 14.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, dp(4f))
+        }
+        idCard.addView(tvIdTitle)
+
+        val chkSpoofId = android.widget.CheckBox(activity).apply {
+            text = ftr("تفعيل تمويه معرف الجهاز (Android ID)", "Enable Android ID Spoofing")
+            isChecked = DeviceSpoofer.isSpoofAndroidId
+        }
+        idCard.addView(chkSpoofId)
+
+        val idRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(0, dp(4f), 0, 0)
+        }
+        val edtAndroidId = android.widget.EditText(activity).apply {
+            setText(DeviceSpoofer.spoofedAndroidId.ifEmpty { "7a8b9c0d1e2f3456" })
+            textSize = 12.5f
+            setSingleLine(true)
+            background = roundBg("#F1F5F9", 8f, "#CBD5E1", dp(1f))
+            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(38f), 1f).apply { setMargins(0, 0, dp(6f), 0) }
+        }
+        val btnRandId = android.widget.Button(activity).apply {
+            text = ftr("🎲 عشوائي", "🎲 Random")
+            isAllCaps = false
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#4F46E5", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(90f), dp(38f))
+            setOnClickListener {
+                val hex = "0123456789abcdef"
+                val rnd = java.util.Random()
+                val sb = StringBuilder(16)
+                for (i in 0 until 16) sb.append(hex[rnd.nextInt(hex.length)])
+                edtAndroidId.setText(sb.toString())
+            }
+        }
+        idRow.addView(edtAndroidId)
+        idRow.addView(btnRandId)
+        idCard.addView(idRow)
+        container.addView(idCard)
+
+        // 4. Save All Settings Button
+        val btnSaveAll = android.widget.Button(activity).apply {
+            text = ftr("💾 حفظ وتطبيق جميع الإعدادات فوراً", "💾 Save & Apply All Settings Now")
+            isAllCaps = false
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#059669", 12f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(46f)
+            )
+            setOnClickListener {
+                minOrderPrice = edtMinP.text.toString().toDoubleOrNull() ?: 0.0
+                maxDistToRestaurant = edtMaxR.text.toString().toDoubleOrNull() ?: 0.0
+                maxDistCustomer = edtMaxC.text.toString().toDoubleOrNull() ?: 0.0
+                DeviceSpoofer.isSpoofAndroidId = chkSpoofId.isChecked
+                DeviceSpoofer.spoofedAndroidId = edtAndroidId.text.toString().trim()
+                pushFloatingSettingsToAssistant(activity)
+                text = ftr("✅ تم حفظ وتطبيق الإعدادات بنجاح", "✅ All Settings Saved & Applied")
+            }
+        }
+        container.addView(btnSaveAll)
+
+        scroll.addView(container)
+        return scroll
+    }
+
+    // =========================================================================
+    // FLOATING TAB 2: FULL DIAGNOSTIC LOGS & MODULE ISOLATION TAB
+    // =========================================================================
+    private fun buildFloatingLogsTabView(activity: Activity): android.widget.ScrollView {
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * density).toInt()
+        fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = radiusDp * density
+                setColor(android.graphics.Color.parseColor(hex))
+                if (strokeHex != null && strokePx > 0) {
+                    setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
+                }
+            }
+        }
+
+        val scroll = android.widget.ScrollView(activity).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#F8F7FC"))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val container = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(12f), dp(12f), dp(12f), dp(28f))
+        }
+
+        val logCard = createFloatingCardContainer(activity)
+        val title = TextView(activity).apply {
+            text = ftr("📋 نافذة السجل التشخيصي وسجل الملاحة", "📋 Live Diagnostic & Navigation Logs")
+            textSize = 14.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(android.graphics.Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, dp(4f))
+        }
+        logCard.addView(title)
+
+        val tvSummary = TextView(activity).apply {
+            textSize = 11.5f
+            setTextColor(android.graphics.Color.parseColor("#059669"))
+            setPadding(0, 0, 0, dp(8f))
+        }
+        activeFloatingDiagSummaryTv = tvSummary
+        logCard.addView(tvSummary)
+
+        val btnsRow = android.widget.LinearLayout(activity).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(8f))
+        }
+        val btnAllErr = android.widget.Button(activity).apply {
+            text = ftr("🔎 الكل / الأخطاء", "🔎 All / Errors")
+            isAllCaps = false
+            textSize = 10.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#4F46E5", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                flLogsFilterMode = if (flLogsFilterMode == 1) 0 else 1
+                refreshFloatingDiagLogs(activity)
+            }
+        }
+        val btnNavLog = android.widget.Button(activity).apply {
+            text = ftr("🧭 سجل الملاحة", "🧭 NavLog")
+            isAllCaps = false
+            textSize = 10.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#0284C7", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 1f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                flLogsFilterMode = if (flLogsFilterMode == 2) 0 else 2
+                refreshFloatingDiagLogs(activity)
+            }
+        }
+        val btnCopy = android.widget.Button(activity).apply {
+            text = ftr("📋 نسخ", "📋 Copy")
+            isAllCaps = false
+            textSize = 10.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#059669", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 0.75f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                try {
+                    val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText("logs", activeFloatingDiagConsoleTv?.text ?: ""))
+                } catch (_: Throwable) {}
+            }
+        }
+        val btnClear = android.widget.Button(activity).apply {
+            text = ftr("🗑️ مسح", "🗑️ Clear")
+            isAllCaps = false
+            textSize = 10.5f
+            setTextColor(android.graphics.Color.WHITE)
+            background = roundBg("#DC2626", 8f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(34f), 0.7f).apply { setMargins(dp(2f), 0, dp(2f), 0) }
+            setOnClickListener {
+                try {
+                    activity.contentResolver.call(android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"), "clearDiagLogs", null, null)
+                } catch (_: Throwable) {}
+                refreshFloatingDiagLogs(activity)
+            }
+        }
+        btnsRow.addView(btnAllErr)
+        btnsRow.addView(btnNavLog)
+        btnsRow.addView(btnCopy)
+        btnsRow.addView(btnClear)
+        logCard.addView(btnsRow)
+
+        val hScroll = android.widget.HorizontalScrollView(activity).apply {
+            background = roundBg("#0F172A", 12f, "#334155", dp(1f))
+            setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+        }
+        val tvConsole = TextView(activity).apply {
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
+            setTextIsSelectable(true)
+        }
+        activeFloatingDiagConsoleTv = tvConsole
+        hScroll.addView(tvConsole)
+        logCard.addView(hScroll)
+        container.addView(logCard)
+
+        scroll.addView(container)
+        refreshFloatingDiagLogs(activity)
+        return scroll
+    }
+
+    private fun refreshFloatingDiagLogs(activity: Activity) {
+        CoroutineScope(Dispatchers.IO).launch {
+            var rawLogs = ""
+            try {
+                val b = activity.contentResolver.call(android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"), "getDiagLogs", null, null)
+                rawLogs = b?.getString("diag_log_text", "") ?: ""
+            } catch (_: Throwable) {}
+            if (rawLogs.isEmpty()) {
+                try {
+                    val f = File("/data/local/tmp/saned_diag.log")
+                    if (f.exists()) rawLogs = f.readText()
+                } catch (_: Throwable) {}
+            }
+            val lines = rawLogs.lines().filter { it.isNotBlank() }
+            val filtered = when (flLogsFilterMode) {
+                1 -> lines.filter { it.contains("[ERR]") || it.contains("[CRASH]") || it.contains("[WARN]") }
+                2 -> lines.filter { it.contains("[NavLog]") }
+                else -> lines
+            }
+            val displayTxt = if (filtered.isEmpty()) {
+                ftr("لا توجد سجلات مطابقة حالياً.", "No matching log entries.")
+            } else {
+                filtered.takeLast(120).joinToString("\n")
+            }
+            mainHandler.post {
+                activeFloatingDiagSummaryTv?.text = ftr(
+                    "إجمالي الأسطر المسجلة: ${lines.size} • المعروضة: ${filtered.size}",
+                    "Total Lines: ${lines.size} • Showing: ${filtered.size}"
+                )
+                activeFloatingDiagConsoleTv?.text = displayTxt
+            }
         }
     }
 
@@ -4909,6 +7085,8 @@ object OrderInterceptor {
                     putBoolean("dry_run", isDryRun)
                     putBoolean("stay_in_background_v2", isStayInBackground)
                     putBoolean("silence_alert_tone", isSilenceAlertTone)
+                    putBoolean("sound_enabled", isSoundEnabled)
+                    putBoolean("strict_version_check", isStrictVersionCheck)
                     putBoolean("extra_order_enabled", isExtraOrderEnabled)
                     putInt("max_orders_limit", maxOrdersLimit)
                     putString("max_orders_limit_str", maxOrdersLimit.toString())
@@ -4919,10 +7097,13 @@ object OrderInterceptor {
                     putString("max_dist_cust", maxDistCustomer.toString())
                     putString("max_dist_restaurant_to_customer", maxDistCustomer.toString())
                     putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                    putBoolean("fix_location_unknown", LocationEngine.isFixLocationUnknownEnabled)
                     putString("fake_lat", LocationEngine.currentLat.toString())
                     putString("fake_lng", LocationEngine.currentLng.toString())
                     putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
                     putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                    putBoolean("spoof_android_id", DeviceSpoofer.isSpoofAndroidId)
+                    putString("spoofed_android_id", DeviceSpoofer.spoofedAndroidId)
                     putString("app_ui_language", appUiLanguage)
                 }
                 app.contentResolver.call(
@@ -4933,413 +7114,6 @@ object OrderInterceptor {
                 )
             } catch (_: Throwable) {}
         }
-    }
-
-    private fun showFloatingControlPanel(activity: Activity, bubbleView: View) {
-        try {
-            if (activity.isFinishing || activity.isDestroyed) return
-            activeFloatingDialog?.let {
-                if (it.isShowing) {
-                    it.dismiss()
-                    return
-                }
-            }
-
-            val density = activity.resources.displayMetrics.density
-            fun dp(v: Float): Int = (v * density).toInt()
-            fun roundBg(hex: String, radiusDp: Float, strokeHex: String? = null, strokePx: Int = 0): android.graphics.drawable.GradientDrawable {
-                return android.graphics.drawable.GradientDrawable().apply {
-                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                    cornerRadius = radiusDp * density
-                    setColor(android.graphics.Color.parseColor(hex))
-                    if (strokeHex != null && strokePx > 0) {
-                        setStroke(strokePx, android.graphics.Color.parseColor(strokeHex))
-                    }
-                }
-            }
-
-            val isAr = !appUiLanguage.lowercase(Locale.US).startsWith("en")
-            val dlg = Dialog(activity)
-            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-
-            val rootScroll = android.widget.ScrollView(activity).apply {
-                background = roundBg("#0F172A", 20f, "#1E293B", dp(1.5f))
-                layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
-            }
-
-            val mainCol = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                setPadding(dp(16f), dp(14f), dp(16f), dp(16f))
-            }
-
-            // 1. Header Row (Icon + Title + Lang Switch + Close)
-            val headerRow = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(0, 0, 0, dp(10f))
-            }
-
-            val hdrIcon = android.widget.ImageView(activity).apply {
-                layoutParams = android.widget.LinearLayout.LayoutParams(dp(36f), dp(36f)).apply {
-                    setMargins(0, 0, dp(8f), 0)
-                }
-                getFloatingIconBitmap()?.let { setImageBitmap(it) }
-            }
-            headerRow.addView(hdrIcon)
-
-            val titleCol = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val tvTitle = TextView(activity).apply {
-                text = ftr("مساعد ساند السريع", "Saned Quick Assistant")
-                textSize = 15.5f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
-            }
-            val tvSub = TextView(activity).apply {
-                val tokOk = cachedAuthToken.isNotEmpty()
-                text = if (tokOk) ftr("متصل مباشرة ⚡ (0.0ms)", "Connected Live ⚡ (0.0ms)")
-                else ftr("نشط داخل ساند ⚡", "Active Inside Saned ⚡")
-                textSize = 11.5f
-                setTextColor(android.graphics.Color.parseColor("#10B981"))
-            }
-            titleCol.addView(tvTitle)
-            titleCol.addView(tvSub)
-            headerRow.addView(titleCol)
-
-            val btnLang = android.widget.Button(activity).apply {
-                text = if (isAr) "EN 🌐" else "عربي 🌐"
-                textSize = 11.5f
-                isAllCaps = false
-                setTextColor(android.graphics.Color.WHITE)
-                background = roundBg("#1E293B", 10f, "#334155", dp(1f))
-                setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    dp(34f)
-                ).apply { setMargins(dp(4f), 0, dp(4f), 0) }
-                setOnClickListener {
-                    appUiLanguage = if (isAr) "en" else "ar"
-                    pushFloatingSettingsToAssistant(activity)
-                    dlg.dismiss()
-                    activeFloatingDialog = null
-                    showFloatingControlPanel(activity, bubbleView)
-                }
-            }
-            headerRow.addView(btnLang)
-
-            val btnClose = android.widget.Button(activity).apply {
-                text = "✖"
-                textSize = 13f
-                setTextColor(android.graphics.Color.WHITE)
-                background = roundBg("#334155", 10f)
-                layoutParams = android.widget.LinearLayout.LayoutParams(dp(36f), dp(34f))
-                setOnClickListener { dlg.dismiss() }
-            }
-            headerRow.addView(btnClose)
-            mainCol.addView(headerRow)
-
-            // Helper for creating toggle buttons inside the floating panel
-            fun makeToggleRow(labelAr: String, labelEn: String, initial: Boolean, onToggle: (Boolean) -> Unit): android.widget.Button {
-                val btn = android.widget.Button(activity).apply {
-                    isAllCaps = false
-                    textSize = 13f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    setTextColor(android.graphics.Color.WHITE)
-                    layoutParams = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(42f)
-                    ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
-                }
-                var state = initial
-                fun refreshBtn() {
-                    val label = ftr(labelAr, labelEn)
-                    val stateTxt = if (state) ftr("مفعل ✅", "ON ✅") else ftr("متوقف ❌", "OFF ❌")
-                    btn.text = "$label : $stateTxt"
-                    btn.background = if (state) roundBg("#059669", 11f, "#10B981", dp(1f))
-                    else roundBg("#1E293B", 11f, "#475569", dp(1f))
-                }
-                refreshBtn()
-                btn.setOnClickListener {
-                    state = !state
-                    onToggle(state)
-                    refreshBtn()
-                    updateFloatingDotAppearance(bubbleView)
-                    pushFloatingSettingsToAssistant(activity)
-                }
-                return btn
-            }
-
-            // 2. Quick Toggles Section
-            mainCol.addView(makeToggleRow("⚡ التشغيل الرئيسي", "⚡ Master Switch", isMasterRunning) {
-                isMasterRunning = it
-                LocationEngine.isMasterRunning = it
-                DeviceSpoofer.isMasterRunning = it
-            })
-
-            mainCol.addView(makeToggleRow("🚀 قبول تلقائي فوري (0.0ms)", "🚀 Instant Auto-Accept (0.0ms)", isAutoAccept) {
-                isAutoAccept = it
-            })
-
-            mainCol.addView(makeToggleRow("🛡️ رفض تلقائي للغير مطابق", "🛡️ Auto-Reject Unmatched", isAutoReject) {
-                isAutoReject = it
-            })
-
-            // Extra Order Toggle Button (OFF = 2 orders, ON = 3 orders)
-            val btnExtraOrder = android.widget.Button(activity).apply {
-                isAllCaps = false
-                textSize = 13f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(44f)
-                ).apply { setMargins(0, dp(4f), 0, dp(4f)) }
-            }
-            fun refreshExtraOrderBtn() {
-                if (isExtraOrderEnabled) {
-                    btnExtraOrder.text = ftr("➕ طلب إضافي: مفعل ✅ (الحد: 3 طلبات)", "➕ Extra Order: ON ✅ (Limit: 3 Orders)")
-                    btnExtraOrder.background = roundBg("#059669", 11f, "#10B981", dp(1f))
-                } else {
-                    btnExtraOrder.text = ftr("➕ طلب إضافي: متوقف (الافتراضي: 2 طلبات)", "➕ Extra Order: OFF (Default: 2 Orders)")
-                    btnExtraOrder.background = roundBg("#1E293B", 11f, "#475569", dp(1f))
-                }
-            }
-            refreshExtraOrderBtn()
-            btnExtraOrder.setOnClickListener {
-                isExtraOrderEnabled = !isExtraOrderEnabled
-                maxOrdersLimit = if (isExtraOrderEnabled) 3 else 2
-                refreshExtraOrderBtn()
-                pushFloatingSettingsToAssistant(activity)
-            }
-            mainCol.addView(btnExtraOrder)
-
-            // 3. DELIVER ORDER (Camouflaged 2-Point GPS & Route Simulator Quick Control)
-            val deliverCard = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                background = roundBg("#1E293B", 12f, "#334155", dp(1f))
-                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, dp(6f), 0, dp(6f)) }
-            }
-            val tvDeliverHdr = TextView(activity).apply {
-                text = ftr("📦 توصيل الطلب", "📦 DELIVER ORDER")
-                textSize = 13.5f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.parseColor("#38BDF8"))
-                setPadding(0, 0, 0, dp(4f))
-            }
-            deliverCard.addView(tvDeliverHdr)
-
-            deliverCard.addView(makeToggleRow("تفعيل توصيل الطلب", "Enable DELIVER ORDER", LocationEngine.isFakeLocationEnabled) {
-                LocationEngine.isFakeLocationEnabled = it
-                if (it) LocationEngine.pushSpoofedLocationToAllCallbacks()
-            })
-
-            deliverCard.addView(makeToggleRow("تشغيل حركة توصيل الطلب", "Run DELIVER ORDER Movement", LocationEngine.isTripSimulationActive) {
-                LocationEngine.isTripSimulationActive = it
-                if (it) {
-                    LocationEngine.isFakeLocationEnabled = true
-                    LocationEngine.pushSpoofedLocationToAllCallbacks()
-                }
-            })
-            mainCol.addView(deliverCard)
-
-            // 4. Quick Filters (Min Price, Max Rest Dist, Max Cust Dist)
-            val filterCard = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                background = roundBg("#1E293B", 12f, "#334155", dp(1f))
-                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, dp(4f), 0, dp(6f)) }
-            }
-            val tvFilterHdr = TextView(activity).apply {
-                text = ftr("🎯 شروط القبول السريعة (0 = بدون شرط)", "🎯 Quick Filters (0 = No Limit)")
-                textSize = 13f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.parseColor("#FBBF24"))
-                setPadding(0, 0, 0, dp(6f))
-            }
-            filterCard.addView(tvFilterHdr)
-
-            val filterInputsRow = android.widget.LinearLayout(activity).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-            }
-            fun makeNumInput(hintAr: String, hintEn: String, initVal: Double): android.widget.EditText {
-                return android.widget.EditText(activity).apply {
-                    hint = ftr(hintAr, hintEn)
-                    setText(if (initVal > 0.0) initVal.toString() else "0")
-                    textSize = 12.5f
-                    setTextColor(android.graphics.Color.WHITE)
-                    setHintTextColor(android.graphics.Color.parseColor("#94A3B8"))
-                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-                    gravity = android.view.Gravity.CENTER
-                    background = roundBg("#0F172A", 8f, "#475569", dp(1f))
-                    setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
-                    layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(38f), 1f).apply {
-                        setMargins(dp(3f), 0, dp(3f), 0)
-                    }
-                }
-            }
-            val edtP = makeNumInput("أقل سعر", "Min Price", minOrderPrice)
-            val edtR = makeNumInput("كم مطعم", "Rest km", maxDistToRestaurant)
-            val edtC = makeNumInput("كم عميل", "Cust km", maxDistCustomer)
-            filterInputsRow.addView(edtP)
-            filterInputsRow.addView(edtR)
-            filterInputsRow.addView(edtC)
-            filterCard.addView(filterInputsRow)
-
-            val btnSaveFilters = android.widget.Button(activity).apply {
-                text = ftr("💾 حفظ الشروط فوراً", "💾 Save Filters Now")
-                isAllCaps = false
-                textSize = 12.5f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
-                background = roundBg("#2563EB", 9f)
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(38f)
-                ).apply { setMargins(0, dp(8f), 0, 0) }
-                setOnClickListener {
-                    minOrderPrice = edtP.text.toString().toDoubleOrNull() ?: 0.0
-                    maxDistToRestaurant = edtR.text.toString().toDoubleOrNull() ?: 0.0
-                    maxDistCustomer = edtC.text.toString().toDoubleOrNull() ?: 0.0
-                    pushFloatingSettingsToAssistant(activity)
-                    text = ftr("✅ تم الحفظ والتطبيق", "✅ Saved & Applied")
-                }
-            }
-            filterCard.addView(btnSaveFilters)
-            mainCol.addView(filterCard)
-
-            // 5. Recent Orders & Instant Google Maps Navigation Inside Saned
-            val ordersList = synchronized(syncedOrdersCache) {
-                syncedOrdersCache.values.toList().takeLast(3).reversed()
-            }
-            if (ordersList.isNotEmpty()) {
-                val ordHdr = TextView(activity).apply {
-                    text = ftr("📋 آخر الطلبات والملاحة المباشرة:", "📋 Recent Orders & Direct Navigation:")
-                    textSize = 13f
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    setTextColor(android.graphics.Color.parseColor("#E2E8F0"))
-                    setPadding(0, dp(4f), 0, dp(4f))
-                }
-                mainCol.addView(ordHdr)
-
-                for (obj in ordersList) {
-                    val m = OrderModel.fromJson(obj)
-                    val oCard = android.widget.LinearLayout(activity).apply {
-                        orientation = android.widget.LinearLayout.VERTICAL
-                        background = roundBg("#1E293B", 10f, "#334155", dp(1f))
-                        setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
-                        layoutParams = android.widget.LinearLayout.LayoutParams(
-                            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { setMargins(0, dp(3f), 0, dp(3f)) }
-                    }
-                    val dispRef = m.reference.ifEmpty { if (m.id != 0) "#${m.id}" else "#" }
-                    val effFood = if (m.foodPrice > 0.0) m.foodPrice else m.cashAmount
-                    val foodTxt = if (effFood > 0.0) String.format(Locale.US, "%.2f", effFood) else "0.00"
-                    val tvLine1 = TextView(activity).apply {
-                        text = "$dispRef • ${m.restaurant.ifEmpty { ftr("مطعم", "Store") }}"
-                        textSize = 12.5f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        setTextColor(android.graphics.Color.WHITE)
-                    }
-                    val tvLine2 = TextView(activity).apply {
-                        text = ftr(
-                            "التوصيل: ${m.price} ر.س | سعر الطعام: $foodTxt ر.س | الهاتف: ${m.customerPhone.ifEmpty { "—" }}",
-                            "Delivery: ${m.price} SAR | Food Price: $foodTxt SAR | Phone: ${m.customerPhone.ifEmpty { "—" }}"
-                        )
-                        textSize = 11.5f
-                        setTextColor(android.graphics.Color.parseColor("#34D399"))
-                    }
-                    oCard.addView(tvLine1)
-                    oCard.addView(tvLine2)
-
-                    if ((m.pickupLat != 0.0 && m.pickupLng != 0.0) || (m.destLat != 0.0 && m.destLng != 0.0)) {
-                        val navRow = android.widget.LinearLayout(activity).apply {
-                            orientation = android.widget.LinearLayout.HORIZONTAL
-                            setPadding(0, dp(4f), 0, 0)
-                        }
-                        if (m.pickupLat != 0.0 && m.pickupLng != 0.0) {
-                            val bRest = android.widget.Button(activity).apply {
-                                text = ftr("🏪 المطعم ↗", "🏪 Pickup ↗")
-                                isAllCaps = false
-                                textSize = 11f
-                                setTextColor(android.graphics.Color.WHITE)
-                                background = roundBg("#0284C7", 8f)
-                                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(32f), 1f).apply {
-                                    setMargins(dp(2f), 0, dp(2f), 0)
-                                }
-                                setOnClickListener {
-                                    openDirectGoogleMaps(activity, m.pickupLat, m.pickupLng)
-                                    dlg.dismiss()
-                                }
-                            }
-                            navRow.addView(bRest)
-                        }
-                        if (m.destLat != 0.0 && m.destLng != 0.0) {
-                            val bCust = android.widget.Button(activity).apply {
-                                text = ftr("🏠 العميل (قبل الاستلام) ↗", "🏠 Customer (Pre-Pickup) ↗")
-                                isAllCaps = false
-                                textSize = 11f
-                                setTextColor(android.graphics.Color.WHITE)
-                                background = roundBg("#059669", 8f)
-                                layoutParams = android.widget.LinearLayout.LayoutParams(0, dp(32f), 1.3f).apply {
-                                    setMargins(dp(2f), 0, dp(2f), 0)
-                                }
-                                setOnClickListener {
-                                    openDirectGoogleMaps(activity, m.destLat, m.destLng)
-                                    dlg.dismiss()
-                                }
-                            }
-                            navRow.addView(bCust)
-                        }
-                        oCard.addView(navRow)
-                    }
-                    mainCol.addView(oCard)
-                }
-            }
-
-            // 6. Open Full Saned Assistant App Button
-            val btnOpenApp = android.widget.Button(activity).apply {
-                text = ftr("🗺️ فتح خريطة توصيل الطلب والتطبيق الكامل ↗", "🗺️ Open DELIVER ORDER Map & Full App ↗")
-                isAllCaps = false
-                textSize = 12.5f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
-                background = roundBg("#4F46E5", 11f)
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(40f)
-                ).apply { setMargins(0, dp(8f), 0, 0) }
-                setOnClickListener {
-                    try {
-                        val launch = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
-                            ?: Intent().setClassName("dev.jing.sanedhook", "dev.saned.assistant.ui.MainActivity")
-                        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        activity.startActivity(launch)
-                        dlg.dismiss()
-                    } catch (_: Throwable) {}
-                }
-            }
-            mainCol.addView(btnOpenApp)
-
-            rootScroll.addView(mainCol)
-            dlg.setContentView(rootScroll)
-            dlg.window?.apply {
-                setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-                val w = (activity.resources.displayMetrics.widthPixels * 0.92f).toInt()
-                setLayout(w, android.view.WindowManager.LayoutParams.WRAP_CONTENT)
-            }
-            activeFloatingDialog = dlg
-            dlg.show()
-        } catch (_: Throwable) {}
     }
 
     private fun openDirectGoogleMaps(context: Context, lat: Double, lng: Double) {
@@ -5356,5 +7130,4 @@ object OrderInterceptor {
             }
         } catch (_: Throwable) {}
     }
-
 }
