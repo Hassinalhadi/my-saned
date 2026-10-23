@@ -47,6 +47,39 @@ class XposedProvider : ContentProvider() {
         private var lastDiagBroadcastRealtime: Long = 0L
         @Volatile
         private var lastSavedOrdersJson: String? = null
+        private val deletedOrderKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        @Volatile
+        private var deletedKeysLoaded: Boolean = false
+
+        private fun ensureDeletedKeysLoaded(ctx: Context) {
+            if (deletedKeysLoaded) return
+            synchronized(deletedOrderKeys) {
+                if (deletedKeysLoaded) return
+                try {
+                    val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                    val saved = prefs.getStringSet("deleted_order_keys", emptySet()) ?: emptySet()
+                    deletedOrderKeys.addAll(saved)
+                } catch (_: Throwable) {}
+                deletedKeysLoaded = true
+            }
+        }
+
+        private fun isOrderDeleted(ctx: Context, normId: String, normRef: String): Boolean {
+            ensureDeletedKeysLoaded(ctx)
+            val cId = normId.replace("#", "").trim()
+            val cRef = normRef.replace("#", "").trim()
+            if (cId.isNotEmpty() && cId != "0" && deletedOrderKeys.contains(cId)) return true
+            if (cRef.isNotEmpty() && deletedOrderKeys.contains(cRef)) return true
+            return false
+        }
+
+        private fun isCompletedOrDeadStatus(status: String): Boolean {
+            val low = status.lowercase(java.util.Locale.US)
+            return low.contains("deliver") || low.contains("توصيل") ||
+                low.contains("complet") || low.contains("مكتمل") ||
+                low.contains("cancel") || low.contains("ملغ") ||
+                low.contains("expired") || low.contains("انته")
+        }
 
         private fun attachServiceBinder(binder: IBinder, ctx: Context?) {
             if (serviceBinder === binder) return
@@ -231,9 +264,57 @@ class XposedProvider : ContentProvider() {
         @Synchronized
         fun clearCachedOrders(ctx: Context) {
             try {
-                lastSavedOrdersJson = "[]"
+                ensureDeletedKeysLoaded(ctx)
                 val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
-                prefs.edit().putString("orders_log_json", "[]").apply()
+                val existing = lastSavedOrdersJson ?: (prefs.getString("orders_log_json", "[]") ?: "[]")
+                val arr = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val oldId = obj.optString("id", "").replace("#", "").trim()
+                    val oldRef = obj.optString("reference", "").replace("#", "").trim()
+                    if (oldId.isNotEmpty() && oldId != "0") deletedOrderKeys.add(oldId)
+                    if (oldRef.isNotEmpty()) deletedOrderKeys.add(oldRef)
+                }
+                lastSavedOrdersJson = "[]"
+                prefs.edit()
+                    .putString("orders_log_json", "[]")
+                    .putStringSet("deleted_order_keys", HashSet(deletedOrderKeys))
+                    .commit()
+                ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
+            } catch (_: Throwable) {}
+        }
+
+        @Synchronized
+        fun deleteSingleOrder(ctx: Context, orderId: String, orderRef: String) {
+            try {
+                ensureDeletedKeysLoaded(ctx)
+                val cleanId = orderId.replace("#", "").trim()
+                val cleanRef = orderRef.replace("#", "").trim()
+                if (cleanId.isNotEmpty() && cleanId != "0") deletedOrderKeys.add(cleanId)
+                if (cleanRef.isNotEmpty()) deletedOrderKeys.add(cleanRef)
+
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val existing = lastSavedOrdersJson ?: (prefs.getString("orders_log_json", "[]") ?: "[]")
+                val arr = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
+                val newArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val oldId = obj.optString("id", "").replace("#", "").trim()
+                    val oldRef = obj.optString("reference", "").replace("#", "").trim()
+                    if (isSameOrderEntry(cleanId, cleanRef, oldId, oldRef)) {
+                        if (oldId.isNotEmpty() && oldId != "0") deletedOrderKeys.add(oldId)
+                        if (oldRef.isNotEmpty()) deletedOrderKeys.add(oldRef)
+                        continue
+                    }
+                    newArr.put(obj)
+                }
+                val newJsonStr = newArr.toString()
+                lastSavedOrdersJson = newJsonStr
+                prefs.edit()
+                    .putString("orders_log_json", newJsonStr)
+                    .putStringSet("deleted_order_keys", HashSet(deletedOrderKeys))
+                    .commit()
+                ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
             } catch (_: Throwable) {}
         }
 
@@ -371,12 +452,13 @@ class XposedProvider : ContentProvider() {
         @Synchronized
         fun saveOrderAndNotify(ctx: Context, order: OrderModel, notifyUser: Boolean = true) {
             try {
+                val normRef = order.reference.replace("#", "").trim()
+                val normId = if (order.id != 0) order.id.toString() else ""
+                if (isOrderDeleted(ctx, normId, normRef)) return
+
                 val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
                 val existing = lastSavedOrdersJson ?: (prefs.getString("orders_log_json", "[]") ?: "[]")
                 val array = try { JSONArray(existing) } catch (_: Throwable) { JSONArray() }
-
-                val normRef = order.reference.replace("#", "").trim()
-                val normId = if (order.id != 0) order.id.toString() else ""
 
                 val normalizedStatus = if (order.status.equals("Dispatched", ignoreCase = true) || order.status.equals("DISPATCHED", ignoreCase = true)) {
                     "Accepted ✅"
@@ -388,30 +470,68 @@ class XposedProvider : ContentProvider() {
                     foodPrice = if (order.foodPrice > 0.0) order.foodPrice else order.cashAmount
                 )
 
+                var matchIdx = -1
                 for (i in 0 until array.length()) {
                     val obj = array.optJSONObject(i) ?: continue
                     val oldRef = obj.optString("reference", "").replace("#", "").trim()
                     val oldId = obj.optString("id", "").replace("#", "").trim()
                     if (isSameOrderEntry(normId, normRef, oldId, oldRef)) {
+                        if (matchIdx == -1) matchIdx = i
                         mergedOrder = mergeWithExistingModel(mergedOrder, OrderModel.fromJson(obj))
                     }
                 }
 
                 val finalRef = mergedOrder.reference.replace("#", "").trim()
                 val finalId = if (mergedOrder.id != 0) mergedOrder.id.toString() else normId
+                if (isOrderDeleted(ctx, finalId, finalRef)) return
+
+                if (isCompletedOrDeadStatus(mergedOrder.status)) {
+                    if (matchIdx >= 0) {
+                        val cleanedArray = JSONArray()
+                        for (i in 0 until array.length()) {
+                            val obj = array.optJSONObject(i) ?: continue
+                            val oldRef = obj.optString("reference", "").replace("#", "").trim()
+                            val oldId = obj.optString("id", "").replace("#", "").trim()
+                            if (isSameOrderEntry(finalId, finalRef, oldId, oldRef) || isSameOrderEntry(normId, normRef, oldId, oldRef)) {
+                                continue
+                            }
+                            cleanedArray.put(obj)
+                        }
+                        val cleanedStr = cleanedArray.toString()
+                        lastSavedOrdersJson = cleanedStr
+                        prefs.edit().putString("orders_log_json", cleanedStr).apply()
+                        ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
+                    }
+                    return
+                }
 
                 val newArray = JSONArray()
-                newArray.put(mergedOrder.toJson())
-                for (i in 0 until array.length()) {
-                    if (newArray.length() >= 60) break
-                    val obj = array.optJSONObject(i) ?: continue
-                    val oldRef = obj.optString("reference", "").replace("#", "").trim()
-                    val oldId = obj.optString("id", "").replace("#", "").trim()
-                    if (isSameOrderEntry(finalId, finalRef, oldId, oldRef) || isSameOrderEntry(normId, normRef, oldId, oldRef)) {
-                        continue
+                if (matchIdx >= 0) {
+                    // Update IN-PLACE at matchIdx so orders never swap positions!
+                    var updatedPlaced = false
+                    for (i in 0 until array.length()) {
+                        if (newArray.length() >= 60) break
+                        val obj = array.optJSONObject(i) ?: continue
+                        val oldRef = obj.optString("reference", "").replace("#", "").trim()
+                        val oldId = obj.optString("id", "").replace("#", "").trim()
+                        if (isSameOrderEntry(finalId, finalRef, oldId, oldRef) || isSameOrderEntry(normId, normRef, oldId, oldRef)) {
+                            if (!updatedPlaced) {
+                                newArray.put(mergedOrder.toJson())
+                                updatedPlaced = true
+                            }
+                            continue
+                        }
+                        newArray.put(obj)
                     }
-                    newArray.put(obj)
+                } else {
+                    newArray.put(mergedOrder.toJson())
+                    for (i in 0 until array.length()) {
+                        if (newArray.length() >= 60) break
+                        val obj = array.optJSONObject(i) ?: continue
+                        newArray.put(obj)
+                    }
                 }
+
                 val newJsonStr = newArray.toString()
                 if (newJsonStr != existing) {
                     lastSavedOrdersJson = newJsonStr
@@ -437,8 +557,7 @@ class XposedProvider : ContentProvider() {
         }
 
         /**
-         * Single-pass O(N) batch merge:
-         * Parses existing orders ONCE, merges all incoming batch items in memory, and only writes/broadcasts ONCE if changed!
+         * Single-pass O(N) batch merge with strict IN-PLACE updates so order positions never jump!
          */
         @Synchronized
         fun saveOrdersBatch(ctx: Context, ordersJsonArrayStr: String) {
@@ -454,29 +573,38 @@ class XposedProvider : ContentProvider() {
                 val workingList = ArrayList<OrderModel>(existingArr.length() + incoming.length())
                 for (i in 0 until existingArr.length()) {
                     val obj = existingArr.optJSONObject(i) ?: continue
-                    workingList.add(OrderModel.fromJson(obj))
+                    val m = OrderModel.fromJson(obj)
+                    val mRef = m.reference.replace("#", "").trim()
+                    val mId = if (m.id != 0) m.id.toString() else ""
+                    if (!isOrderDeleted(ctx, mId, mRef) && !isCompletedOrDeadStatus(m.status)) {
+                        workingList.add(m)
+                    }
                 }
 
                 for (i in incoming.length() - 1 downTo 0) {
                     val obj = incoming.optJSONObject(i) ?: continue
                     val rawOrder = OrderModel.fromJson(obj)
                     val normalizedStatus = if (rawOrder.status.equals("Dispatched", ignoreCase = true)) "Accepted ✅" else rawOrder.status
-                    var incomingModel = rawOrder.copy(
+                    val incomingModel = rawOrder.copy(
                         status = normalizedStatus,
                         foodPrice = if (rawOrder.foodPrice > 0.0) rawOrder.foodPrice else rawOrder.cashAmount
                     )
                     val normRef = incomingModel.reference.replace("#", "").trim()
                     val normId = if (incomingModel.id != 0) incomingModel.id.toString() else ""
+                    if (isOrderDeleted(ctx, normId, normRef)) continue
 
                     val matchIdx = workingList.indexOfFirst { old ->
                         val oldRef = old.reference.replace("#", "").trim()
                         val oldId = if (old.id != 0) old.id.toString() else ""
                         isSameOrderEntry(normId, normRef, oldId, oldRef)
                     }
+                    if (isCompletedOrDeadStatus(incomingModel.status)) {
+                        if (matchIdx >= 0) workingList.removeAt(matchIdx)
+                        continue
+                    }
                     if (matchIdx >= 0) {
                         val merged = mergeWithExistingModel(incomingModel, workingList[matchIdx])
-                        workingList.removeAt(matchIdx)
-                        workingList.add(0, merged)
+                        workingList[matchIdx] = merged
                     } else {
                         workingList.add(0, incomingModel)
                     }
@@ -609,6 +737,20 @@ class XposedProvider : ContentProvider() {
                     return bundle
                 }
             } catch (_: Throwable) {}
+        }
+
+        if (method == "clearOrders") {
+            clearCachedOrders(ctx)
+            bundle.putBoolean("ok", true)
+            return bundle
+        }
+
+        if (method == "deleteOrder" && extras != null) {
+            val oid = extras.getString("order_id") ?: ""
+            val oref = extras.getString("reference") ?: ""
+            deleteSingleOrder(ctx, oid, oref)
+            bundle.putBoolean("ok", true)
+            return bundle
         }
 
         try {

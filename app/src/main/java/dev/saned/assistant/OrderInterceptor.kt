@@ -569,8 +569,39 @@ object OrderInterceptor {
                     clearPersistedToken()
                 }
                 "dev.saned.assistant.ACTION_CLEAR_ORDERS" -> {
-                    synchronized(syncedOrdersCache) { syncedOrdersCache.clear() }
+                    synchronized(syncedOrdersCache) {
+                        for ((k, v) in syncedOrdersCache) {
+                            val ck = k.replace("#", "").trim()
+                            if (ck.isNotEmpty()) deletedOrderIds.add(ck)
+                            val eid = v.optString("id", "").replace("#", "").trim()
+                            val eref = v.optString("reference", "").replace("#", "").trim()
+                            if (eid.isNotEmpty() && eid != "0") deletedOrderIds.add(eid)
+                            if (eref.isNotEmpty()) deletedOrderIds.add(eref)
+                        }
+                        syncedOrdersCache.clear()
+                    }
+                    deletedOrderIds.addAll(knownDbOrderIds)
                     liveActiveOrderMap.clear()
+                }
+                "dev.saned.assistant.ACTION_DELETE_ORDER" -> {
+                    val oid = (intent.getStringExtra("order_id") ?: "").replace("#", "").trim()
+                    val oref = (intent.getStringExtra("reference") ?: "").replace("#", "").trim()
+                    if (oid.isNotEmpty() && oid != "0") deletedOrderIds.add(oid)
+                    if (oref.isNotEmpty()) deletedOrderIds.add(oref)
+                    synchronized(syncedOrdersCache) {
+                        val toRem = mutableListOf<String>()
+                        for ((k, v) in syncedOrdersCache) {
+                            val eid = v.optString("id", "").replace("#", "").trim()
+                            val eref = v.optString("reference", "").replace("#", "").trim()
+                            if ((oid.isNotEmpty() && (k == oid || eid == oid || eref == oid)) ||
+                                (oref.isNotEmpty() && (k == oref || eref == oref || eid == oref))) {
+                                toRem.add(k)
+                            }
+                        }
+                        for (k in toRem) syncedOrdersCache.remove(k)
+                    }
+                    if (oid.isNotEmpty()) removeOrderLiveActive(oid)
+                    if (oref.isNotEmpty()) removeOrderLiveActive(oref)
                 }
                 "dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS" -> {
                     val oid = intent.getStringExtra("order_id") ?: ""
@@ -589,6 +620,7 @@ object OrderInterceptor {
     }
 
     private val syncedOrdersCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, JSONObject>())
+    private val deletedOrderIds = ConcurrentHashMap.newKeySet<String>()
 
     fun getSyncedOrdersBatchJson(): String {
         val arr = JSONArray()
@@ -616,11 +648,7 @@ object OrderInterceptor {
 
         CoroutineScope(Dispatchers.IO).launch {
             try { syncSettings(app.contentResolver) } catch (_: Throwable) {}
-            val nowRt = SystemClock.elapsedRealtime()
-            if (nowRt - lastPingDbScanRealtime > 6000L) {
-                lastPingDbScanRealtime = nowRt
-                try { scanJahezDatabases(app) } catch (_: Throwable) {}
-            }
+            // Do not scan historical SQLite DB on every ping so old orders never flood or reorder the active list
 
             if (cachedAuthToken.isEmpty()) {
                 readPersistedToken()
@@ -1028,6 +1056,7 @@ object OrderInterceptor {
       addAction("dev.saned.assistant.ACTION_SIMULATE_ORDER")
       addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")
       addAction("dev.saned.assistant.ACTION_CLEAR_ORDERS")
+      addAction("dev.saned.assistant.ACTION_DELETE_ORDER")
       addAction("dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS")
   }
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -2215,39 +2244,50 @@ object OrderInterceptor {
 
         knownDbOrderIds.add(idStr)
         if (refStr.isNotEmpty()) knownDbOrderIds.add(refStr)
-        loggedOrderIds.add("#$idStr")
-        val hasCoordFlag = (effDestLat != 0.0 && effDestLng != 0.0)
-        val normStatus = normalizeOrderStatusDisplay(rawStatus)
-        val syncSignature = "$idStr:$refStr:$normStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:${effectiveFoodPrice.toInt()}:$effectivePayMethod:$hasCoordFlag"
-        if (loggedOrderIds.add(syncSignature)) {
-            sendOrderToLog(
-                orderId = "#$idStr",
-                price = posPrice,
-                dist = calcDist,
-                restaurant = restName,
-                status = normStatus,
-                customerName = finalCustName,
-                customerPhone = finalCustPhone,
-                address = posAddr.ifEmpty { if (effDestLat != 0.0) "Location on map" else "" },
-                cashAmount = effectiveCash,
-                foodPrice = effectiveFoodPrice,
-                paymentMethod = effectivePayMethod,
-                currency = posCurrency,
-                reference = refStr,
-                customerDistanceKm = calcCustDist,
-                pickupLat = effPickupLat,
-                pickupLng = effPickupLng,
-                destLat = effDestLat,
-                destLng = effDestLng,
-                notifyUser = false
-            )
-        }
-
         val uSt = rawStatus.uppercase(Locale.US)
-        val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT")
-        if (isCompleteOrOld) {
+        val isCompleteOrOld = uSt.contains("DELIVER") || uSt.contains("COMPLET") || uSt.contains("CANCEL") || uSt.contains("REJECT") || uSt.contains("EXPIRED")
+        val isUserDeleted = deletedOrderIds.contains(idStr) || (refStr.isNotEmpty() && deletedOrderIds.contains(refStr))
+        if (isCompleteOrOld || isUserDeleted) {
             removeOrderLiveActive(idStr)
             removeOrderLiveActive(refStr)
+            synchronized(syncedOrdersCache) {
+                syncedOrdersCache.remove(idStr)
+                syncedOrdersCache.remove(refStr)
+            }
+            return
+        }
+
+        // Only enrich/sync SQLite row if it is currently active in liveActiveOrderMap or syncedOrdersCache
+        val isCurrentlyActive = liveActiveOrderMap.containsKey(idStr) || liveActiveOrderMap.containsKey(refStr) ||
+            synchronized(syncedOrdersCache) { syncedOrdersCache.containsKey(idStr) || syncedOrdersCache.containsKey(refStr) }
+        if (isCurrentlyActive) {
+            loggedOrderIds.add("#$idStr")
+            val hasCoordFlag = (effDestLat != 0.0 && effDestLng != 0.0)
+            val normStatus = normalizeOrderStatusDisplay(rawStatus)
+            val syncSignature = "$idStr:$refStr:$normStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:${effectiveFoodPrice.toInt()}:$effectivePayMethod:$hasCoordFlag"
+            if (loggedOrderIds.add(syncSignature)) {
+                sendOrderToLog(
+                    orderId = "#$idStr",
+                    price = posPrice,
+                    dist = calcDist,
+                    restaurant = restName,
+                    status = normStatus,
+                    customerName = finalCustName,
+                    customerPhone = finalCustPhone,
+                    address = posAddr.ifEmpty { if (effDestLat != 0.0) "Location on map" else "" },
+                    cashAmount = effectiveCash,
+                    foodPrice = effectiveFoodPrice,
+                    paymentMethod = effectivePayMethod,
+                    currency = posCurrency,
+                    reference = refStr,
+                    customerDistanceKm = calcCustDist,
+                    pickupLat = effPickupLat,
+                    pickupLng = effPickupLng,
+                    destLat = effDestLat,
+                    destLng = effDestLng,
+                    notifyUser = false
+                )
+            }
         }
         if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
             fetchOrderCustomerDetailsAsync(idStr)
@@ -3969,20 +4009,54 @@ object OrderInterceptor {
             time = timeStr
         )
 
+        if ((idKey.isNotEmpty() && deletedOrderIds.contains(idKey)) ||
+            (rawRef.isNotEmpty() && deletedOrderIds.contains(rawRef)) ||
+            (cacheKey.isNotEmpty() && deletedOrderIds.contains(cacheKey))) {
+            return
+        }
+
+        val lowNormSt = normalizedStatus.lowercase(Locale.US)
+        val isDeadOrder = lowNormSt.contains("deliver") || lowNormSt.contains("توصيل") ||
+            lowNormSt.contains("complet") || lowNormSt.contains("cancel") ||
+            lowNormSt.contains("ملغ") || lowNormSt.contains("expired")
+        if (isDeadOrder) {
+            synchronized(syncedOrdersCache) {
+                val keysToRem = mutableListOf<String>()
+                for ((k, v) in syncedOrdersCache) {
+                    val eId = v.optString("id", "").replace("#", "").trim()
+                    val eRef = v.optString("reference", "").replace("#", "").trim()
+                    if ((idKey.isNotEmpty() && (k == idKey || eId == idKey || eRef == idKey)) ||
+                        (cacheKey.isNotEmpty() && (k == cacheKey || eRef == cacheKey || eId == cacheKey))) {
+                        keysToRem.add(k)
+                    }
+                }
+                for (k in keysToRem) syncedOrdersCache.remove(k)
+            }
+            return
+        }
+
         synchronized(syncedOrdersCache) {
-            val keysToRemove = mutableListOf<String>()
+            val matchingKeys = mutableListOf<String>()
             for ((k, v) in syncedOrdersCache) {
                 val eId = v.optString("id", "").replace("#", "").trim()
                 val eRef = v.optString("reference", "").replace("#", "").trim()
                 if ((idKey.isNotEmpty() && (k == idKey || eId == idKey || eRef == idKey)) ||
                     (cacheKey.isNotEmpty() && (k == cacheKey || eRef == cacheKey || eId == cacheKey))) {
-                    keysToRemove.add(k)
+                    matchingKeys.add(k)
                 }
             }
-            for (k in keysToRemove) syncedOrdersCache.remove(k)
-            val primaryKey = cacheKey.ifEmpty { idKey }
-            if (primaryKey.isNotEmpty()) {
-                syncedOrdersCache[primaryKey] = order.toJson()
+            if (matchingKeys.isNotEmpty()) {
+                // Update IN-PLACE at existing key so LinkedHashMap order never changes!
+                val primaryExistingKey = matchingKeys[0]
+                syncedOrdersCache[primaryExistingKey] = order.toJson()
+                for (idx in 1 until matchingKeys.size) {
+                    syncedOrdersCache.remove(matchingKeys[idx])
+                }
+            } else {
+                val primaryKey = cacheKey.ifEmpty { idKey }
+                if (primaryKey.isNotEmpty()) {
+                    syncedOrdersCache[primaryKey] = order.toJson()
+                }
             }
         }
         refreshFloatingAppOrdersIfVisible()

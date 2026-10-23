@@ -247,20 +247,20 @@ class MainActivity : AppCompatActivity() {
 
         val btnClearTop = TextView(this).apply {
             text = "🗑️"
-            textSize = 18f
-            setPadding(20, 10, 20, 10)
+            textSize = 19f
+            setPadding(22, 10, 14, 10)
             setOnClickListener {
                 SettingsStore.clearOrdersLog(this@MainActivity)
                 lastRenderedOrdersSignature = ""
                 refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
                     this@MainActivity,
-                    tr("تم مسح قائمة الطلبات", "Orders list cleared"),
+                    tr("🗑️ تم حذف ومسح جميع الطلبات", "🗑️ All orders deleted & cleared"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
         }
-        btnClearTop.visibility = View.GONE
+        btnClearTop.visibility = View.VISIBLE
         topBar.addView(btnClearTop)
 
         val btnRefreshTop = TextView(this).apply {
@@ -807,6 +807,33 @@ class MainActivity : AppCompatActivity() {
         statusStrip.addView(tvOrdersSubStatus)
         container.addView(statusStrip)
 
+        val btnClearOrdersBar = TextView(this).apply {
+            text = tr("🗑️   حذف ومسح الطلبات من القائمة", "🗑️   Delete & Clear Orders List")
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#DC2626", 16f)
+            setPadding(28, 26, 28, 26)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 24)
+            }
+            setOnClickListener {
+                SettingsStore.clearOrdersLog(this@MainActivity)
+                lastRenderedOrdersSignature = ""
+                refreshOrdersLogUI(forceRebuild = true)
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("🗑️ تم حذف جميع الطلبات من القائمة بنجاح", "🗑️ All orders cleared from list"),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        container.addView(btnClearOrdersBar)
+
         tvOrdersEmptyState = TextView(this).apply {
             text = tr(
                 "لم يتم استلام أي طلبات بعد.\n\nكل طلب يظهر في التطبيق (سواء تم قبوله أو رفضه حسب المسافة والسعر أو يدوياً) سيظهر هنا فوراً بكامل تفاصيله.",
@@ -1130,6 +1157,12 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
             val order = OrderModel.fromJson(item)
+            val stLow = order.status.lowercase(Locale.US)
+            val isCompletedOrDead = stLow.contains("deliver") || stLow.contains("توصيل") ||
+                stLow.contains("complet") || stLow.contains("مكتمل") ||
+                stLow.contains("cancel") || stLow.contains("ملغ") ||
+                stLow.contains("expired") || stLow.contains("انته")
+            if (isCompletedOrDead) continue
             val existingIdx = deduplicatedOrders.indexOfFirst { isSameOrderUi(it, order) }
             if (existingIdx >= 0) {
                 deduplicatedOrders[existingIdx] = mergeOrderModelsUi(deduplicatedOrders[existingIdx], order)
@@ -1297,6 +1330,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
         headerRow.addView(idCopyTv)
+
+        val btnDeleteCard = TextView(this).apply {
+            text = "🗑️"
+            textSize = 15f
+            gravity = Gravity.CENTER
+            background = roundedBg("#FEE2E2", 14f, "#FECACA", 2)
+            setPadding(22, 10, 22, 10)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(16, 0, 0, 0)
+            }
+            setOnClickListener {
+                SettingsStore.deleteSingleOrder(this@MainActivity, order.id, order.reference.ifEmpty { rawId })
+                lastRenderedOrdersSignature = ""
+                refreshOrdersLogUI(forceRebuild = true)
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("🗑️ تم حذف الطلب $displayId", "🗑️ Order $displayId deleted"),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        headerRow.addView(btnDeleteCard)
         inner.addView(headerRow)
 
         // 2. Pickup Box
@@ -1827,6 +1885,27 @@ class MainActivity : AppCompatActivity() {
             setPadding(16, 0, 0, 0)
         }
         row.addView(priceRightTv)
+
+        val btnDeleteMissed = TextView(this).apply {
+            text = "🗑️"
+            textSize = 14.5f
+            gravity = Gravity.CENTER
+            background = roundedBg("#FEE2E2", 12f, "#FECACA", 2)
+            setPadding(18, 10, 18, 10)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(14, 0, 0, 0)
+            }
+            setOnClickListener {
+                val mRef = order.reference.ifEmpty { order.id.toString() }
+                SettingsStore.deleteSingleOrder(this@MainActivity, order.id, mRef)
+                lastRenderedOrdersSignature = ""
+                refreshOrdersLogUI(forceRebuild = true)
+            }
+        }
+        row.addView(btnDeleteMissed)
 
         outerCol.addView(row)
         if (order.destLat != 0.0 && order.destLng != 0.0) {

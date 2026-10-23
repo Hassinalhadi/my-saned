@@ -353,12 +353,12 @@ object SettingsStore {
     // Orders Log
     fun getOrdersLog(context: Context): String = getPrefs(context).getString("orders_log_json", "[]") ?: "[]"
     fun clearOrdersLog(context: Context) {
-        getPrefs(context).edit().putString("orders_log_json", "[]").apply()
         val appCtx = context.applicationContext ?: context
+        try {
+            io.github.libxposed.service.XposedProvider.clearCachedOrders(appCtx)
+        } catch (_: Throwable) {}
+        getPrefs(context).edit().putString("orders_log_json", "[]").commit()
         bgSyncExecutor.execute {
-            try {
-                io.github.libxposed.service.XposedProvider.clearCachedOrders(appCtx)
-            } catch (_: Throwable) {}
             try {
                 val f = File("/data/local/tmp/saned_orders.json")
                 if (f.exists()) f.writeText("[]")
@@ -368,6 +368,28 @@ object SettingsStore {
                     setPackage("net.jahez.fleets")
                 })
                 appCtx.sendBroadcast(Intent("dev.saned.assistant.ACTION_CLEAR_ORDERS"))
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun deleteSingleOrder(context: Context, orderId: Int, reference: String) {
+        val appCtx = context.applicationContext ?: context
+        val idStr = if (orderId != 0) orderId.toString() else ""
+        val refStr = reference.replace("#", "").trim()
+        try {
+            io.github.libxposed.service.XposedProvider.deleteSingleOrder(appCtx, idStr, refStr)
+        } catch (_: Throwable) {}
+        bgSyncExecutor.execute {
+            try {
+                appCtx.sendBroadcast(Intent("dev.saned.assistant.ACTION_DELETE_ORDER").apply {
+                    setPackage("net.jahez.fleets")
+                    putExtra("order_id", idStr)
+                    putExtra("reference", refStr)
+                })
+                appCtx.sendBroadcast(Intent("dev.saned.assistant.ACTION_DELETE_ORDER").apply {
+                    putExtra("order_id", idStr)
+                    putExtra("reference", refStr)
+                })
             } catch (_: Throwable) {}
         }
     }
