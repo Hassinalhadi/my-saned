@@ -250,7 +250,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 19f
             setPadding(22, 10, 14, 10)
             setOnClickListener {
-                SettingsStore.clearOrdersLog(this@MainActivity)
+                clearAllOrdersFromUi()
                 lastRenderedOrdersSignature = ""
                 refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
@@ -822,7 +822,7 @@ class MainActivity : AppCompatActivity() {
                 setMargins(0, 0, 0, 24)
             }
             setOnClickListener {
-                SettingsStore.clearOrdersLog(this@MainActivity)
+                clearAllOrdersFromUi()
                 lastRenderedOrdersSignature = ""
                 refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
@@ -1008,8 +1008,227 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // RENDER ORDERS IN ORDERS TAB
+    // RENDER ORDERS IN ORDERS TAB (WITH PERMANENT POSITION LOCKING)
     // =========================================================================
+    private val ORDER_RANK_PREFS = "sanedhook_order_ranks"
+
+    private fun getOrderRankPrefs(): android.content.SharedPreferences =
+        getSharedPreferences(ORDER_RANK_PREFS, Context.MODE_PRIVATE)
+
+    private fun isOrderDeletedInUi(order: OrderModel): Boolean {
+        val prefs = getOrderRankPrefs()
+        val deletedSet = prefs.getStringSet("deleted_order_keys", emptySet()) ?: emptySet()
+        if (deletedSet.isEmpty()) return false
+        val idStr = if (order.id != 0) order.id.toString() else ""
+        val refStr = order.reference.replace("#", "").trim()
+        if (idStr.isNotEmpty() && deletedSet.contains(idStr)) return true
+        if (refStr.isNotEmpty() && deletedSet.contains(refStr)) return true
+        return false
+    }
+
+    private fun deleteSingleOrderFromUi(order: OrderModel) {
+        val prefs = getOrderRankPrefs()
+        val deletedSet = HashSet(prefs.getStringSet("deleted_order_keys", emptySet()) ?: emptySet())
+        val idStr = if (order.id != 0) order.id.toString() else ""
+        val refStr = order.reference.replace("#", "").trim()
+        if (idStr.isNotEmpty()) deletedSet.add(idStr)
+        if (refStr.isNotEmpty()) deletedSet.add(refStr)
+        prefs.edit().putStringSet("deleted_order_keys", deletedSet).commit()
+
+        try {
+            val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val rawJson = mainPrefs.getString("orders_log_json", "[]") ?: "[]"
+            val arr = try { JSONArray(rawJson) } catch (_: Throwable) { JSONArray() }
+            val newArr = JSONArray()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val m = OrderModel.fromJson(obj)
+                if (isSameOrderUi(m, order)) continue
+                newArr.put(obj)
+            }
+            mainPrefs.edit().putString("orders_log_json", newArr.toString()).commit()
+        } catch (_: Throwable) {}
+
+        try {
+            io.github.libxposed.service.XposedProvider.deleteSingleOrder(this, idStr, refStr)
+        } catch (_: Throwable) {}
+        try {
+            sendBroadcast(Intent("dev.saned.assistant.ACTION_DELETE_ORDER").apply {
+                setPackage("net.jahez.fleets")
+                putExtra("order_id", idStr)
+                putExtra("reference", refStr)
+            })
+            sendBroadcast(Intent("dev.saned.assistant.ACTION_DELETE_ORDER").apply {
+                putExtra("order_id", idStr)
+                putExtra("reference", refStr)
+            })
+        } catch (_: Throwable) {}
+    }
+
+    private fun clearAllOrdersFromUi() {
+        val prefs = getOrderRankPrefs()
+        val deletedSet = HashSet(prefs.getStringSet("deleted_order_keys", emptySet()) ?: emptySet())
+        try {
+            val rawJson = SettingsStore.getOrdersLog(this)
+            val arr = try { JSONArray(rawJson) } catch (_: Throwable) { JSONArray() }
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val oid = obj.optString("id", "").replace("#", "").trim()
+                val oref = obj.optString("reference", "").replace("#", "").trim()
+                if (oid.isNotEmpty() && oid != "0") deletedSet.add(oid)
+                if (oref.isNotEmpty()) deletedSet.add(oref)
+            }
+        } catch (_: Throwable) {}
+        prefs.edit().putStringSet("deleted_order_keys", deletedSet).commit()
+        SettingsStore.clearOrdersLog(this)
+    }
+
+    /**
+     * Assigns each order a permanent integer rank the first time it is seen and locks it in SharedPreferences.
+     * Existing orders NEVER change their rank when updated by Saned in the background or when reopening the app.
+     */
+    private fun lockAndSortOrdersInPlace(orders: MutableList<OrderModel>) {
+        if (orders.isEmpty()) return
+        val prefs = getOrderRankPrefs()
+        val ed = prefs.edit()
+        var changed = false
+        val initialized = prefs.getBoolean("ranks_initialized", false)
+        var minRank = prefs.getInt("min_rank", 10000)
+        var maxRank = prefs.getInt("max_rank", 10000)
+
+        if (!initialized) {
+            for (o in orders) {
+                val idKey = if (o.id != 0) "rank_id_${o.id}" else ""
+                val cleanRef = o.reference.replace("#", "").trim()
+                val refKey = if (cleanRef.isNotEmpty()) "rank_ref_$cleanRef" else ""
+                val r = maxRank++
+                if (idKey.isNotEmpty()) ed.putInt(idKey, r)
+                if (refKey.isNotEmpty()) ed.putInt(refKey, r)
+            }
+            ed.putBoolean("ranks_initialized", true)
+            ed.putInt("min_rank", minRank)
+            ed.putInt("max_rank", maxRank)
+            ed.commit()
+            return
+        }
+
+        val rankMap = HashMap<OrderModel, Int>(orders.size)
+        for (o in orders) {
+            val idKey = if (o.id != 0) "rank_id_${o.id}" else ""
+            val cleanRef = o.reference.replace("#", "").trim()
+            val refKey = if (cleanRef.isNotEmpty()) "rank_ref_$cleanRef" else ""
+
+            val hasIdRank = idKey.isNotEmpty() && prefs.contains(idKey)
+            val hasRefRank = refKey.isNotEmpty() && prefs.contains(refKey)
+
+            val assignedRank = when {
+                hasIdRank -> {
+                    val r = prefs.getInt(idKey, 10000)
+                    if (refKey.isNotEmpty() && !hasRefRank) {
+                        ed.putInt(refKey, r)
+                        changed = true
+                    }
+                    r
+                }
+                hasRefRank -> {
+                    val r = prefs.getInt(refKey, 10000)
+                    if (idKey.isNotEmpty() && !hasIdRank) {
+                        ed.putInt(idKey, r)
+                        changed = true
+                    }
+                    r
+                }
+                else -> {
+                    minRank -= 1
+                    if (idKey.isNotEmpty()) ed.putInt(idKey, minRank)
+                    if (refKey.isNotEmpty()) ed.putInt(refKey, minRank)
+                    ed.putInt("min_rank", minRank)
+                    changed = true
+                    minRank
+                }
+            }
+            rankMap[o] = assignedRank
+        }
+        if (changed) {
+            ed.commit()
+        }
+        orders.sortBy { rankMap[it] ?: 10000 }
+    }
+
+    /**
+     * Merges a batch of orders from Saned (ACTION_PONG or broadcast) strictly IN-PLACE without reordering existing orders.
+     */
+    private fun mergeOrdersBatchInPlaceUi(ordersJsonArrayStr: String) {
+        try {
+            if (ordersJsonArrayStr.isBlank() || ordersJsonArrayStr == "[]") return
+            val incoming = JSONArray(ordersJsonArrayStr)
+            if (incoming.length() == 0) return
+
+            val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val existingStr = mainPrefs.getString("orders_log_json", "[]") ?: "[]"
+            val existingArr = try { JSONArray(existingStr) } catch (_: Throwable) { JSONArray() }
+
+            val workingList = ArrayList<OrderModel>(existingArr.length() + incoming.length())
+            for (i in 0 until existingArr.length()) {
+                val obj = existingArr.optJSONObject(i) ?: continue
+                val m = OrderModel.fromJson(obj)
+                if (!isOrderDeletedInUi(m)) {
+                    workingList.add(m)
+                }
+            }
+
+            var modified = false
+            for (i in 0 until incoming.length()) {
+                val obj = incoming.optJSONObject(i) ?: continue
+                val rawOrder = OrderModel.fromJson(obj)
+                if (isOrderDeletedInUi(rawOrder)) continue
+                val stLow = rawOrder.status.lowercase(Locale.US)
+                val isDead = stLow.contains("deliver") || stLow.contains("توصيل") ||
+                    stLow.contains("complet") || stLow.contains("مكتمل") ||
+                    stLow.contains("cancel") || stLow.contains("ملغ") ||
+                    stLow.contains("expired") || stLow.contains("انته")
+                val normalizedStatus = if (rawOrder.status.equals("Dispatched", ignoreCase = true)) "Accepted ✅" else rawOrder.status
+                val incomingModel = rawOrder.copy(
+                    status = normalizedStatus,
+                    foodPrice = if (rawOrder.foodPrice > 0.0) rawOrder.foodPrice else rawOrder.cashAmount
+                )
+
+                val matchIdx = workingList.indexOfFirst { old -> isSameOrderUi(old, incomingModel) }
+                if (isDead) {
+                    if (matchIdx >= 0) {
+                        workingList.removeAt(matchIdx)
+                        modified = true
+                    }
+                    continue
+                }
+                if (matchIdx >= 0) {
+                    val merged = mergeOrderModelsUi(incomingModel, workingList[matchIdx])
+                    if (merged != workingList[matchIdx]) {
+                        workingList[matchIdx] = merged
+                        modified = true
+                    }
+                } else {
+                    workingList.add(0, incomingModel)
+                    modified = true
+                }
+            }
+
+            if (modified) {
+                lockAndSortOrdersInPlace(workingList)
+                val outArr = JSONArray()
+                for (m in workingList) {
+                    if (outArr.length() >= 60) break
+                    outArr.put(m.toJson())
+                }
+                val newJsonStr = outArr.toString()
+                if (newJsonStr != existingStr) {
+                    mainPrefs.edit().putString("orders_log_json", newJsonStr).commit()
+                    runOnUiThread { refreshOrdersLogUI() }
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun isSameOrderUi(a: OrderModel, b: OrderModel): Boolean {
         val idA = if (a.id != 0) a.id.toString() else ""
         val idB = if (b.id != 0) b.id.toString() else ""
@@ -1136,27 +1355,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         val jsonStr = SettingsStore.getOrdersLog(this)
-        val currentSig = "$isAr:${jsonStr.hashCode()}:${jsonStr.length}"
-        if (!forceRebuild && currentSig == lastRenderedOrdersSignature) {
-            return
-        }
-        lastRenderedOrdersSignature = currentSig
-
-        activeOrdersContainer.removeAllViews()
-        missedOrdersContainer.removeAllViews()
-
         val array = try { JSONArray(jsonStr) } catch (_: Throwable) { JSONArray() }
-
-        if (array.length() == 0) {
-            tvOrdersEmptyState.visibility = View.VISIBLE
-            missedSectionHeader.visibility = View.GONE
-            return
-        }
 
         val deduplicatedOrders = mutableListOf<OrderModel>()
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
             val order = OrderModel.fromJson(item)
+            if (isOrderDeletedInUi(order)) continue
             val stLow = order.status.lowercase(Locale.US)
             val isCompletedOrDead = stLow.contains("deliver") || stLow.contains("توصيل") ||
                 stLow.contains("complet") || stLow.contains("مكتمل") ||
@@ -1170,6 +1375,26 @@ class MainActivity : AppCompatActivity() {
                 deduplicatedOrders.add(order)
             }
         }
+
+        // Lock permanent order ranks and sort so positions NEVER jump even when Saned is active!
+        lockAndSortOrdersInPlace(deduplicatedOrders)
+
+        val currentSig = buildString {
+            append(isAr).append('|').append(deduplicatedOrders.size).append('|')
+            for (o in deduplicatedOrders) {
+                append(o.id).append(':').append(o.reference).append(':').append(o.status)
+                    .append(':').append(o.price).append(':').append(o.foodPrice).append(':')
+                    .append(o.cashAmount).append(':').append(o.customerPhone).append(':')
+                    .append(o.address).append(':').append(o.pickupLat).append(':').append(o.destLat).append(';')
+            }
+        }
+        if (!forceRebuild && currentSig == lastRenderedOrdersSignature) {
+            return
+        }
+        lastRenderedOrdersSignature = currentSig
+
+        activeOrdersContainer.removeAllViews()
+        missedOrdersContainer.removeAllViews()
 
         if (deduplicatedOrders.isEmpty()) {
             tvOrdersEmptyState.visibility = View.VISIBLE
@@ -1344,7 +1569,7 @@ class MainActivity : AppCompatActivity() {
                 setMargins(16, 0, 0, 0)
             }
             setOnClickListener {
-                SettingsStore.deleteSingleOrder(this@MainActivity, order.id, order.reference.ifEmpty { rawId })
+                deleteSingleOrderFromUi(order)
                 lastRenderedOrdersSignature = ""
                 refreshOrdersLogUI(forceRebuild = true)
                 Toast.makeText(
@@ -1900,7 +2125,7 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 val mRef = order.reference.ifEmpty { order.id.toString() }
-                SettingsStore.deleteSingleOrder(this@MainActivity, order.id, mRef)
+                deleteSingleOrderFromUi(order)
                 lastRenderedOrdersSignature = ""
                 refreshOrdersLogUI(forceRebuild = true)
             }
@@ -4894,10 +5119,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 "dev.jing.sanedhook.b" -> {
                     val ordersJson = intent.getStringExtra("o")
-                    if (!ordersJson.isNullOrEmpty() && context != null) {
-                        val appCtx = context.applicationContext ?: context
+                    if (!ordersJson.isNullOrEmpty()) {
                         uiBgExecutor.execute {
-                            io.github.libxposed.service.XposedProvider.saveOrdersBatch(appCtx, ordersJson)
+                            mergeOrdersBatchInPlaceUi(ordersJson)
                         }
                     } else {
                         refreshOrdersLogUI()
@@ -4919,9 +5143,8 @@ class MainActivity : AppCompatActivity() {
             val bHash = batchJson.hashCode()
             if (bHash != lastReceivedBatchHash) {
                 lastReceivedBatchHash = bHash
-                val appCtx = applicationContext ?: this
                 uiBgExecutor.execute {
-                    io.github.libxposed.service.XposedProvider.saveOrdersBatch(appCtx, batchJson)
+                    mergeOrdersBatchInPlaceUi(batchJson)
                 }
             }
         }

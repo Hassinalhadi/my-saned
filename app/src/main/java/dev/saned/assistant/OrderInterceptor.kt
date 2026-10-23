@@ -960,7 +960,7 @@ object OrderInterceptor {
                       httpClient.newCall(warmReq).execute().close()
                   } catch (_: Throwable) {}
               }
-              scanJahezDatabases(ctx)
+              // Do not scan historical SQLite DB in the 2.5s loop so old orders never shuffle active orders
           }
       } catch (t: Throwable) {
           DiagnosticLogger.logError("BootstrapLoop", "Error in background loop iteration", t)
@@ -4061,7 +4061,17 @@ object OrderInterceptor {
         }
         refreshFloatingAppOrdersIfVisible()
 
-        if (ctx != null) {
+        val isUnchangedExisting = prevJson != null &&
+            prevJson.optString("status", "") == order.status &&
+            prevJson.optString("customerPhone", "") == order.customerPhone &&
+            prevJson.optString("address", "") == order.address &&
+            Math.abs(prevJson.optDouble("price", 0.0) - order.price) < 0.01 &&
+            Math.abs(prevJson.optDouble("foodPrice", 0.0) - order.foodPrice) < 0.01 &&
+            Math.abs(prevJson.optDouble("cashAmount", 0.0) - order.cashAmount) < 0.01 &&
+            Math.abs(prevJson.optDouble("pickupLat", 0.0) - order.pickupLat) < 0.00001 &&
+            Math.abs(prevJson.optDouble("destLat", 0.0) - order.destLat) < 0.00001
+
+        if (ctx != null && (!isUnchangedExisting || notifyUser)) {
             // 1. Direct synchronous ContentProvider IPC to XposedProvider (never blocked by background broadcast rules)
             try {
                 val uri = android.net.Uri.parse("content://dev.jing.sanedhook.XposedService")
