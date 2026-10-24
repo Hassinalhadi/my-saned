@@ -4,12 +4,15 @@ import android.app.Activity
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.os.BaseBundle
 import android.os.Build
 import android.os.Bundle
 import dev.jing.sanedhook.util.Native
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Modifier
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 object PackageCloaker {
@@ -36,7 +39,7 @@ object PackageCloaker {
     @Volatile var detectedVersionIndex: Int = -1
     @Volatile var activeProfile: VersionProfile? = null
     @Volatile var lastCheckedVersionCode: Long = 0L
-    @Volatile private var mapsCertCheckResult: Int = 0
+    @Volatile private var mapsCertCheckResult: Int = 0 // 0=unchecked, 1=official Play Store cert, 2=re-signed/non-root patched
 
     private val HIDDEN_PATCH_PACKAGES = setOf(
         "top.nkbe.npatch",
@@ -51,6 +54,8 @@ object PackageCloaker {
     private val isLoaderHooked = AtomicBoolean(false)
     private val isBlockedActHooked = AtomicBoolean(false)
     private val isSecurityHooked = AtomicBoolean(false)
+    private val isMapsAndPkgHooked = AtomicBoolean(false)
+    private val isBundleMapsKeyHooked = AtomicBoolean(false)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
 
@@ -63,6 +68,42 @@ object PackageCloaker {
             return true
         }
         return mapsCertCheckResult == 2
+    }
+
+    fun shouldReplaceMapsApiKey(module: XposedModule? = DiagnosticLogger.xposedModule): Boolean {
+        if (mapsCertCheckResult == 2) return true
+        if (mapsCertCheckResult == 1) return false
+        if (isNonRootFramework(module)) {
+            mapsCertCheckResult = 2
+            return true
+        }
+        try {
+            val ctx = OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+            if (ctx != null) {
+                val srcDir = ctx.applicationInfo?.sourceDir
+                if (!srcDir.isNullOrEmpty()) {
+                    val isOfficial = Native.safeR(srcDir)
+                    if (!isOfficial) {
+                        mapsCertCheckResult = 2
+                        return true
+                    }
+                }
+                @Suppress("DEPRECATION")
+                val pInfo = ctx.packageManager.getPackageInfo("net.jahez.fleets", PackageManager.GET_SIGNATURES)
+                @Suppress("DEPRECATION")
+                val sigs = pInfo?.signatures
+                if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
+                    val sha256 = MessageDigest.getInstance("SHA-256")
+                        .digest(sigs[0].toByteArray())
+                        .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                    val isOfficialCert = sha256.equals(Native.OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
+                    mapsCertCheckResult = if (isOfficialCert) 1 else 2
+                    return !isOfficialCert
+                }
+            }
+        } catch (_: Throwable) {}
+        // Default to true until verified official so early MapsInitializer calls on re-signed APKs never fail
+        return true
     }
 
     fun getAllVersionProfiles(): List<VersionProfile> {
@@ -131,11 +172,79 @@ object PackageCloaker {
     }
 
     /**
+     * Installs Universal Google Maps API Key hooks & Package Manager cloaking at the earliest stage (hookEarly):
+     * 1. Hooks ApplicationPackageManager.getApplicationInfo, getApplicationInfoAsUser, getPackageInfo, and getPackageInfoAsUser
+     *    (fixes ColorOS/Realme/OxygenOS/HyperOS/OneUI Android 13-16 where getApplicationInfo is AOT-inlined to getApplicationInfoAsUser!).
+     * 2. Hooks BaseBundle.getString / Bundle.getString for "com.google.android.geo.API_KEY" so Google Maps Dynamite module
+     *    always receives the unrestricted Maps API Key even if PackageManager calls were AOT-inlined in boot.oat!
+     */
+    private fun installMapsAndPackageCloakerHooks(module: XposedModule) {
+        if (isMapsAndPkgHooked.compareAndSet(false, true)) {
+            try {
+                val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
+                val targetNames = setOf(
+                    "getApplicationInfo",
+                    "getApplicationInfoAsUser",
+                    "getPackageInfo",
+                    "getPackageInfoAsUser"
+                )
+                for (m in appPkgMgrClass.declaredMethods) {
+                    if (m.name in targetNames) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val pkgArg = chain.args.firstOrNull() as? String
+                                if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg)) {
+                                    throw PackageManager.NameNotFoundException(pkgArg)
+                                }
+                                val res = chain.proceed()
+                                patchGoogleMapsApiKeyIfNeeded(res, module)
+                                return res
+                            }
+                        })
+                    }
+                }
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked ApplicationPackageManager (getApplicationInfo/AsUser + getPackageInfo/AsUser)")
+            } catch (t: Throwable) {
+                DiagnosticLogger.logError("PackageCloaker:MapsPkg", "Error hooking ApplicationPackageManager", t)
+            }
+        }
+
+        if (isBundleMapsKeyHooked.compareAndSet(false, true)) {
+            for (bundleCls in listOf(BaseBundle::class.java, Bundle::class.java)) {
+                try {
+                    for (m in bundleCls.declaredMethods) {
+                        if (m.name == "getString" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    val key = chain.args.firstOrNull() as? String
+                                    if (key == "com.google.android.geo.API_KEY") {
+                                        if (shouldReplaceMapsApiKey(module)) {
+                                            val replacementKey = Native.safeQ()
+                                            if (replacementKey.isNotEmpty()) {
+                                                return replacementKey
+                                            }
+                                        }
+                                    }
+                                    return chain.proceed()
+                                }
+                            })
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+            DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle.getString for com.google.android.geo.API_KEY")
+        }
+    }
+
+    /**
      * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk.
      * Note: Stubs JNI native methods FIRST, and only suppresses Runtime.loadLibrary0("jahez_fleets")
      * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build.
      */
     fun hookEarly(module: XposedModule, classLoader: ClassLoader) {
+        // 0. Install Universal Google Maps API Key & PackageManager hooks immediately in hookEarly!
+        installMapsAndPackageCloakerHooks(module)
+
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
 
@@ -269,6 +378,7 @@ object PackageCloaker {
      * extended to support both Root (LSPosed) and Non-Root (NPatch v1.0.9 / Vector / LSPatch).
      */
     fun hook(module: XposedModule, classLoader: ClassLoader) {
+        installMapsAndPackageCloakerHooks(module)
         if (DiagnosticLogger.hookEarlyCloaker) {
             hookEarly(module, classLoader)
         }
@@ -410,33 +520,29 @@ object PackageCloaker {
         } catch (t: Throwable) {
             DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)
         }
-
-        // 5. Lb51.b + NPatch/LSPatch Cloaking: Hook getApplicationInfo & getPackageInfo for Maps API Key, appComponentFactory cloaking & Manager hiding
-        try {
-            val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
-            for (m in appPkgMgrClass.declaredMethods) {
-                if (m.name == "getApplicationInfo" || m.name == "getPackageInfo") {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val pkgArg = chain.args.firstOrNull() as? String
-                            if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg)) {
-                                throw PackageManager.NameNotFoundException(pkgArg)
-                            }
-                            val res = chain.proceed()
-                            patchGoogleMapsApiKeyIfNeeded(res, module)
-                            return res
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
     }
 
     fun patchGoogleMapsApiKeyIfNeeded(infoObj: Any?, module: XposedModule? = null) {
         try {
             val appInfo: ApplicationInfo = when (infoObj) {
                 is ApplicationInfo -> infoObj
-                is PackageInfo -> infoObj.applicationInfo ?: return
+                is PackageInfo -> {
+                    // Check PackageInfo signatures if present to accurately classify official vs re-signed APK
+                    if (infoObj.packageName == "net.jahez.fleets" && mapsCertCheckResult == 0) {
+                        try {
+                            @Suppress("DEPRECATION")
+                            val sigs = infoObj.signatures
+                            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
+                                val sha256 = MessageDigest.getInstance("SHA-256")
+                                    .digest(sigs[0].toByteArray())
+                                    .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                                val isOfficialCert = sha256.equals(Native.OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
+                                mapsCertCheckResult = if (isOfficialCert && !isNonRootFramework(module)) 1 else 2
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                    infoObj.applicationInfo ?: return
+                }
                 else -> return
             }
             if (appInfo.packageName != "net.jahez.fleets") return
@@ -459,15 +565,14 @@ object PackageCloaker {
             if (mapsCertCheckResult == 0) {
                 val srcDir = appInfo.sourceDir
                 if (!srcDir.isNullOrEmpty()) {
-                    val isOfficial = try { Native.safeR(srcDir) } catch (_: Throwable) { true }
+                    val isOfficial = try { Native.safeR(srcDir) } catch (_: Throwable) { false }
                     mapsCertCheckResult = if (isOfficial && !isNonRootFramework(module)) 1 else 2
                 } else if (isNonRootFramework(module)) {
                     mapsCertCheckResult = 2
                 }
             }
-            if (mapsCertCheckResult != 2 && !isNonRootFramework(module)) return
+            if (!shouldReplaceMapsApiKey(module)) return
             val metaData: Bundle = appInfo.metaData ?: return
-            if (!metaData.containsKey("com.google.android.geo.API_KEY")) return
             val replacementKey = Native.safeQ()
             if (replacementKey.isNotEmpty()) {
                 metaData.putString("com.google.android.geo.API_KEY", replacementKey)

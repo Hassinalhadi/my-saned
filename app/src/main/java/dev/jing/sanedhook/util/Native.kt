@@ -1,6 +1,10 @@
 package dev.jing.sanedhook.util
 
 import java.io.File
+import java.security.MessageDigest
+import java.security.cert.CertificateFactory
+import java.util.Locale
+import java.util.jar.JarFile
 import java.util.zip.ZipFile
 
 object Native {
@@ -45,8 +49,10 @@ object Native {
     private const val FALLBACK_ENCRYPTED_PREFS = "ENCRYPTED_SANED_PREFERENCES"
     private const val FALLBACK_TOKEN_KEY = "token"
     private const val FALLBACK_LANG_KEY = "language"
-    // Unrestricted Google Maps API Key from 0xc08a in libshnative.so for Non-Root NPatch/LSPatch re-signed APKs
+    // Unrestricted Google Maps API Key from 0xc08a in libshnative.so for Non-Root NPatch/LSPatch/Vector re-signed APKs
     private const val FALLBACK_MAPS_API_KEY = "AIzaSyDngGva2vOywyZGjSvoGQqnIr-IC3v4FVE"
+    // Official Jahez Fleets Play Store signing certificate SHA-256 from 0xc0b2 in libshnative.so
+    const val OFFICIAL_JAHEZ_CERT_SHA256 = "ddd7c4454531d8be96dba3421d157fa7343ce0d3352f10ad02b3ca9c5bd003cf"
 
     private val FALLBACK_INTENT_KEYS = arrayOf(
         "EXTRA_DISPATCH_REQUEST_ID", "EXTRA_DISPATCH_PICKUP_LATITUDE", "EXTRA_DISPATCH_PICKUP_LONGITUDE",
@@ -84,7 +90,7 @@ object Native {
         val cleanTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
         val cleanLang = lang.trim().ifEmpty { "en" }
         val (method, url) = when (kind) {
-            0 -> "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderId"
+            0 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderId"
             1 -> "PUT" to "https://gateway.saned.io/api/v1/dispatch/reject/$orderId"
             2 -> "GET" to "https://gateway.saned.io/api/v1/dispatch/active"
             3 -> "GET" to "https://gateway.saned.io/api/v1/dispatch-location/contact-number/$orderId"
@@ -120,28 +126,60 @@ object Native {
     fun safeQ(): String = FALLBACK_MAPS_API_KEY
 
     /**
-     * Returns true if the APK at [path] is an unpatched official APK,
-     * or false if it was patched/re-signed by NPatch, Vector, or LSPatch.
+     * Matches Native.r(path) at 0x21d80 & 0xc0b2 in libshnative.so:
+     * Returns true ONLY if the APK at [path] is signed with Jahez's official Play Store certificate
+     * (ddd7c4454531d8be96dba3421d157fa7343ce0d3352f10ad02b3ca9c5bd003cf) and has no Non-Root patch entries.
+     * Returns false if the APK was re-signed or patched by NPatch, Vector, LSPatch, or any APK modifier.
      */
     fun safeR(path: String): Boolean {
-        if (path.isBlank()) return true
+        if (path.isBlank()) return false
         return try {
             val f = File(path)
-            if (!f.exists() || !f.canRead()) return true
+            if (!f.exists() || !f.canRead()) return false
             ZipFile(f).use { zf ->
-                val isNonRootPatched =
-                    zf.getEntry("assets/npatch/metaloader.dex") != null ||
-                    zf.getEntry("assets/npatch/config.json") != null ||
-                    zf.getEntry("assets/npatch/origin.apk") != null ||
-                    zf.getEntry("assets/lspatch/metaloader.dex") != null ||
-                    zf.getEntry("assets/lspatch/config.json") != null ||
-                    zf.getEntry("assets/lspatch/origin.apk") != null ||
-                    zf.getEntry("lib/arm64-v8a/libnpatch.so") != null ||
-                    zf.getEntry("lib/x86_64/libnpatch.so") != null
-                !isNonRootPatched
+                val entries = zf.entries()
+                var certSha256: String? = null
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement() ?: continue
+                    val name = entry.name ?: ""
+                    if (name.startsWith("assets/npatch/") ||
+                        name.startsWith("assets/lspatch/") ||
+                        name.startsWith("assets/vector/") ||
+                        name.startsWith("assets/xposed/") ||
+                        name.contains("metaloader.dex") ||
+                        name.contains("origin.apk") ||
+                        name.endsWith("libnpatch.so") ||
+                        name.endsWith("liblspatch.so")
+                    ) {
+                        return false
+                    }
+                    if (certSha256 == null && name.startsWith("META-INF/") &&
+                        (name.endsWith(".RSA", ignoreCase = true) ||
+                         name.endsWith(".DSA", ignoreCase = true) ||
+                         name.endsWith(".EC", ignoreCase = true))
+                    ) {
+                        try {
+                            zf.getInputStream(entry).use { ins ->
+                                val cf = CertificateFactory.getInstance("X.509")
+                                val certs = cf.generateCertificates(ins)
+                                val firstCert = certs.firstOrNull()
+                                if (firstCert != null) {
+                                    certSha256 = MessageDigest.getInstance("SHA-256")
+                                        .digest(firstCert.encoded)
+                                        .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
+                if (certSha256 != null) {
+                    return certSha256.equals(OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
+                }
             }
+            // If no v1 META-INF signature block exists (e.g. v2/v3-only re-signed APK), return false so unrestricted Maps key is injected
+            false
         } catch (_: Throwable) {
-            true
+            false
         }
     }
 

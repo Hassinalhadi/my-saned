@@ -1814,10 +1814,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun pushLicenseStateToSaned() {
         try {
+            val nowMod = System.currentTimeMillis()
             val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            mainPrefs.edit().putLong("last_settings_mod_ms", nowMod).commit()
             val bDevsSet = mainPrefs.getStringSet("jdrv_remote_blocked_devs", emptySet()) ?: emptySet()
             val bKeysSet = mainPrefs.getStringSet("jdrv_remote_blocked_keys", emptySet()) ?: emptySet()
             val extras = Bundle().apply {
+                putLong("last_settings_mod_ms", nowMod)
                 putString("jdrv_lic_key", mainPrefs.getString("jdrv_lic_key", "") ?: "")
                 putString("jdrv_hw_device_id", getHardwareDeviceId())
                 putString("jdrv_trial_ledger_entry", mainPrefs.getString("jdrv_trial_ledger_entry", "") ?: "")

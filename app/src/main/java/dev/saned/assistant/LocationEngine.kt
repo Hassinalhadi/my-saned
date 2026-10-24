@@ -27,7 +27,7 @@ object LocationEngine {
 
     @Volatile var isMasterRunning: Boolean = true
     @Volatile var isFakeLocationEnabled: Boolean = false
-    @Volatile var isFixLocationUnknownEnabled: Boolean = false
+    @Volatile var isFixLocationUnknownEnabled: Boolean = true
     @Volatile var isTripSimulationActive: Boolean = false
     @Volatile var simulatedSpeedKmh: Float = 45.0f
     @Volatile var currentBearing: Float = 0.0f

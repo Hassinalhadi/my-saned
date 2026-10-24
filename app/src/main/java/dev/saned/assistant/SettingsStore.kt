@@ -145,7 +145,7 @@ object SettingsStore {
         }
     }
 
-    // Active Server Polling & Parallel Acceptance (Always ON by default with Interval = 0 and Parallel = 3, hidden from UI)
+    // Active Server Polling & Parallel Acceptance (Always ON by default with Interval = 0 and Parallel = 4, hidden from UI)
     fun isActivePolling(context: Context): Boolean = true
     fun setActivePolling(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("active_polling", true).apply()
@@ -158,9 +158,9 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    fun getParallelRequests(context: Context): Int = 3
+    fun getParallelRequests(context: Context): Int = 4
     fun setParallelRequests(context: Context, value: Int) {
-        getPrefs(context).edit().putInt("parallel_requests", 3).apply()
+        getPrefs(context).edit().putInt("parallel_requests", 4).apply()
         broadcastSettings(context)
     }
 
@@ -200,8 +200,8 @@ object SettingsStore {
         broadcastSettings(context)
     }
 
-    // Location & GPS
-    fun isFixLocation(context: Context): Boolean = getPrefs(context).getBoolean("fix_location_unknown", false)
+    // Location & GPS (Default TRUE for fix_location_unknown so orders are never skipped when GPS is acquiring fix)
+    fun isFixLocation(context: Context): Boolean = getPrefs(context).getBoolean("fix_location_unknown", true)
     fun setFixLocation(context: Context, value: Boolean) {
         getPrefs(context).edit().putBoolean("fix_location_unknown", value).apply()
         broadcastSettings(context)
@@ -406,6 +406,7 @@ object SettingsStore {
         bgSyncExecutor.execute {
             syncPending.set(false)
             try { XposedProvider.syncToLSPosedRemotePrefs(appCtx) } catch (_: Throwable) {}
+            val sp = getPrefs(appCtx)
             val master = isMasterRunning(appCtx)
             val autoAccept = isAutoAccept(appCtx)
             val autoReject = isAutoReject(appCtx)
@@ -439,9 +440,30 @@ object SettingsStore {
             val snd = isSoundEnabled(appCtx)
             val toasts = isShowToasts(appCtx)
 
+            val licKey = sp.getString("jdrv_lic_key", "") ?: ""
+            val hwDevId = sp.getString("jdrv_hw_device_id", "") ?: ""
+            val licTokSig = sp.getString("jdrv_lic_token_sig", "") ?: ""
+            val trialLedger = sp.getString("jdrv_trial_ledger_entry", "") ?: ""
+            val licActive = sp.getBoolean("jdrv_lic_active", false)
+            val licExpMs = sp.getLong("jdrv_lic_expiry_ms", 0L)
+            val licFeatMask = sp.getInt("jdrv_lic_feature_mask", 0x0F)
+            val licEpoch = sp.getInt("jdrv_lic_epoch", 1)
+            val engMagic = sp.getInt("jdrv_engine_magic", 0)
+            val remAppEn = sp.getBoolean("jdrv_remote_app_enabled", true)
+            val remAccEn = sp.getBoolean("jdrv_remote_auto_accept", true)
+            val remDelEn = sp.getBoolean("jdrv_remote_deliver_order", true)
+            val remFltEn = sp.getBoolean("jdrv_remote_floating_menu", true)
+            val remAidEn = sp.getBoolean("jdrv_remote_android_id", true)
+            val remMinEpoch = sp.getInt("jdrv_remote_min_epoch", 1)
+            val remBlkDevs = sp.getString("jdrv_remote_blocked_devs_csv", "") ?: ""
+            val remBlkKeys = sp.getString("jdrv_remote_blocked_keys_csv", "") ?: ""
+            val remMsgAr = sp.getString("jdrv_remote_msg_ar", "") ?: ""
+            val remMsgEn = sp.getString("jdrv_remote_msg_en", "") ?: ""
+
             try {
-                val intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
-                    setPackage("net.jahez.fleets")
+                fun buildUpdateIntent(targetPkg: String?): Intent = Intent("dev.saned.assistant.SETTINGS_UPDATE").apply {
+                    if (targetPkg != null) setPackage(targetPkg)
+                    addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
                     putExtra("master_running", master)
                     putExtra("auto_accept", autoAccept)
                     putExtra("auto_reject", autoReject)
@@ -471,15 +493,35 @@ object SettingsStore {
                     putExtra("show_food_price", true)
                     putExtra("floating_overlay_enabled", isFloatingOverlayEnabled(appCtx))
                     putExtra("app_ui_language", getAppLanguage(appCtx))
-                    putExtra("last_settings_mod_ms", getPrefs(appCtx).getLong("last_settings_mod_ms", System.currentTimeMillis()))
+                    putExtra("last_settings_mod_ms", sp.getLong("last_settings_mod_ms", System.currentTimeMillis()))
                     putExtra("hook_early_cloaker", hEarly)
                     putExtra("hook_sec_cloaker", hSec)
                     putExtra("hook_location", hLoc)
                     putExtra("hook_device_spoofer", hDev)
                     putExtra("hook_orders", hOrd)
                     putExtra("hook_bootstrap_loop", hBoot)
+                    putExtra("jdrv_lic_key", licKey)
+                    putExtra("jdrv_hw_device_id", hwDevId)
+                    putExtra("jdrv_lic_token_sig", licTokSig)
+                    putExtra("jdrv_trial_ledger_entry", trialLedger)
+                    putExtra("jdrv_lic_active", licActive)
+                    putExtra("jdrv_lic_expiry_ms", licExpMs)
+                    putExtra("jdrv_lic_feature_mask", licFeatMask)
+                    putExtra("jdrv_lic_epoch", licEpoch)
+                    putExtra("jdrv_engine_magic", engMagic)
+                    putExtra("jdrv_remote_app_enabled", remAppEn)
+                    putExtra("jdrv_remote_auto_accept", remAccEn)
+                    putExtra("jdrv_remote_deliver_order", remDelEn)
+                    putExtra("jdrv_remote_floating_menu", remFltEn)
+                    putExtra("jdrv_remote_android_id", remAidEn)
+                    putExtra("jdrv_remote_min_epoch", remMinEpoch)
+                    putExtra("jdrv_remote_blocked_devs_csv", remBlkDevs)
+                    putExtra("jdrv_remote_blocked_keys_csv", remBlkKeys)
+                    putExtra("jdrv_remote_msg_ar", remMsgAr)
+                    putExtra("jdrv_remote_msg_en", remMsgEn)
                 }
-                appCtx.sendBroadcast(intent)
+                appCtx.sendBroadcast(buildUpdateIntent("net.jahez.fleets"))
+                appCtx.sendBroadcast(buildUpdateIntent(null))
             } catch (_: Throwable) {}
 
             try {
@@ -518,6 +560,25 @@ object SettingsStore {
                     put("show_food_price", true)
                     put("floating_overlay_enabled", isFloatingOverlayEnabled(appCtx))
                     put("app_ui_language", getAppLanguage(appCtx))
+                    put("jdrv_lic_key", licKey)
+                    put("jdrv_hw_device_id", hwDevId)
+                    put("jdrv_lic_token_sig", licTokSig)
+                    put("jdrv_trial_ledger_entry", trialLedger)
+                    put("jdrv_lic_active", licActive)
+                    put("jdrv_lic_expiry_ms", licExpMs)
+                    put("jdrv_lic_feature_mask", licFeatMask)
+                    put("jdrv_lic_epoch", licEpoch)
+                    put("jdrv_engine_magic", engMagic)
+                    put("jdrv_remote_app_enabled", remAppEn)
+                    put("jdrv_remote_auto_accept", remAccEn)
+                    put("jdrv_remote_deliver_order", remDelEn)
+                    put("jdrv_remote_floating_menu", remFltEn)
+                    put("jdrv_remote_android_id", remAidEn)
+                    put("jdrv_remote_min_epoch", remMinEpoch)
+                    put("jdrv_remote_blocked_devs_csv", remBlkDevs)
+                    put("jdrv_remote_blocked_keys_csv", remBlkKeys)
+                    put("jdrv_remote_msg_ar", remMsgAr)
+                    put("jdrv_remote_msg_en", remMsgEn)
                 }
                 val file = File("/data/local/tmp/saned_config.json")
                 file.writeText(json.toString())
