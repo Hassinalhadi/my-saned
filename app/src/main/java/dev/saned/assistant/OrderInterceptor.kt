@@ -601,48 +601,10 @@ object OrderInterceptor {
 
     val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
 
-    private fun triggerReflectionAcceptOnActivity(activity: Activity, orderIdInt: Int) {
-        try {
-            var cls: Class<*>? = activity.javaClass
-            while (cls != null && cls != Activity::class.java && cls != Any::class.java) {
-                for (m in cls.declaredMethods) {
-                    val mn = m.name.lowercase(Locale.US)
-                    if ((mn.contains("accept") || mn.contains("confirm")) && !mn.contains("reject") && !mn.contains("cancel")) {
-                        m.isAccessible = true
-                        if (m.parameterCount == 0) {
-                            try { m.invoke(activity) } catch (_: Throwable) {}
-                        } else if (m.parameterCount == 1 && orderIdInt > 0 &&
-                            (m.parameterTypes[0] == Int::class.javaPrimitiveType || m.parameterTypes[0] == Integer::class.java)) {
-                            try { m.invoke(activity, orderIdInt) } catch (_: Throwable) {}
-                        }
-                    }
-                }
-                for (f in cls.declaredFields) {
-                    f.isAccessible = true
-                    val fieldObj = try { f.get(activity) } catch (_: Throwable) { null } ?: continue
-                    val fClsName = fieldObj.javaClass.name
-                    if (fClsName.startsWith("net.jahez.") || fClsName.startsWith("net.saned.")) {
-                        for (fm in fieldObj.javaClass.declaredMethods) {
-                            val fmn = fm.name.lowercase(Locale.US)
-                            if ((fmn.contains("accept") || fmn == "onacceptclicked" || fmn == "acceptdispatch") &&
-                                !fmn.contains("reject") && !fmn.contains("cancel")) {
-                                fm.isAccessible = true
-                                if (fm.parameterCount == 0) {
-                                    try { fm.invoke(fieldObj) } catch (_: Throwable) {}
-                                } else if (fm.parameterCount == 1 && orderIdInt > 0 &&
-                                    (fm.parameterTypes[0] == Int::class.javaPrimitiveType || fm.parameterTypes[0] == Integer::class.java)) {
-                                    try { fm.invoke(fieldObj, orderIdInt) } catch (_: Throwable) {}
-                                }
-                            }
-                        }
-                    }
-                }
-                cls = cls.superclass
-            }
-        } catch (_: Throwable) {}
-    }
-
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
+        if (orderIdInt == 0) return
+        val entry = handledOrdersMap[orderIdInt] ?: return
+        if ((entry.decision != "ACCEPT" && entry.decision != "REJECT") || isDryRun) return
         if (isSilenceAlertTone) {
             try {
                 for (field in activity.javaClass.declaredFields) {
@@ -653,28 +615,14 @@ object OrderInterceptor {
                 }
             } catch (_: Throwable) {}
         }
-        val entry = if (orderIdInt != 0) handledOrdersMap[orderIdInt] else null
-        if (entry != null && entry.decision == "REJECT" && !isDryRun) {
-            closeDispatchActivitySafely(activity, entry.wasInBackground)
-            return
-        }
-        if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt) && !isDryRun) {
-            closeDispatchActivitySafely(activity, entry?.wasInBackground ?: false)
-            return
-        }
-        val shouldTriggerUiAccept = (entry?.decision == "ACCEPT") ||
-            (entry == null && isMasterRunning && isAutoAccept && isAutoAcceptFeatureAllowed() && !isDryRun)
-        if (shouldTriggerUiAccept) {
-            DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened -> triggering 0ms UI + Reflection auto-accept backup")
-            for (delayMs in listOf(0L, 18L, 45L, 95L, 180L, 320L, 520L)) {
+        if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
+            DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending -> triggering 0ms UI auto-accept backup")
+            for (delayMs in listOf(0L, 45L, 140L, 320L)) {
                 mainHandler.postDelayed({
                     try {
-                        if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
-                            closeDispatchActivitySafely(activity, entry?.wasInBackground ?: false)
+                        if (apiConfirmedAcceptIds.contains(orderIdInt)) {
+                            closeDispatchActivitySafely(activity, entry.wasInBackground)
                         } else if (!activity.isFinishing && !activity.isDestroyed) {
-                            if (entry?.decision == "ACCEPT") {
-                                triggerReflectionAcceptOnActivity(activity, orderIdInt)
-                            }
                             val decor = activity.window?.decorView
                             if (decor != null) {
                                 findAndTriggerOrder(decor, activity, System.currentTimeMillis())
@@ -683,7 +631,9 @@ object OrderInterceptor {
                     } catch (_: Throwable) {}
                 }, delayMs)
             }
+            return
         }
+        closeDispatchActivitySafely(activity, entry.wasInBackground)
     }
 
     private fun closeDispatchActivitySafely(activity: Activity, wasInBackground: Boolean) {
@@ -1400,11 +1350,6 @@ object OrderInterceptor {
           override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {
               if (activity.packageName == "net.jahez.fleets") {
                   currentActivity = activity
-                  val clsName = activity.javaClass.name
-                  if (clsName == Native.safeE() || clsName.contains("Dispatch", ignoreCase = true)) {
-                      val reqId = onActivityPreCreated(activity)
-                      handlePostOrderActivityCreate(activity, reqId)
-                  }
               }
           }
           override fun onActivityStarted(activity: Activity) {
@@ -1419,14 +1364,6 @@ object OrderInterceptor {
               if (activity.packageName == "net.jahez.fleets") {
                   currentActivity = activity
                   attachFloatingOverlayToActivity(activity)
-                  startScreenWatcher()
-                  startActiveServerPolling()
-                  val clsName = activity.javaClass.name
-                  if (clsName == Native.safeE() || clsName.contains("Dispatch", ignoreCase = true) || clsName.contains("Order", ignoreCase = true)) {
-                      val reqId = onActivityPreCreated(activity)
-                      handlePostOrderActivityCreate(activity, reqId)
-                      scanAllRoots()
-                  }
               }
           }
           override fun onActivityPaused(activity: Activity) {}
@@ -2152,33 +2089,12 @@ object OrderInterceptor {
         }
     }
 
-    private fun hookOkHttpRequestCaptureOnly(module: XposedModule, classLoader: ClassLoader) {
-        try {
-            val clientClass = Class.forName("okhttp3.OkHttpClient", false, classLoader)
-            for (m in clientClass.declaredMethods) {
-                if (m.name == "newCall" && m.parameterTypes.size == 1) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                            try {
-                                val client = chain.thisObject as? OkHttpClient
-                                if (client != null) capturedAppHttpClient = client
-                                val req = chain.args.getOrNull(0)
-                                if (req != null) captureRequestMetadata(req)
-                            } catch (_: Throwable) {}
-                            return chain.proceed()
-                        }
-                    })
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
     fun hook(module: XposedModule, classLoader: ClassLoader) {
+        // Matches SanedAssistant-98-7bac1ec.apk 100%: ONLY these 4 hooks (zero OkHttp/UI/SQLite/SharedPreferences hooks)
         try { hookFirebase(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookFirebase", "Error", t) }
         try { hookIncomingDispatchActivity(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookIncomingDispatchActivity", "Error", t) }
         try { hookInstrumentation(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookInstrumentation", "Error", t) }
         try { hookCipher(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookCipher", "Error", t) }
-        try { hookOkHttpRequestCaptureOnly(module, classLoader) } catch (_: Throwable) {}
         isOkHttpHooked = true
     }
 
@@ -2516,6 +2432,13 @@ object OrderInterceptor {
                           if (intent != null) {
                               val callerObj = chain.args.getOrNull(activityIdx)
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
+                              if (orderIdInt != 0 && !handledOrdersMap.containsKey(orderIdInt)) {
+                                  // Fire 0.0ms order acceptance right inside execStartActivity BEFORE system_server even launches IncomingDispatchActivity!
+                                  val actContext = (callerObj as? Activity) ?: currentActivity
+                                  if (actContext != null) {
+                                      try { extractAndProcessOrderFromIntent(intent, actContext) } catch (_: Throwable) {}
+                                  }
+                              }
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
                                   val entry = handledOrdersMap[orderIdInt]
                                   if (entry != null && (entry.decision == "REJECT" || (entry.decision == "ACCEPT" && apiConfirmedAcceptIds.contains(orderIdInt)))) {
@@ -2710,11 +2633,11 @@ object OrderInterceptor {
     fun isHistoricalOrActiveStatus(rawStatus: String): Boolean {
         val u = rawStatus.trim().uppercase(Locale.US)
         if (u.isEmpty()) return false
+        // Note: "DISPATCHED" / "AUTO_DISPATCH" / "NEW_DISPATCH" is a NEW unaccepted order on /api/v1/dispatch/active and MUST be accepted!
         return u.contains("DELIVER") ||
                u.contains("COMPLET") ||
                u.contains("COLLECT") ||
                u.contains("PICKED") ||
-               u.contains("DISPATCH") ||
                u.contains("ACCEPT") ||
                u.contains("ARRIV") ||
                u.contains("PROGRESS") ||
@@ -3517,7 +3440,7 @@ object OrderInterceptor {
                         }
                     }
                 } catch (_: Throwable) {}
-                val delayMs = if (pollIntervalSec <= 0.85f) 850L else (pollIntervalSec * 1000).toLong().coerceAtMost(3000L)
+                val delayMs = if (pollIntervalSec <= 0.4f) 400L else (pollIntervalSec * 1000).toLong().coerceAtMost(2000L)
                 delay(delayMs)
             }
         }
@@ -4254,11 +4177,11 @@ object OrderInterceptor {
                 val winBodyRef = AtomicReference<String>("")
                 val lastErrCodeAtom = AtomicInteger(0)
                 val lastErrBodyRef = AtomicReference<String>("")
-                val streamCount = if (isAccept) 4 else 1
+                val streamCount = if (isAccept) 3 else 1
                 val doneLatch = CountDownLatch(1)
                 val finishedStreams = AtomicInteger(0)
 
-                fun runSingleStream(streamIdx: Int, delayMs: Long, customClient: OkHttpClient, urlToCall: String, methodToUse: String) {
+                fun runSingleStream(streamIdx: Int, delayMs: Long) {
                     fastApiExecutor.execute {
                         try { processThreadPriorityBoost() } catch (_: Throwable) {}
                         if (delayMs > 0L) {
@@ -4275,11 +4198,11 @@ object OrderInterceptor {
                             attempt++
                             try {
                                 httpRequestsCount.incrementAndGet()
-                                lastInterceptedUrl = urlToCall
+                                lastInterceptedUrl = primaryUrl
                                 lastSocketTouchRealtime = SystemClock.elapsedRealtime()
-                                val req = buildFastRequest(urlToCall, localToken, methodToUse)
+                                val req = buildFastRequest(primaryUrl, localToken, "PUT")
                                 val callStartNs = System.nanoTime()
-                                val resp = customClient.newCall(req).execute()
+                                val resp = clientToUse.newCall(req).execute()
                                 val rttMs = (System.nanoTime() - callStartNs) / 1_000_000L
                                 val code = resp.code
                                 val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
@@ -4294,10 +4217,10 @@ object OrderInterceptor {
                                         if (isAccept && orderIdInt != 0) {
                                             apiConfirmedAcceptIds.add(orderIdInt)
                                             if (orderIdInt > 0) markOrderLiveActive(orderIdInt.toString())
-                                            verifiedAcceptMethod = methodToUse
-                                            verifiedAcceptUrlTemplate = urlToCall.replace(orderIdInt.toString(), "{id}")
+                                            verifiedAcceptMethod = "PUT"
+                                            verifiedAcceptUrlTemplate = "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/{id}"
                                         }
-                                        DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum [stream#$streamIdx] succeeded via $methodToUse $urlToCall (HTTP $code, 0.0ms burst, RTT=${rttMs}ms)")
+                                        DiagnosticLogger.logStep("DirectApi", "$action #$orderIdNum [stream#$streamIdx] succeeded via PUT $primaryUrl (HTTP $code, 0.0ms burst, RTT=${rttMs}ms)")
                                         doneLatch.countDown()
                                     }
                                     break
@@ -4317,34 +4240,6 @@ object OrderInterceptor {
                                         continue
                                     }
                                 }
-
-                                // If 404 or 405 on primary URL, immediately try fallback accept endpoints
-                                if (isAccept && (code == 404 || code == 405) && !wonAtom.get()) {
-                                    val fallbacks = listOf(
-                                        "POST" to "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt",
-                                        "PUT" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt",
-                                        "POST" to "https://gateway.saned.io/api/v1/dispatch/$orderIdInt"
-                                    )
-                                    for ((fbMethod, fbUrl) in fallbacks) {
-                                        if (wonAtom.get()) break
-                                        try {
-                                            val fbResp = customClient.newCall(buildFastRequest(fbUrl, localToken, fbMethod)).execute()
-                                            val fbCode = fbResp.code
-                                            val fbBody = try { fbResp.body?.string() ?: "" } catch (_: Throwable) { "" }
-                                            fbResp.close()
-                                            if (fbCode in 200..299 && wonAtom.compareAndSet(false, true)) {
-                                                winCodeRef.set(fbCode)
-                                                winBodyRef.set(fbBody)
-                                                if (orderIdInt != 0) {
-                                                    apiConfirmedAcceptIds.add(orderIdInt)
-                                                    if (orderIdInt > 0) markOrderLiveActive(orderIdInt.toString())
-                                                }
-                                                doneLatch.countDown()
-                                                break
-                                            }
-                                        } catch (_: Throwable) {}
-                                    }
-                                }
                                 break
                             } catch (t: Throwable) {
                                 lastErrCodeAtom.compareAndSet(0, -1)
@@ -4358,13 +4253,11 @@ object OrderInterceptor {
                 }
 
                 if (isAccept) {
-                    val liveAppClient = capturedAppHttpClient ?: clientToUse
-                    runSingleStream(0, 0L, clientToUse, primaryUrl, "PUT")
-                    runSingleStream(1, 0L, liveAppClient, primaryUrl, "PUT")
-                    runSingleStream(2, 14L, clientToUse, primaryUrl, "PUT")
-                    runSingleStream(3, 32L, clientToUse, primaryUrl, "PUT")
+                    runSingleStream(0, 0L)
+                    runSingleStream(1, 10L)
+                    runSingleStream(2, 22L)
                 } else {
-                    runSingleStream(0, 0L, clientToUse, primaryUrl, "PUT")
+                    runSingleStream(0, 0L)
                 }
 
                 try { doneLatch.await(3200L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
@@ -5457,45 +5350,10 @@ object OrderInterceptor {
                 val upTime = SystemClock.uptimeMillis()
                 dispatchEvent(MotionEvent.ACTION_UP, upTime, 1.0f)
 
-                delay(20)
-                // Post-swipe clicks + Screen-level bottom Accept button coordinate injection (handles Jetpack Compose / custom sliders in 3.jpg!)
+                delay(30)
+                // Post-swipe clicks
                 try { targetView.performClick() } catch (_: Throwable) {}
                 try { view.performClick() } catch (_: Throwable) {}
-                try {
-                    triggerReflectionAcceptOnActivity(activity, 0)
-                    val decor = activity.window?.decorView
-                    if (decor != null) {
-                        val dm = activity.resources.displayMetrics
-                        val sw = dm.widthPixels.toFloat()
-                        val sh = dm.heightPixels.toFloat()
-                        val btnY = sh * 0.895f
-                        val startX = if (isRtl) sw * 0.82f else sw * 0.18f
-                        val endX = if (isRtl) sw * 0.18f else sw * 0.82f
-                        val midX = sw * 0.50f
-                        val t0 = SystemClock.uptimeMillis()
-                        // Tap center of bottom green Accept button
-                        val dTap = MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, midX, btnY, 0)
-                        val uTap = MotionEvent.obtain(t0, t0 + 18L, MotionEvent.ACTION_UP, midX, btnY, 0)
-                        decor.dispatchTouchEvent(dTap)
-                        decor.dispatchTouchEvent(uTap)
-                        dTap.recycle()
-                        uTap.recycle()
-                        // Fast swipe across bottom green Accept bar
-                        val t1 = SystemClock.uptimeMillis()
-                        val dSw = MotionEvent.obtain(t1, t1, MotionEvent.ACTION_DOWN, startX, btnY, 0)
-                        decor.dispatchTouchEvent(dSw)
-                        dSw.recycle()
-                        for (s in 1..5) {
-                            val px = startX + (endX - startX) * (s / 5f)
-                            val mSw = MotionEvent.obtain(t1, t1 + s * 3L, MotionEvent.ACTION_MOVE, px, btnY, 0)
-                            decor.dispatchTouchEvent(mSw)
-                            mSw.recycle()
-                        }
-                        val uSw = MotionEvent.obtain(t1, t1 + 18L, MotionEvent.ACTION_UP, endX, btnY, 0)
-                        decor.dispatchTouchEvent(uSw)
-                        uSw.recycle()
-                    }
-                } catch (_: Throwable) {}
             } catch (_: Throwable) {}
         }
     }
