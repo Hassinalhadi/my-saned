@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "dev.saned.assistant.app-merged_res-32:/drawable_ic_launcher_original.jpg.flat",
+        "source": "dev.saned.assistant.app-main-34:/drawable/ic_launcher_original.jpg"
+    },
+    {
+        "merged": "dev.saned.assistant.app-merged_res-32:/drawable_ic_badge_original.png.flat",
+        "source": "dev.saned.assistant.app-main-34:/drawable/ic_badge_original.png"
+    },
+    {
+        "merged": "dev.saned.assistant.app-merged_res-32:/drawable_ic_notif_original.png.flat",
+        "source": "dev.saned.assistant.app-main-34:/drawable/ic_notif_original.png"
+    }
+]

@@ -1,0 +1,262 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="dev.jing.sanedhook"
+4    android:versionCode="300"
+5    android:versionName="3.0.0-PRO" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:4:5-67
+11-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:4:22-64
+12    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+12-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:5:5-79
+12-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:5:22-76
+13    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+13-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:6:5-79
+13-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:6:22-76
+14    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+14-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:7:5-81
+14-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:7:22-78
+15    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+15-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:8:5-77
+15-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:8:22-74
+16    <uses-permission android:name="android.permission.VIBRATE" />
+16-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:9:5-66
+16-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:9:22-63
+17    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+17-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:10:5-77
+17-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:10:22-74
+18
+19    <queries>
+19-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:12:5-25:15
+20        <package android:name="net.jahez.fleets" />
+20-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:13:9-52
+20-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:13:18-49
+21        <package android:name="top.nkbe.npatch" />
+21-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:14:9-51
+21-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:14:18-48
+22        <package android:name="org.lsposed.lspatch" />
+22-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:15:9-55
+22-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:15:18-52
+23        <package android:name="org.lsposed.manager" />
+23-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:16:9-55
+23-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:16:18-52
+24
+25        <provider android:authorities="top.nkbe.npatch.remote" />
+25-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:17:9-66
+25-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:17:19-63
+26        <provider android:authorities="dev.jing.sanedhook.XposedService" />
+26-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:17:9-66
+26-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:17:19-63
+27
+28        <intent>
+28-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:19:9-21:18
+29            <action android:name="org.lsposed.lspatch.action.REQUEST_PUSH" />
+29-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:20:13-78
+29-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:20:21-75
+30        </intent>
+31        <intent>
+31-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:22:9-24:18
+32            <action android:name="top.nkbe.npatch.action.REQUEST_PUSH" />
+32-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:23:13-74
+32-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:23:21-71
+33        </intent>
+34    </queries>
+35
+36    <permission
+36-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+37        android:name="dev.jing.sanedhook.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+37-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+38        android:protectionLevel="signature" />
+38-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+39
+40    <uses-permission android:name="dev.jing.sanedhook.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+40-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+40-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+41
+42    <application
+42-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:27:5-82:19
+43        android:allowBackup="true"
+43-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:28:9-35
+44        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+44-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:29:9-77
+45        android:extractNativeLibs="false"
+46        android:icon="@drawable/ic_launcher_original"
+46-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:30:9-54
+47        android:label="J-Driver"
+47-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:31:9-33
+48        android:roundIcon="@drawable/ic_launcher_original"
+48-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:32:9-59
+49        android:supportsRtl="false"
+49-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:33:9-36
+50        android:theme="@style/Theme.SanedAssistant" >
+50-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:34:9-52
+51        <meta-data
+51-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:36:9-38:36
+52            android:name="xposedmodule"
+52-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:37:13-40
+53            android:value="true" />
+53-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:38:13-33
+54        <meta-data
+54-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:39:9-41:77
+55            android:name="xposeddescription"
+55-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:40:13-45
+56            android:value="J-Driver (Root LSPosed &amp; Non-Root NPatch)" />
+56-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:41:13-74
+57        <meta-data
+57-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:42:9-44:34
+58            android:name="xposedminversion"
+58-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:43:13-44
+59            android:value="93" />
+59-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:44:13-31
+60        <meta-data
+60-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:45:9-47:53
+61            android:name="xposedscope"
+61-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:46:13-39
+62            android:resource="@array/xposedscope" />
+62-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:47:13-50
+63        <meta-data
+63-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:48:9-50:71
+64            android:name="com.google.android.geo.API_KEY"
+64-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:49:13-58
+65            android:value="AIzaSyDB6gdCIHSWCkgQwX1_GI_Kl9dov9ax0yg" />
+65-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:50:13-68
+66
+67        <provider
+67-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:52:9-55:39
+68            android:name="io.github.libxposed.service.XposedProvider"
+68-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:53:13-70
+69            android:authorities="dev.jing.sanedhook.XposedService"
+69-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:54:13-67
+70            android:exported="true" />
+70-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:55:13-36
+71
+72        <receiver
+72-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:57:9-71:20
+73            android:name="dev.saned.assistant.SanedReceiver"
+73-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:58:13-42
+74            android:exported="true" >
+74-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:59:13-36
+75            <intent-filter>
+75-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:60:13-70:29
+76                <action android:name="dev.saned.assistant.ACTION_LOG_ORDER" />
+76-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:61:17-79
+76-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:61:25-76
+77                <action android:name="dev.saned.assistant.ACTION_DIAG_LOG" />
+77-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:62:17-78
+77-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:62:25-75
+78                <action android:name="dev.jing.sanedhook.b" />
+78-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:63:17-63
+78-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:63:25-60
+79                <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
+79-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:64:17-79
+79-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:64:25-76
+80                <action android:name="dev.saned.assistant.ACTION_UPDATE_SETTINGS_FROM_OVERLAY" />
+80-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:65:13-94
+80-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:65:21-91
+81                <action android:name="dev.saned.assistant.ACTION_PING" />
+81-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:66:17-74
+81-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:66:25-71
+82                <action android:name="dev.saned.assistant.ACTION_PONG" />
+82-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:67:17-74
+82-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:67:25-71
+83                <action android:name="dev.saned.assistant.ACTION_TEST_API" />
+83-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:68:17-78
+83-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:68:25-75
+84                <action android:name="dev.saned.assistant.ACTION_TEST_API_RESULT" />
+84-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:69:17-85
+84-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:69:25-82
+85            </intent-filter>
+86        </receiver>
+87
+88        <activity
+88-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:73:9-81:20
+89            android:name="dev.saned.assistant.ui.MainActivity"
+89-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:74:13-44
+90            android:exported="true"
+90-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:75:13-36
+91            android:windowSoftInputMode="adjustPan" >
+91-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:76:13-52
+92            <intent-filter>
+92-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:77:13-80:29
+93                <action android:name="android.intent.action.MAIN" />
+93-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:78:17-69
+93-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:78:25-66
+94
+95                <category android:name="android.intent.category.LAUNCHER" />
+95-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:79:17-77
+95-->/home/runner/work/my-saned/my-saned/app/src/main/AndroidManifest.xml:79:27-74
+96            </intent-filter>
+97        </activity>
+98
+99        <provider
+99-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
+100            android:name="androidx.startup.InitializationProvider"
+100-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:25:13-67
+101            android:authorities="dev.jing.sanedhook.androidx-startup"
+101-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:26:13-68
+102            android:exported="false" >
+102-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:27:13-37
+103            <meta-data
+103-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
+104                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+104-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:30:17-75
+105                android:value="androidx.startup" />
+105-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:31:17-49
+106            <meta-data
+106-->[androidx.lifecycle:lifecycle-process:2.6.1] /home/runner/.gradle/caches/transforms-3/bdfc36cc96b3b5dbf1de77c609414b49/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:29:13-31:52
+107                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+107-->[androidx.lifecycle:lifecycle-process:2.6.1] /home/runner/.gradle/caches/transforms-3/bdfc36cc96b3b5dbf1de77c609414b49/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:30:17-78
+108                android:value="androidx.startup" />
+108-->[androidx.lifecycle:lifecycle-process:2.6.1] /home/runner/.gradle/caches/transforms-3/bdfc36cc96b3b5dbf1de77c609414b49/transformed/lifecycle-process-2.6.1/AndroidManifest.xml:31:17-49
+109            <meta-data
+109-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+110                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+110-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+111                android:value="androidx.startup" />
+111-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+112        </provider>
+113
+114        <receiver
+114-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+115            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+115-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+116            android:directBootAware="false"
+116-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+117            android:enabled="true"
+117-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+118            android:exported="true"
+118-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+119            android:permission="android.permission.DUMP" >
+119-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+120            <intent-filter>
+120-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+121                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+121-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+121-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+122            </intent-filter>
+123            <intent-filter>
+123-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+124                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+124-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+124-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+125            </intent-filter>
+126            <intent-filter>
+126-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+127                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+127-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+127-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+128            </intent-filter>
+129            <intent-filter>
+129-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+130                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+130-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+130-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/runner/.gradle/caches/transforms-3/4dbbd11a74d28bd64c37893cccf57482/transformed/profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
+131            </intent-filter>
+132        </receiver>
+133    </application>
+134
+135</manifest>

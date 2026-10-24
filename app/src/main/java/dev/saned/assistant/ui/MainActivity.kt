@@ -28,6 +28,11 @@ import dev.saned.assistant.NotificationHelper
 import dev.saned.assistant.OrderModel
 import dev.saned.assistant.SettingsStore
 import org.json.JSONArray
+import org.json.JSONObject
+import android.view.Window
+import android.view.WindowManager
+import android.text.InputType
+import android.graphics.drawable.ColorDrawable
 import java.io.File
 import java.util.Locale
 import java.util.Random
@@ -406,7 +411,19 @@ class MainActivity : AppCompatActivity() {
         bottomNav.addView(navLogsBtn)
         rootContainer.addView(bottomNav)
 
-        setContentView(rootContainer)
+        val rootFrame = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        rootFrame.addView(rootContainer)
+        licenseGateOverlay = buildLicenseLockOverlay()
+        rootFrame.addView(licenseGateOverlay)
+        setContentView(rootFrame)
+
+        enforceLicenseGateUI()
+        syncRemoteKillSwitchAsync()
 
         val initialTab = if (pendingRestoreTab in 0..3) {
             val t = pendingRestoreTab
@@ -909,6 +926,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(28, 24, 28, 60)
         }
 
+        mainLayout.addView(createLicenseAndRightsCard())
         mainLayout.addView(createLanguageCard())
         mainLayout.addView(createConnectionPingCard().apply { visibility = View.GONE })
         mainLayout.addView(createDiagnosticsCard().apply { visibility = View.GONE })
@@ -1005,6 +1023,1453 @@ class MainActivity : AppCompatActivity() {
         layout.addView(btnRow)
         card.addView(layout)
         return card
+    }
+
+    // =========================================================================
+    // CRYPTOGRAPHIC LICENSING, ANTI-TAMPER & REMOTE KILL-SWITCH ENGINE
+    // =========================================================================
+    private lateinit var licenseGateOverlay: FrameLayout
+    private lateinit var tvLicenseGateStatus: TextView
+    private lateinit var edtLicenseGateKey: EditText
+    private lateinit var tvSettingsLicenseSummary: TextView
+
+    private val LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    private val DEV_WHATSAPP_NUMBER = "966505812141"
+    private val DEV_WHATSAPP_DISPLAY = "+966505812141"
+    private val DEV_WHATSAPP_PREFILL = "hi i need buy key"
+    private val DEV_TELEGRAM_CHANNEL_URL = "https://t.me/J_Driver"
+    private val DEV_TELEGRAM_USER_URL = "https://t.me/J_Drive1"
+    private val DEV_TELEGRAM_USER_HANDLE = "@J_Drive1"
+    private val REMOTE_CONTROL_URLS = listOf(
+        "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json",
+        "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control.json"
+    )
+
+    private fun reconstructMasterKey(): ByteArray {
+        val seeds = intArrayOf(
+            0x4A445256, 0x53414E45, 0x44393850, 0x524F5345,
+            0x43555245, 0x39363635, 0x30353831, 0x32313431
+        )
+        val raw = ByteArray(32)
+        for (idx in seeds.indices) {
+            val mixed = seeds[idx] xor (0x5A3C96A5 + idx * 0x13579BDF)
+            val off = idx * 4
+            raw[off] = ((mixed ushr 24) and 0xFF).toByte()
+            raw[off + 1] = ((mixed ushr 16) and 0xFF).toByte()
+            raw[off + 2] = ((mixed ushr 8) and 0xFF).toByte()
+            raw[off + 3] = (mixed and 0xFF).toByte()
+        }
+        return java.security.MessageDigest.getInstance("SHA-256").digest(raw)
+    }
+
+    private fun getHardwareDeviceId(): String {
+        val rankPrefs = getOrderRankPrefs()
+        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+        val existing = rankPrefs.getString("jdrv_hw_device_id", null)
+            ?: mainPrefs.getString("jdrv_hw_device_id", null)
+        if (!existing.isNullOrEmpty() && existing.startsWith("JID-") && existing.length == 13) {
+            return existing
+        }
+        val hwRaw = buildString {
+            append(Build.BOARD).append('|')
+            append(Build.BRAND).append('|')
+            append(Build.DEVICE).append('|')
+            append(Build.HARDWARE).append('|')
+            append(Build.MANUFACTURER).append('|')
+            append(Build.MODEL).append('|')
+            append(Build.PRODUCT)
+        }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(hwRaw.toByteArray(Charsets.UTF_8))
+        val chars = CharArray(8)
+        for (i in 0 until 8) {
+            val b = digest[i].toInt() and 0xFF
+            chars[i] = LIC_ALPHABET[b % LIC_ALPHABET.length]
+        }
+        val formatted = "JID-${String(chars, 0, 4)}-${String(chars, 4, 4)}"
+        rankPrefs.edit().putString("jdrv_hw_device_id", formatted).commit()
+        mainPrefs.edit().putString("jdrv_hw_device_id", formatted).commit()
+        return formatted
+    }
+
+    private fun computeDeviceHashInt(deviceId: String): Int {
+        val clean = deviceId.trim().uppercase(Locale.US).replace("-", "").replace(" ", "")
+        if (clean.isEmpty() || clean == "*" || clean == "ANY" || clean == "ALL" || clean == "JID00000000") {
+            return 0
+        }
+        val d = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(("JDRV_DEV:$clean").toByteArray(Charsets.UTF_8))
+        val v = ((d[0].toInt() and 0xFF) shl 24) or
+            ((d[1].toInt() and 0xFF) shl 16) or
+            ((d[2].toInt() and 0xFF) shl 8) or
+            (d[3].toInt() and 0xFF)
+        return if (v != 0) v else 1
+    }
+
+    private fun decodeBase32Key(keyStr: String): ByteArray? {
+        var clean = keyStr.trim().uppercase(Locale.US).replace(" ", "")
+        if (clean.startsWith("JDRV-")) clean = clean.substring(5)
+        clean = clean.replace("-", "")
+        if (clean.length != 32) return null
+        var bits = 0
+        var value = 0
+        val out = ByteArray(20)
+        var outIdx = 0
+        for (i in 0 until clean.length) {
+            val idx = LIC_ALPHABET.indexOf(clean[i])
+            if (idx < 0) return null
+            value = (value shl 5) or idx
+            bits += 5
+            if (bits >= 8) {
+                if (outIdx < 20) {
+                    out[outIdx++] = ((value ushr (bits - 8)) and 0xFF).toByte()
+                }
+                bits -= 8
+            }
+        }
+        return if (outIdx == 20) out else null
+    }
+
+    private fun nowAntiRollbackMs(): Long {
+        val prefs = getOrderRankPrefs()
+        val sysNow = System.currentTimeMillis()
+        val highest = prefs.getLong("jdrv_highest_clock_ms", 0L)
+        return if (sysNow >= highest) {
+            if (sysNow - highest > 30_000L) {
+                prefs.edit().putLong("jdrv_highest_clock_ms", sysNow).apply()
+            }
+            sysNow
+        } else {
+            highest
+        }
+    }
+
+    private fun isEnvironmentTampered(): Boolean {
+        try {
+            if (android.os.Debug.isDebuggerConnected()) return true
+            if (packageName != "dev.jing.sanedhook") return true
+        } catch (_: Throwable) {}
+        return false
+    }
+
+    data class LicenseStatusResult(
+        val isValid: Boolean,
+        val reasonAr: String,
+        val reasonEn: String,
+        val expiryMs: Long = 0L,
+        val featureMask: Int = 0x0F,
+        val keyEpoch: Int = 1
+    )
+
+    private fun evaluateLicenseKey(rawKey: String, activateIfNew: Boolean): LicenseStatusResult {
+        if (isEnvironmentTampered()) {
+            return LicenseStatusResult(
+                false,
+                "⛔ تم اكتشاف محاولة تعديل أو فحص غير مصرح به للتطبيق",
+                "⛔ Unauthorized debugging or package tampering detected"
+            )
+        }
+        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+        val rankPrefs = getOrderRankPrefs()
+
+        // 1. Check Remote Kill-Switch & Device Blocklist
+        val remoteEnabled = mainPrefs.getBoolean("jdrv_remote_app_enabled", true)
+        if (!remoteEnabled) {
+            val msgAr = mainPrefs.getString("jdrv_remote_msg_ar", null)
+                ?: "⚠️ تم إيقاف التطبيق عن بُعد من قِبل المطور. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY أو تليجرام $DEV_TELEGRAM_USER_HANDLE"
+            val msgEn = mainPrefs.getString("jdrv_remote_msg_en", null)
+                ?: "⚠️ App has been remotely disabled by the developer. Contact WhatsApp $DEV_WHATSAPP_DISPLAY or Telegram $DEV_TELEGRAM_USER_HANDLE"
+            return LicenseStatusResult(false, msgAr, msgEn)
+        }
+
+        val myDevId = getHardwareDeviceId()
+        val blockedDevs = mainPrefs.getStringSet("jdrv_remote_blocked_devs", emptySet()) ?: emptySet()
+        if (blockedDevs.contains(myDevId) || blockedDevs.contains(myDevId.replace("-", ""))) {
+            return LicenseStatusResult(
+                false,
+                "⛔ تم إيقاف ترخيص هذا الجهاز ($myDevId) من قِبل المطور. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY",
+                "⛔ This device ($myDevId) has been blocked by the developer. Contact WhatsApp $DEV_WHATSAPP_DISPLAY"
+            )
+        }
+
+        if (rawKey.isBlank()) {
+            return LicenseStatusResult(
+                false,
+                "🔑 التطبيق محمي بنظام ترخيص رسمي. يرجى إدخال مفتاح التفعيل أو التواصل لشراء مفتاح",
+                "🔑 J-Driver requires an active license key. Please enter your license key or contact us to purchase one"
+            )
+        }
+
+        val cleanKeyNorm = rawKey.trim().uppercase(Locale.US).replace(" ", "")
+        val blockedKeys = mainPrefs.getStringSet("jdrv_remote_blocked_keys", emptySet()) ?: emptySet()
+        if (blockedKeys.contains(cleanKeyNorm)) {
+            return LicenseStatusResult(
+                false,
+                "⛔ تم إلغاء هذا المفتاح عن بُعد من قِبل المطور",
+                "⛔ This license key has been revoked by the developer"
+            )
+        }
+
+        val decoded = decodeBase32Key(cleanKeyNorm)
+            ?: return LicenseStatusResult(
+                false,
+                "❌ صيغة مفتاح التفعيل غير صحيحة. تأكد من نسخ المفتاح بالكامل (JDRV-...)",
+                "❌ Invalid license key format. Make sure you copied the full key (JDRV-...)"
+            )
+
+        val mk = reconstructMasterKey()
+        val enc12 = decoded.copyOfRange(0, 12)
+        val nonce2 = decoded.copyOfRange(12, 14)
+        val tag6 = decoded.copyOfRange(14, 20)
+
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        mac.update(enc12)
+        mac.update(nonce2)
+        val expectedTag = mac.doFinal().copyOfRange(0, 6)
+        if (!java.security.MessageDigest.isEqual(tag6, expectedTag)) {
+            return LicenseStatusResult(
+                false,
+                "❌ مفتاح التفعيل غير صالح أو تم التلاعب به",
+                "❌ Invalid or forged license key signature"
+            )
+        }
+
+        val sha = java.security.MessageDigest.getInstance("SHA-256")
+        sha.update(mk)
+        sha.update(nonce2)
+        val stream = sha.digest()
+        val plain12 = ByteArray(12)
+        for (i in 0 until 12) {
+            plain12[i] = (enc12[i].toInt() xor stream[i].toInt()).toByte()
+        }
+
+        val devHash = ((plain12[0].toInt() and 0xFF) shl 24) or
+            ((plain12[1].toInt() and 0xFF) shl 16) or
+            ((plain12[2].toInt() and 0xFF) shl 8) or
+            (plain12[3].toInt() and 0xFF)
+        val expCode = ((plain12[4].toInt() and 0xFF) shl 24) or
+            ((plain12[5].toInt() and 0xFF) shl 16) or
+            ((plain12[6].toInt() and 0xFF) shl 8) or
+            (plain12[7].toInt() and 0xFF)
+        val keyEpoch = plain12[8].toInt() and 0xFF
+        val featureMask = plain12[9].toInt() and 0xFF
+        val magic = ((plain12[10].toInt() and 0xFF) shl 8) or (plain12[11].toInt() and 0xFF)
+
+        if (magic != 0x4A44) {
+            return LicenseStatusResult(
+                false,
+                "❌ مفتاح التفعيل غير متوافق مع هذه النسخة",
+                "❌ License key magic header mismatch"
+            )
+        }
+
+        val myHash = computeDeviceHashInt(myDevId)
+        if (devHash != 0 && devHash != myHash) {
+            return LicenseStatusResult(
+                false,
+                "⛔ هذا المفتاح مخصص لجهاز آخر ولا يعمل على جهازك ($myDevId)",
+                "⛔ This license key is bound to another device and cannot be used on ($myDevId)"
+            )
+        }
+
+        val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)
+        if (keyEpoch < minRemoteEpoch) {
+            return LicenseStatusResult(
+                false,
+                "⚠️ انتهت صلاحية إصدار هذا المفتاح. يرجى التواصل مع المطور للحصول على مفتاح محدّث",
+                "⚠️ This key version has been superseded. Please contact the developer for an updated key"
+            )
+        }
+
+        val tagHex = tag6.joinToString("") { String.format(Locale.US, "%02X", it.toInt() and 0xFF) }
+        val actKeyPref = "jdrv_first_act_$tagHex"
+        val nowMs = nowAntiRollbackMs()
+
+        val expiryMs: Long = when {
+            expCode == -1 -> 0L // 0xFFFFFFFF = Lifetime
+            (expCode and -0x80000000) != 0 -> {
+                val durationMinutes = (expCode and 0x7FFFFFFF).toLong()
+                var firstAct = rankPrefs.getLong(actKeyPref, 0L)
+                if (firstAct <= 0L) {
+                    firstAct = nowMs
+                    if (activateIfNew) {
+                        rankPrefs.edit().putLong(actKeyPref, firstAct).commit()
+                    }
+                }
+                firstAct + durationMinutes * 60_000L
+            }
+            else -> {
+                (expCode.toLong() and 0xFFFFFFFFL) * 60_000L
+            }
+        }
+
+        if (expiryMs > 0L && nowMs > expiryMs) {
+            return LicenseStatusResult(
+                false,
+                "⏰ انتهت مدة صلاحية مفتاح التفعيل الخاص بك. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY لتجديد الاشتراك",
+                "⏰ Your license key has expired. Contact WhatsApp $DEV_WHATSAPP_DISPLAY to renew",
+                expiryMs = expiryMs,
+                featureMask = featureMask,
+                keyEpoch = keyEpoch
+            )
+        }
+
+        if (activateIfNew) {
+            val formattedKey = if (cleanKeyNorm.startsWith("JDRV-")) cleanKeyNorm else "JDRV-$cleanKeyNorm"
+            mainPrefs.edit()
+                .putString("jdrv_lic_key", formattedKey)
+                .putBoolean("jdrv_lic_active", true)
+                .putLong("jdrv_lic_expiry_ms", expiryMs)
+                .putInt("jdrv_lic_feature_mask", featureMask)
+                .putInt("jdrv_lic_epoch", keyEpoch)
+                .putInt("jdrv_engine_magic", 0x4A44)
+                .commit()
+            pushLicenseStateToSaned()
+        }
+
+        val remTextAr = if (expiryMs == 0L) {
+            "🟢 ترخيص مدى الحياة مفعّل بنجاح ♾️"
+        } else {
+            val remMins = ((expiryMs - nowMs) / 60_000L).coerceAtLeast(1L)
+            val days = remMins / 1440L
+            val hours = (remMins % 1440L) / 60L
+            val mins = remMins % 60L
+            if (days > 0) "🟢 الترخيص نشط (متبقي $days يوم و $hours ساعة)"
+            else "🟢 الترخيص نشط (متبقي $hours ساعة و $mins دقيقة)"
+        }
+        val remTextEn = if (expiryMs == 0L) {
+            "🟢 Lifetime License Active ♾️"
+        } else {
+            val remMins = ((expiryMs - nowMs) / 60_000L).coerceAtLeast(1L)
+            val days = remMins / 1440L
+            val hours = (remMins % 1440L) / 60L
+            val mins = remMins % 60L
+            if (days > 0) "🟢 License Active (${days}d ${hours}h remaining)"
+            else "🟢 License Active (${hours}h ${mins}m remaining)"
+        }
+
+        return LicenseStatusResult(
+            true,
+            remTextAr,
+            remTextEn,
+            expiryMs = expiryMs,
+            featureMask = featureMask,
+            keyEpoch = keyEpoch
+        )
+    }
+
+    private fun pushLicenseStateToSaned() {
+        try {
+            val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val extras = Bundle().apply {
+                putString("jdrv_lic_key", mainPrefs.getString("jdrv_lic_key", "") ?: "")
+                putString("jdrv_hw_device_id", getHardwareDeviceId())
+                putBoolean("jdrv_lic_active", mainPrefs.getBoolean("jdrv_lic_active", false))
+                putLong("jdrv_lic_expiry_ms", mainPrefs.getLong("jdrv_lic_expiry_ms", 0L))
+                putInt("jdrv_lic_feature_mask", mainPrefs.getInt("jdrv_lic_feature_mask", 0x0F))
+                putInt("jdrv_engine_magic", mainPrefs.getInt("jdrv_engine_magic", 0))
+                putBoolean("jdrv_remote_app_enabled", mainPrefs.getBoolean("jdrv_remote_app_enabled", true))
+                putBoolean("jdrv_remote_auto_accept", mainPrefs.getBoolean("jdrv_remote_auto_accept", true))
+                putBoolean("jdrv_remote_deliver_order", mainPrefs.getBoolean("jdrv_remote_deliver_order", true))
+                putBoolean("jdrv_remote_floating_menu", mainPrefs.getBoolean("jdrv_remote_floating_menu", true))
+                putBoolean("jdrv_remote_android_id", mainPrefs.getBoolean("jdrv_remote_android_id", true))
+                putInt("jdrv_remote_min_epoch", mainPrefs.getInt("jdrv_remote_min_epoch", 1))
+                putString("jdrv_remote_msg_ar", mainPrefs.getString("jdrv_remote_msg_ar", "") ?: "")
+                putString("jdrv_remote_msg_en", mainPrefs.getString("jdrv_remote_msg_en", "") ?: "")
+            }
+            contentResolver.call(
+                Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                "updateSettingsFromFloating",
+                null,
+                extras
+            )
+            SettingsStore.broadcastSettings(this)
+        } catch (_: Throwable) {}
+    }
+
+    private fun verifyRemoteControlSignature(json: JSONObject): Boolean {
+        val sig = json.optString("sig", "").trim().lowercase(Locale.US)
+        if (sig.length != 32) return false
+        val appEn = if (json.optBoolean("app_enabled", true)) 1 else 0
+        val accEn = if (json.optBoolean("allow_auto_accept", true)) 1 else 0
+        val delEn = if (json.optBoolean("allow_deliver_order", true)) 1 else 0
+        val fltEn = if (json.optBoolean("allow_floating_menu", true)) 1 else 0
+        val aidEn = if (json.optBoolean("allow_android_id", true)) 1 else 0
+        val minEp = json.optInt("min_key_epoch", 1)
+
+        val bDevs = mutableListOf<String>()
+        val devArr = json.optJSONArray("blocked_devices")
+        if (devArr != null) {
+            for (i in 0 until devArr.length()) {
+                val s = devArr.optString(i, "").trim().uppercase(Locale.US)
+                if (s.isNotEmpty()) bDevs.add(s)
+            }
+        }
+        bDevs.sort()
+
+        val bKeys = mutableListOf<String>()
+        val keyArr = json.optJSONArray("blocked_keys")
+        if (keyArr != null) {
+            for (i in 0 until keyArr.length()) {
+                val s = keyArr.optString(i, "").trim().uppercase(Locale.US)
+                if (s.isNotEmpty()) bKeys.add(s)
+            }
+        }
+        bKeys.sort()
+
+        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+        val mk = reconstructMasterKey()
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        val fullHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+        return fullHex.take(32) == sig
+    }
+
+    private fun syncRemoteKillSwitchAsync() {
+        uiBgExecutor.execute {
+            val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val customUrl = mainPrefs.getString("jdrv_custom_ctrl_url", "")?.trim() ?: ""
+            val urls = mutableListOf<String>()
+            if (customUrl.startsWith("http")) urls.add(customUrl)
+            urls.addAll(REMOTE_CONTROL_URLS)
+
+            for (baseUrl in urls) {
+                try {
+                    val sep = if (baseUrl.contains("?")) "&" else "?"
+                    val url = java.net.URL("${baseUrl}${sep}t=${System.currentTimeMillis()}")
+                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                        requestMethod = "GET"
+                        setRequestProperty("Cache-Control", "no-cache")
+                    }
+                    val dateHdr = conn.date
+                    if (dateHdr > 1700000000000L) {
+                        val rankPrefs = getOrderRankPrefs()
+                        val prevHigh = rankPrefs.getLong("jdrv_highest_clock_ms", 0L)
+                        if (dateHdr > prevHigh) {
+                            rankPrefs.edit().putLong("jdrv_highest_clock_ms", dateHdr).apply()
+                        }
+                    }
+                    if (conn.responseCode in 200..299) {
+                        val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                        conn.disconnect()
+                        val json = JSONObject(body)
+                        if (verifyRemoteControlSignature(json)) {
+                            val bDevs = HashSet<String>()
+                            val devArr = json.optJSONArray("blocked_devices")
+                            if (devArr != null) {
+                                for (i in 0 until devArr.length()) {
+                                    val s = devArr.optString(i, "").trim().uppercase(Locale.US)
+                                    if (s.isNotEmpty()) bDevs.add(s)
+                                }
+                            }
+                            val bKeys = HashSet<String>()
+                            val keyArr = json.optJSONArray("blocked_keys")
+                            if (keyArr != null) {
+                                for (i in 0 until keyArr.length()) {
+                                    val s = keyArr.optString(i, "").trim().uppercase(Locale.US)
+                                    if (s.isNotEmpty()) bKeys.add(s)
+                                }
+                            }
+                            mainPrefs.edit()
+                                .putBoolean("jdrv_remote_app_enabled", json.optBoolean("app_enabled", true))
+                                .putBoolean("jdrv_remote_auto_accept", json.optBoolean("allow_auto_accept", true))
+                                .putBoolean("jdrv_remote_deliver_order", json.optBoolean("allow_deliver_order", true))
+                                .putBoolean("jdrv_remote_floating_menu", json.optBoolean("allow_floating_menu", true))
+                                .putBoolean("jdrv_remote_android_id", json.optBoolean("allow_android_id", true))
+                                .putInt("jdrv_remote_min_epoch", json.optInt("min_key_epoch", 1))
+                                .putStringSet("jdrv_remote_blocked_devs", bDevs)
+                                .putStringSet("jdrv_remote_blocked_keys", bKeys)
+                                .putString("jdrv_remote_msg_ar", json.optString("kill_message_ar", ""))
+                                .putString("jdrv_remote_msg_en", json.optString("kill_message_en", ""))
+                                .commit()
+                            pushLicenseStateToSaned()
+                            runOnUiThread { enforceLicenseGateUI() }
+                            break
+                        }
+                    } else {
+                        conn.disconnect()
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    private fun openWhatsAppBuyKey() {
+        val devId = getHardwareDeviceId()
+        val msg = DEV_WHATSAPP_PREFILL
+        val encodedMsg = Uri.encode(msg)
+        try {
+            val waIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$DEV_WHATSAPP_NUMBER&text=$encodedMsg")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(waIntent)
+        } catch (_: Throwable) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$DEV_WHATSAPP_NUMBER?text=$encodedMsg")))
+            } catch (_: Throwable) {
+                Toast.makeText(this, "$DEV_WHATSAPP_DISPLAY ($devId)", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun openTelegramUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (_: Throwable) {
+            Toast.makeText(this, url, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun enforceLicenseGateUI() {
+        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+        val savedKey = mainPrefs.getString("jdrv_lic_key", "") ?: ""
+        val status = evaluateLicenseKey(savedKey, activateIfNew = false)
+        if (!status.isValid) {
+            mainPrefs.edit()
+                .putBoolean("jdrv_lic_active", false)
+                .putInt("jdrv_engine_magic", 0)
+                .commit()
+            pushLicenseStateToSaned()
+            if (::licenseGateOverlay.isInitialized) {
+                licenseGateOverlay.visibility = View.VISIBLE
+                tvLicenseGateStatus.text = tr(status.reasonAr, status.reasonEn)
+            }
+        } else {
+            mainPrefs.edit()
+                .putBoolean("jdrv_lic_active", true)
+                .putLong("jdrv_lic_expiry_ms", status.expiryMs)
+                .putInt("jdrv_lic_feature_mask", status.featureMask)
+                .putInt("jdrv_engine_magic", 0x4A44)
+                .commit()
+            pushLicenseStateToSaned()
+            if (::licenseGateOverlay.isInitialized) {
+                licenseGateOverlay.visibility = View.GONE
+            }
+        }
+        if (::tvSettingsLicenseSummary.isInitialized) {
+            tvSettingsLicenseSummary.text = if (status.isValid) {
+                tr(status.reasonAr, status.reasonEn)
+            } else {
+                tr("🔴 غير مفعّل — ${status.reasonAr}", "🔴 Not Activated — ${status.reasonEn}")
+            }
+            tvSettingsLicenseSummary.setTextColor(
+                Color.parseColor(if (status.isValid) "#059669" else "#DC2626")
+            )
+        }
+    }
+
+    private fun buildLicenseLockOverlay(): FrameLayout {
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0F172A"))
+            isClickable = true
+            isFocusable = true
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(40, 72, 40, 72)
+        }
+
+        val badgeTv = TextView(this).apply {
+            text = "🔐"
+            textSize = 38f
+            gravity = Gravity.CENTER
+            background = roundedBg("#1E293B", 40f, "#3B82F6", 3)
+            setPadding(42, 32, 42, 32)
+            setOnLongClickListener {
+                promptAdminKeyGenPinDialog()
+                true
+            }
+        }
+        col.addView(badgeTv)
+
+        val titleTv = TextView(this).apply {
+            text = tr("تفعيل ترخيص J-Driver الرسمي", "J-Driver Official License Activation")
+            textSize = 21f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, 28, 0, 10)
+        }
+        col.addView(titleTv)
+
+        tvLicenseGateStatus = TextView(this).apply {
+            text = tr(
+                "🔑 التطبيق محمي بنظام ترخيص مشفر. أدخل مفتاح التفعيل أو تواصل مع المطور لشراء مفتاح.",
+                "🔑 Protected by cryptographic licensing. Enter your license key or contact the developer to buy a key."
+            )
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#FBBF24"))
+            gravity = Gravity.CENTER
+            background = roundedBg("#1E293B", 18f, "#334155", 2)
+            setPadding(32, 24, 32, 24)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 12, 0, 28)
+            }
+        }
+        col.addView(tvLicenseGateStatus)
+
+        // Card 1: Hardware Device ID + License Key Activation
+        val actCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#1E293B", 24f, "#334155", 2)
+            setPadding(34, 32, 34, 32)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 28)
+            }
+        }
+
+        val devIdTitle = TextView(this).apply {
+            text = tr("🆔 معرّف جهازك الخاص (أرسله للمطور للحصول على مفتاح):", "🆔 Your Device ID (Send to developer to get a key):")
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#94A3B8"))
+        }
+        actCard.addView(devIdTitle)
+
+        val myDeviceId = getHardwareDeviceId()
+        val devIdRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = roundedBg("#0F172A", 16f, "#475569", 2)
+            setPadding(28, 22, 22, 22)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 14, 0, 24)
+            }
+        }
+
+        val tvDevIdValue = TextView(this).apply {
+            text = myDeviceId
+            textSize = 17f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#38BDF8"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        devIdRow.addView(tvDevIdValue)
+
+        val btnCopyDevId = TextView(this).apply {
+            text = tr("📋 نسخ", "📋 Copy")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = roundedBg("#2563EB", 12f)
+            setPadding(28, 16, 28, 16)
+            setOnClickListener {
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("J-Driver Device ID", myDeviceId))
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("✅ تم نسخ معرّف الجهاز: $myDeviceId", "✅ Device ID copied: $myDeviceId"),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        devIdRow.addView(btnCopyDevId)
+        actCard.addView(devIdRow)
+
+        val keyLabel = TextView(this).apply {
+            text = tr("🔑 مفتاح التفعيل (JDRV-XXXX-...):", "🔑 License Key (JDRV-XXXX-...):")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(0, 0, 0, 10)
+        }
+        actCard.addView(keyLabel)
+
+        edtLicenseGateKey = EditText(this).apply {
+            hint = "JDRV-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 14.5f
+            typeface = Typeface.MONOSPACE
+            background = roundedBg("#0F172A", 16f, "#475569", 2)
+            setPadding(28, 28, 28, 28)
+            val savedKey = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                .getString("jdrv_lic_key", "") ?: ""
+            if (savedKey.isNotEmpty()) setText(savedKey)
+        }
+        actCard.addView(edtLicenseGateKey)
+
+        val keyActionsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 20, 0, 0)
+            }
+        }
+
+        val btnPasteKey = TextView(this).apply {
+            text = tr("📋 لصق المفتاح", "📋 Paste Key")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#334155", 16f)
+            setPadding(26, 28, 26, 28)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 14, 0)
+            }
+            setOnClickListener {
+                try {
+                    val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val pasted = clip.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()?.trim() ?: ""
+                    if (pasted.isNotEmpty()) {
+                        edtLicenseGateKey.setText(pasted)
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+        keyActionsRow.addView(btnPasteKey)
+
+        val btnActivateNow = TextView(this).apply {
+            text = tr("✅ تفعيل المفتاح وتشغيل التطبيق", "✅ Activate Key & Unlock App")
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#10B981", 16f)
+            setPadding(28, 28, 28, 28)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val inputKey = edtLicenseGateKey.text.toString().trim()
+                val res = evaluateLicenseKey(inputKey, activateIfNew = true)
+                if (res.isValid) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        tr(res.reasonAr, res.reasonEn),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    enforceLicenseGateUI()
+                } else {
+                    tvLicenseGateStatus.text = tr(res.reasonAr, res.reasonEn)
+                    Toast.makeText(
+                        this@MainActivity,
+                        tr(res.reasonAr, res.reasonEn),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        keyActionsRow.addView(btnActivateNow)
+        actCard.addView(keyActionsRow)
+        col.addView(actCard)
+
+        // Card 2: Official Developer Contact & Buy Key Links (WhatsApp +966505812141 & Telegram)
+        val rightsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#1E293B", 24f, "#334155", 2)
+            setPadding(34, 32, 34, 32)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val rightsTitle = TextView(this).apply {
+            text = tr("👑 شراء مفتاح التفعيل والتواصل الرسمي مع المطور", "👑 Buy License Key & Official Developer Contact")
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, 18)
+        }
+        rightsCard.addView(rightsTitle)
+
+        val btnBuyWhatsApp = TextView(this).apply {
+            text = tr(
+                "💬   شراء مفتاح عبر واتساب ($DEV_WHATSAPP_DISPLAY)",
+                "💬   Buy Key on WhatsApp ($DEV_WHATSAPP_DISPLAY)"
+            )
+            textSize = 15.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#16A34A", 18f)
+            setPadding(28, 30, 28, 30)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 16)
+            }
+            setOnClickListener { openWhatsAppBuyKey() }
+        }
+        rightsCard.addView(btnBuyWhatsApp)
+
+        val btnTgChannel = TextView(this).apply {
+            text = tr(
+                "📢   قناة تليجرام الرسمية (t.me/J_Driver)",
+                "📢   Official Telegram Channel (t.me/J_Driver)"
+            )
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#0284C7", 18f)
+            setPadding(28, 28, 28, 28)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 16)
+            }
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
+        }
+        rightsCard.addView(btnTgChannel)
+
+        val btnTgPersonal = TextView(this).apply {
+            text = tr(
+                "👤   حساب المطور الشخصي ($DEV_TELEGRAM_USER_HANDLE)",
+                "👤   Developer Personal Account ($DEV_TELEGRAM_USER_HANDLE)"
+            )
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#4F46E5", 18f)
+            setPadding(28, 28, 28, 28)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_USER_URL) }
+        }
+        rightsCard.addView(btnTgPersonal)
+
+        col.addView(rightsCard)
+        scroll.addView(col)
+        overlay.addView(scroll)
+        return overlay
+    }
+
+    private fun createLicenseAndRightsCard(): CardView {
+        val card = createStyledCard()
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(26, 26, 26, 26)
+            setBackgroundColor(Color.WHITE)
+        }
+
+        val title = TextView(this).apply {
+            text = tr("👑 الترخيص الرسمي وحقوق المطور (J-Driver)", "👑 Official License & Developer Rights (J-Driver)")
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#0F172A"))
+            setPadding(0, 0, 0, 8)
+            setOnLongClickListener {
+                promptAdminKeyGenPinDialog()
+                true
+            }
+        }
+        layout.addView(title)
+
+        val myDevId = getHardwareDeviceId()
+        val savedKey = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            .getString("jdrv_lic_key", "") ?: ""
+        val status = evaluateLicenseKey(savedKey, activateIfNew = false)
+
+        tvSettingsLicenseSummary = TextView(this).apply {
+            text = tr(status.reasonAr, status.reasonEn)
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor(if (status.isValid) "#059669" else "#DC2626"))
+            setPadding(0, 0, 0, 8)
+        }
+        layout.addView(tvSettingsLicenseSummary)
+
+        val devIdLine = TextView(this).apply {
+            text = tr("🆔 معرّف الجهاز: $myDevId (اضغط للنسخ)", "🆔 Device ID: $myDevId (Tap to copy)")
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#1E293B"))
+            background = roundedBg("#F1F5F9", 12f, "#CBD5E1", 1)
+            setPadding(20, 14, 20, 14)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 4, 0, 14)
+            }
+            setOnClickListener {
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("Device ID", myDevId))
+                Toast.makeText(this@MainActivity, tr("✅ تم نسخ $myDevId", "✅ Copied $myDevId"), Toast.LENGTH_SHORT).show()
+            }
+        }
+        layout.addView(devIdLine)
+
+        val btnBuyWa = TextView(this).apply {
+            text = tr("💬 شراء أو تجديد مفتاح واتساب ($DEV_WHATSAPP_DISPLAY)", "💬 Buy / Renew Key on WhatsApp ($DEV_WHATSAPP_DISPLAY)")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#16A34A", 14f)
+            setPadding(24, 24, 24, 24)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 12)
+            }
+            setOnClickListener { openWhatsAppBuyKey() }
+        }
+        layout.addView(btnBuyWa)
+
+        val tgRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, 12)
+            }
+        }
+
+        val btnChannel = TextView(this).apply {
+            text = tr("📢 قناة تليجرام", "📢 Telegram Channel")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#0284C7", 14f)
+            setPadding(18, 22, 18, 22)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
+        }
+        tgRow.addView(btnChannel)
+
+        val btnPersonal = TextView(this).apply {
+            text = tr("👤 المطور $DEV_TELEGRAM_USER_HANDLE", "👤 Dev $DEV_TELEGRAM_USER_HANDLE")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#4F46E5", 14f)
+            setPadding(18, 22, 18, 22)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(8, 0, 0, 0)
+            }
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_USER_URL) }
+        }
+        tgRow.addView(btnPersonal)
+        layout.addView(tgRow)
+
+        val btnChangeKey = TextView(this).apply {
+            text = tr("🔑 إدخال أو تغيير مفتاح التفعيل", "🔑 Enter or Change License Key")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#1E293B"))
+            background = roundedBg("#E2E8F0", 14f)
+            setPadding(20, 20, 20, 20)
+            setOnClickListener {
+                if (::licenseGateOverlay.isInitialized) {
+                    licenseGateOverlay.visibility = View.VISIBLE
+                }
+            }
+        }
+        layout.addView(btnChangeKey)
+
+        card.addView(layout)
+        return card
+    }
+
+    private val ADMIN_PIN_SHA256 = "cb53c961534fcde5d835e12ac0dd785e89c0b95239fce4aeee3be9d6e45d0ed9"
+
+    private fun encodeBase32Bytes20(data: ByteArray): String {
+        var bits = 0
+        var value = 0
+        val sb = StringBuilder()
+        for (b in data) {
+            value = (value shl 8) or (b.toInt() and 0xFF)
+            bits += 8
+            while (bits >= 5) {
+                sb.append(LIC_ALPHABET[(value ushr (bits - 5)) and 31])
+                bits -= 5
+            }
+        }
+        if (bits > 0) {
+            sb.append(LIC_ALPHABET[(value shl (5 - bits)) and 31])
+        }
+        val raw = sb.toString()
+        val groups = mutableListOf<String>()
+        var i = 0
+        while (i < raw.length) {
+            val end = (i + 4).coerceAtMost(raw.length)
+            groups.add(raw.substring(i, end))
+            i += 4
+        }
+        return "JDRV-" + groups.joinToString("-")
+    }
+
+    private fun generateEncryptedLicenseKeyAdmin(
+        targetDeviceId: String,
+        durationMinutes: Int,
+        keyEpoch: Int,
+        featureMask: Int
+    ): String {
+        val mk = reconstructMasterKey()
+        val devHash = computeDeviceHashInt(targetDeviceId)
+        val expCode: Int = if (durationMinutes <= 0) {
+            -1 // 0xFFFFFFFF = Lifetime
+        } else {
+            (-0x80000000) or (durationMinutes and 0x7FFFFFFF)
+        }
+        val plain12 = ByteArray(12)
+        plain12[0] = ((devHash ushr 24) and 0xFF).toByte()
+        plain12[1] = ((devHash ushr 16) and 0xFF).toByte()
+        plain12[2] = ((devHash ushr 8) and 0xFF).toByte()
+        plain12[3] = (devHash and 0xFF).toByte()
+        plain12[4] = ((expCode ushr 24) and 0xFF).toByte()
+        plain12[5] = ((expCode ushr 16) and 0xFF).toByte()
+        plain12[6] = ((expCode ushr 8) and 0xFF).toByte()
+        plain12[7] = (expCode and 0xFF).toByte()
+        plain12[8] = (keyEpoch and 0xFF).toByte()
+        plain12[9] = (featureMask and 0xFF).toByte()
+        plain12[10] = 0x4A.toByte()
+        plain12[11] = 0x44.toByte()
+
+        val rnd = java.security.SecureRandom().nextInt(0x10000)
+        val nonce2 = byteArrayOf(((rnd ushr 8) and 0xFF).toByte(), (rnd and 0xFF).toByte())
+
+        val sha = java.security.MessageDigest.getInstance("SHA-256")
+        sha.update(mk)
+        sha.update(nonce2)
+        val stream = sha.digest()
+
+        val enc12 = ByteArray(12)
+        for (idx in 0 until 12) {
+            enc12[idx] = (plain12[idx].toInt() xor stream[idx].toInt()).toByte()
+        }
+
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        mac.update(enc12)
+        mac.update(nonce2)
+        val tag6 = mac.doFinal().copyOfRange(0, 6)
+
+        val full20 = ByteArray(20)
+        System.arraycopy(enc12, 0, full20, 0, 12)
+        System.arraycopy(nonce2, 0, full20, 12, 2)
+        System.arraycopy(tag6, 0, full20, 14, 6)
+        return encodeBase32Bytes20(full20)
+    }
+
+    private fun buildSignedRemoteControlJsonAdmin(
+        appEnabled: Boolean,
+        allowAccept: Boolean,
+        allowDeliver: Boolean,
+        allowFloating: Boolean,
+        allowAndroidId: Boolean,
+        minEpoch: Int,
+        blockedDevicesCsv: String,
+        killMsgAr: String
+    ): String {
+        val bDevs = blockedDevicesCsv.split(",")
+            .map { it.trim().uppercase(Locale.US) }
+            .filter { it.isNotEmpty() }
+            .sorted()
+        val canonical = "${if (appEnabled) 1 else 0}|${if (allowAccept) 1 else 0}|${if (allowDeliver) 1 else 0}|${if (allowFloating) 1 else 0}|${if (allowAndroidId) 1 else 0}|$minEpoch|${bDevs.joinToString(",")}|"
+        val mk = reconstructMasterKey()
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        val sigHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+            .take(32)
+
+        val json = JSONObject().apply {
+            put("app_enabled", appEnabled)
+            put("allow_auto_accept", allowAccept)
+            put("allow_deliver_order", allowDeliver)
+            put("allow_floating_menu", allowFloating)
+            put("allow_android_id", allowAndroidId)
+            put("min_key_epoch", minEpoch)
+            put("blocked_devices", JSONArray(bDevs))
+            put("blocked_keys", JSONArray())
+            put("kill_message_ar", killMsgAr)
+            put("kill_message_en", "⚠️ This copy of J-Driver has been disabled by the developer. Contact WhatsApp +966505812141 or Telegram @J_Drive1")
+            put("sig", sigHex)
+        }
+        return json.toString(2)
+    }
+
+    private fun promptAdminKeyGenPinDialog() {
+        val dlg = android.app.Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#0F172A", 24f, "#3B82F6", 3)
+            setPadding(36, 36, 36, 36)
+        }
+        val title = TextView(this).apply {
+            text = tr("🔐 دخول لوحة المطور (مولد المفاتيح والتحكم عن بُعد)", "🔐 Developer Admin KeyGen & Remote Control")
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, 16)
+        }
+        box.addView(title)
+
+        val edtPin = EditText(this).apply {
+            hint = tr("أدخل الرقم السري للمطور", "Enter Developer PIN")
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            background = roundedBg("#1E293B", 14f, "#475569", 2)
+            setPadding(26, 24, 26, 24)
+        }
+        box.addView(edtPin)
+
+        val btnEnter = TextView(this).apply {
+            text = tr("🔓 فتح مولد المفاتيح ولوحة الإيقاف عن بُعد", "🔓 Open Key Generator & Kill-Switch")
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#10B981", 16f)
+            setPadding(24, 26, 24, 26)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 20, 0, 0)
+            }
+            setOnClickListener {
+                val pin = edtPin.text.toString().trim()
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(("JDRV_ADMIN_PIN_SALT_2026:$pin").toByteArray(Charsets.UTF_8))
+                    .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                if (digest == ADMIN_PIN_SHA256) {
+                    dlg.dismiss()
+                    showNativeAdminKeyGenDialog()
+                } else {
+                    Toast.makeText(this@MainActivity, tr("❌ الرقم السري غير صحيح", "❌ Incorrect PIN"), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        box.addView(btnEnter)
+        dlg.setContentView(box)
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dlg.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.90f).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT
+        )
+        dlg.show()
+    }
+
+    private fun showNativeAdminKeyGenDialog() {
+        val dlg = android.app.Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val scroll = ScrollView(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBg("#0F172A", 26f, "#10B981", 3)
+            setPadding(34, 34, 34, 34)
+        }
+
+        val hdrRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 16)
+        }
+        val hdrTitle = TextView(this).apply {
+            text = tr("🔑 مولد مفاتيح J-Driver والتحكم عن بُعد", "🔑 J-Driver KeyGen & Remote Kill-Switch")
+            textSize = 16.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val btnClose = TextView(this).apply {
+            text = "✖"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = roundedBg("#334155", 12f)
+            setPadding(22, 12, 22, 12)
+            setOnClickListener { dlg.dismiss() }
+        }
+        hdrRow.addView(hdrTitle)
+        hdrRow.addView(btnClose)
+        root.addView(hdrRow)
+
+        val edtTargetDev = EditText(this).apply {
+            hint = tr("معرّف جهاز العميل (JID-XXXX-XXXX) أو * لأي جهاز", "Customer Device ID (JID-XXXX-XXXX) or * for Any")
+            setText("*")
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.parseColor("#38BDF8"))
+            typeface = Typeface.MONOSPACE
+            textSize = 14f
+            background = roundedBg("#1E293B", 14f, "#475569", 2)
+            setPadding(24, 22, 24, 22)
+        }
+        root.addView(edtTargetDev)
+
+        val edtDays = EditText(this).apply {
+            hint = tr("المدة بالأيام (0 = مدى الحياة، 30 = شهر، 7 = أسبوع)", "Duration in Days (0 = Lifetime, 30 = Month, 7 = Week)")
+            setText("30")
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            background = roundedBg("#1E293B", 14f, "#475569", 2)
+            setPadding(24, 22, 24, 22)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 12, 0, 12) }
+        }
+        root.addView(edtDays)
+
+        val chkAcc = CheckBox(this).apply {
+            text = tr("⚡ تفعيل القبول التلقائي والفلاتر", "⚡ Enable Auto-Accept & Filters")
+            setTextColor(Color.WHITE)
+            isChecked = true
+        }
+        val chkDel = CheckBox(this).apply {
+            text = tr("🚗 تفعيل توصيل الطلبات والخريطة (DELIVER ORDER)", "🚗 Enable DELIVER ORDER & Map")
+            setTextColor(Color.WHITE)
+            isChecked = true
+        }
+        val chkFlt = CheckBox(this).apply {
+            text = tr("🎯 تفعيل القائمة العائمة فوق ساند", "🎯 Enable Floating Quick Menu")
+            setTextColor(Color.WHITE)
+            isChecked = true
+        }
+        val chkAid = CheckBox(this).apply {
+            text = tr("🆔 تفعيل تغيير معرّف الأندرويد", "🆔 Enable Change Android ID")
+            setTextColor(Color.WHITE)
+            isChecked = true
+        }
+        root.addView(chkAcc)
+        root.addView(chkDel)
+        root.addView(chkFlt)
+        root.addView(chkAid)
+
+        val tvGenerated = TextView(this).apply {
+            text = "JDRV-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+            textSize = 14f
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#FBBF24"))
+            background = roundedBg("#1E293B", 14f, "#10B981", 2)
+            setPadding(24, 24, 24, 24)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 14, 0, 14) }
+        }
+
+        val btnGen = TextView(this).apply {
+            text = tr("⚡ توليد مفتاح التفعيل المشفر ونسخه", "⚡ Generate Encrypted Key & Copy")
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#10B981", 16f)
+            setPadding(24, 26, 24, 26)
+            setOnClickListener {
+                val dev = edtTargetDev.text.toString().trim().ifEmpty { "*" }
+                val days = edtDays.text.toString().trim().toIntOrNull() ?: 30
+                val mins = if (days <= 0) 0 else days * 1440
+                var mask = 0
+                if (chkAcc.isChecked) mask = mask or 1
+                if (chkDel.isChecked) mask = mask or 2
+                if (chkFlt.isChecked) mask = mask or 4
+                if (chkAid.isChecked) mask = mask or 8
+                if (mask == 0) mask = 15
+                val key = generateEncryptedLicenseKeyAdmin(dev, mins, 1, mask)
+                tvGenerated.text = key
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("J-Driver License Key", key))
+                Toast.makeText(this@MainActivity, tr("✅ تم توليد ونسخ المفتاح!", "✅ Key generated & copied!"), Toast.LENGTH_SHORT).show()
+            }
+        }
+        root.addView(btnGen)
+        root.addView(tvGenerated)
+
+        // Remote Kill-Switch Section inside Native Admin Dialog
+        val killSectionTitle = TextView(this).apply {
+            text = tr("🛡️ إيقاف التطبيق عن بُعد (Kill-Switch عبر GitHub):", "🛡️ Remote App Kill-Switch (GitHub Cloud):")
+            textSize = 14.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#F87171"))
+            setPadding(0, 18, 0, 8)
+        }
+        root.addView(killSectionTitle)
+
+        val adminPrefs = getOrderRankPrefs()
+        val edtGhTok = EditText(this).apply {
+            hint = tr("رمز GitHub Token (لإيقاف/تشغيل التطبيق عن بُعد بضغطة زر)", "GitHub Personal Access Token")
+            setText(adminPrefs.getString("jdrv_admin_gh_tok", "") ?: "")
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            typeface = Typeface.MONOSPACE
+            background = roundedBg("#1E293B", 14f, "#475569", 2)
+            setPadding(22, 20, 22, 20)
+        }
+        root.addView(edtGhTok)
+
+        val killBtnsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 14, 0, 0) }
+        }
+
+        fun pushRemoteKillStatus(enableApp: Boolean) {
+            val tok = edtGhTok.text.toString().trim()
+            if (tok.isNotEmpty()) adminPrefs.edit().putString("jdrv_admin_gh_tok", tok).commit()
+            val signedJson = buildSignedRemoteControlJsonAdmin(
+                appEnabled = enableApp,
+                allowAccept = chkAcc.isChecked,
+                allowDeliver = chkDel.isChecked,
+                allowFloating = chkFlt.isChecked,
+                allowAndroidId = chkAid.isChecked,
+                minEpoch = 1,
+                blockedDevicesCsv = "",
+                killMsgAr = "⚠️ تم إيقاف هذه النسخة من التطبيق عن بُعد من قِبل المطور. للتواصل وشراء مفتاح رسمي: واتساب +966505812141 أو تليجرام @J_Drive1"
+            )
+            if (tok.isEmpty()) {
+                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("jdriver_control.json", signedJson))
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("📋 تم نسخ ملف الإيقاف الموقّع (أضف رمز GitHub للإرسال التلقائي المباشر)", "📋 Copied signed jdriver_control.json"),
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+            uiBgExecutor.execute {
+                try {
+                    val apiUrl = "https://api.github.com/repos/Hassinalhadi/my-saned/contents/jdriver_control.json"
+                    var existingSha = ""
+                    val getConn = (java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        setRequestProperty("Authorization", "Bearer $tok")
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                    }
+                    if (getConn.responseCode in 200..299) {
+                        val getBody = getConn.inputStream.bufferedReader().use { it.readText() }
+                        existingSha = JSONObject(getBody).optString("sha", "")
+                    }
+                    getConn.disconnect()
+
+                    val b64 = android.util.Base64.encodeToString(signedJson.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                    val putJson = JSONObject().apply {
+                        put("message", if (enableApp) "chore: enable J-Driver remotely [skip ci]" else "chore: stop J-Driver remotely [skip ci]")
+                        put("content", b64)
+                        if (existingSha.isNotEmpty()) put("sha", existingSha)
+                    }
+                    val putConn = (java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection).apply {
+                        requestMethod = "PUT"
+                        doOutput = true
+                        setRequestProperty("Authorization", "Bearer $tok")
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                        setRequestProperty("Content-Type", "application/json")
+                    }
+                    putConn.outputStream.use { it.write(putJson.toString().toByteArray(Charsets.UTF_8)) }
+                    val code = putConn.responseCode
+                    putConn.disconnect()
+                    runOnUiThread {
+                        if (code in 200..299) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                if (enableApp) tr("🟢 تم تفعيل التطبيق عن بُعد لجميع المستخدمين!", "🟢 App enabled remotely!")
+                                else tr("🔴 تم إيقاف التطبيق عن بُعد لدى جميع المستخدمين فوراً!", "🔴 App stopped remotely for all users!"),
+                                Toast.LENGTH_LONG
+                            ).show()
+                            syncRemoteKillSwitchAsync()
+                        } else {
+                            Toast.makeText(this@MainActivity, "GitHub HTTP $code", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } catch (e: Throwable) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+
+        val btnKillNow = TextView(this).apply {
+            text = tr("🔴 إيقاف التطبيق عن بُعد", "🔴 STOP App Remotely")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#DC2626", 14f)
+            setPadding(20, 24, 20, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+            setOnClickListener { pushRemoteKillStatus(false) }
+        }
+
+        val btnEnableNow = TextView(this).apply {
+            text = tr("🟢 تشغيل التطبيق عن بُعد", "🟢 ENABLE App Remotely")
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#059669", 14f)
+            setPadding(20, 24, 20, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(8, 0, 0, 0)
+            }
+            setOnClickListener { pushRemoteKillStatus(true) }
+        }
+
+        killBtnsRow.addView(btnKillNow)
+        killBtnsRow.addView(btnEnableNow)
+        root.addView(killBtnsRow)
+
+        scroll.addView(root)
+        dlg.setContentView(scroll)
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dlg.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.94f).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT
+        )
+        dlg.show()
     }
 
     // =========================================================================
@@ -5281,6 +6746,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         io.github.libxposed.service.XposedProvider.ensureServiceBinderConnected(this)
+        enforceLicenseGateUI()
+        syncRemoteKillSwitchAsync()
         reloadSettingsIntoUI()
         refreshOrdersLogUI()
         refreshDiagLogsUI()

@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.jing.sanedhook"
+    android:versionCode="300"
+    android:versionName="3.0.0-PRO" >
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <package android:name="net.jahez.fleets" />
+        <package android:name="top.nkbe.npatch" />
+        <package android:name="org.lsposed.lspatch" />
+        <package android:name="org.lsposed.manager" />
+
+        <provider android:authorities="top.nkbe.npatch.remote" />
+        <provider android:authorities="dev.jing.sanedhook.XposedService" />
+
+        <intent>
+            <action android:name="org.lsposed.lspatch.action.REQUEST_PUSH" />
+        </intent>
+        <intent>
+            <action android:name="top.nkbe.npatch.action.REQUEST_PUSH" />
+        </intent>
+    </queries>
+
+    <permission
+        android:name="dev.jing.sanedhook.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="dev.jing.sanedhook.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+
+    <application
+        android:allowBackup="true"
+        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+        android:debuggable="true"
+        android:extractNativeLibs="false"
+        android:icon="@drawable/ic_launcher_original"
+        android:label="J-Driver"
+        android:roundIcon="@drawable/ic_launcher_original"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.SanedAssistant" >
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="J-Driver (Root LSPosed &amp; Non-Root NPatch)" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposedscope" />
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyDB6gdCIHSWCkgQwX1_GI_Kl9dov9ax0yg" />
+
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="dev.jing.sanedhook.XposedService"
+            android:exported="true" />
+
+        <receiver
+            android:name="dev.saned.assistant.SanedReceiver"
+            android:exported="true" >
+            <intent-filter>
+                <action android:name="dev.saned.assistant.ACTION_LOG_ORDER" />
+                <action android:name="dev.saned.assistant.ACTION_DIAG_LOG" />
+                <action android:name="dev.jing.sanedhook.b" />
+                <action android:name="dev.saned.assistant.REQUEST_SETTINGS" />
+                <action android:name="dev.saned.assistant.ACTION_UPDATE_SETTINGS_FROM_OVERLAY" />
+                <action android:name="dev.saned.assistant.ACTION_PING" />
+                <action android:name="dev.saned.assistant.ACTION_PONG" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API" />
+                <action android:name="dev.saned.assistant.ACTION_TEST_API_RESULT" />
+            </intent-filter>
+        </receiver>
+
+        <activity
+            android:name="dev.saned.assistant.ui.MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustPan" >
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="dev.jing.sanedhook.androidx-startup"
+            android:exported="false" >
+            <meta-data
+                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+                android:value="androidx.startup" />
+            <meta-data
+                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+                android:value="androidx.startup" />
+            <meta-data
+                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                android:value="androidx.startup" />
+        </provider>
+
+        <receiver
+            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP" >
+            <intent-filter>
+                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

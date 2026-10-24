@@ -1,0 +1,90 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="dev.jing.jdriver.keygen"
+4    android:versionCode="100"
+5    android:versionName="1.0.0-ADMIN" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:4:5-67
+11-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:4:22-64
+12    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+12-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:5:5-79
+12-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:5:22-76
+13
+14    <permission
+14-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:22:5-24:47
+15        android:name="dev.jing.jdriver.keygen.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+15-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:23:9-81
+16        android:protectionLevel="signature" />
+16-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:24:9-44
+17
+18    <uses-permission android:name="dev.jing.jdriver.keygen.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+18-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:26:5-97
+18-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:26:22-94
+19
+20    <application
+20-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:7:5-24:19
+21        android:allowBackup="true"
+21-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:8:9-35
+22        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+22-->[androidx.core:core:1.12.0] /home/runner/.gradle/caches/transforms-3/440a64c1659b3784956be1ef27019da1/transformed/core-1.12.0/AndroidManifest.xml:28:18-86
+23        android:debuggable="true"
+24        android:extractNativeLibs="false"
+25        android:icon="@drawable/ic_launcher_original"
+25-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:9:9-54
+26        android:label="J-Driver KeyGen"
+26-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:10:9-40
+27        android:roundIcon="@drawable/ic_launcher_original"
+27-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:11:9-59
+28        android:supportsRtl="false"
+28-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:12:9-36
+29        android:theme="@android:style/Theme.DeviceDefault.NoActionBar" >
+29-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:13:9-71
+30        <activity
+30-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:15:9-23:20
+31            android:name="dev.jing.jdriver.keygen.KeyGenActivity"
+31-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:16:13-43
+32            android:exported="true"
+32-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:17:13-36
+33            android:windowSoftInputMode="adjustPan" >
+33-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:18:13-52
+34            <intent-filter>
+34-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:19:13-22:29
+35                <action android:name="android.intent.action.MAIN" />
+35-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:20:17-69
+35-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:20:25-66
+36
+37                <category android:name="android.intent.category.LAUNCHER" />
+37-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:21:17-77
+37-->/home/runner/work/my-saned/my-saned/keygen/src/main/AndroidManifest.xml:21:27-74
+38            </intent-filter>
+39        </activity>
+40
+41        <provider
+41-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
+42            android:name="androidx.startup.InitializationProvider"
+42-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:25:13-67
+43            android:authorities="dev.jing.jdriver.keygen.androidx-startup"
+43-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:26:13-68
+44            android:exported="false" >
+44-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:27:13-37
+45            <meta-data
+45-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
+46                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+46-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:30:17-75
+47                android:value="androidx.startup" />
+47-->[androidx.emoji2:emoji2:1.2.0] /home/runner/.gradle/caches/transforms-3/40af677edc9e981bf1ec9bb11c8b1d32/transformed/emoji2-1.2.0/AndroidManifest.xml:31:17-49
+48            <meta-data
+48-->[androidx.lifecycle:lifecycle-process:2.4.1] /home/runner/.gradle/caches/transforms-3/4b8f05b04d1415b92185bf8ed00c3550/transformed/lifecycle-process-2.4.1/AndroidManifest.xml:31:13-33:52
+49                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+49-->[androidx.lifecycle:lifecycle-process:2.4.1] /home/runner/.gradle/caches/transforms-3/4b8f05b04d1415b92185bf8ed00c3550/transformed/lifecycle-process-2.4.1/AndroidManifest.xml:32:17-78
+50                android:value="androidx.startup" />
+50-->[androidx.lifecycle:lifecycle-process:2.4.1] /home/runner/.gradle/caches/transforms-3/4b8f05b04d1415b92185bf8ed00c3550/transformed/lifecycle-process-2.4.1/AndroidManifest.xml:33:17-49
+51        </provider>
+52    </application>
+53
+54</manifest>

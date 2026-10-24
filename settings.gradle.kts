@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "SanedAssistant"
-include(":app")
+include(":app", ":keygen")

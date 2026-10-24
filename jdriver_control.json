@@ -1,0 +1,13 @@
+{
+  "app_enabled": true,
+  "allow_auto_accept": true,
+  "allow_deliver_order": true,
+  "allow_floating_menu": true,
+  "allow_android_id": true,
+  "min_key_epoch": 1,
+  "blocked_devices": [],
+  "blocked_keys": [],
+  "kill_message_ar": "⚠️ تم إيقاف هذه النسخة من التطبيق عن بُعد من قِبل المطور. للتواصل وشراء مفتاح رسمي: واتساب +966505812141 أو تليجرام @J_Drive1",
+  "kill_message_en": "⚠️ This copy of J-Driver has been disabled by the developer. Contact WhatsApp +966505812141 or Telegram @J_Drive1",
+  "sig": "41eafa2526e686f9dea525ea941676d2"
+}

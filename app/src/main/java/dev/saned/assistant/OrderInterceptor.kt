@@ -66,8 +66,73 @@ object OrderInterceptor {
     @Volatile var isStayInBackground: Boolean = false
     @Volatile var isSilenceAlertTone: Boolean = true
     @Volatile var isStrictVersionCheck: Boolean = false
-    @Volatile var licenseToken: String = ""
+        @Volatile var licenseToken: String = ""
     @Volatile var licenseBoundId: String = ""
+    @Volatile var jdrvLicKey: String = ""
+    @Volatile var jdrvLicActive: Boolean = false
+    @Volatile var jdrvLicExpiryMs: Long = 0L
+    @Volatile var jdrvLicFeatureMask: Int = 0x0F
+    @Volatile var jdrvEngineMagic: Int = 0
+    @Volatile var jdrvRemoteAppEnabled: Boolean = true
+    @Volatile var jdrvRemoteAutoAccept: Boolean = true
+    @Volatile var jdrvRemoteDeliverOrder: Boolean = true
+    @Volatile var jdrvRemoteFloatingMenu: Boolean = true
+    @Volatile var jdrvRemoteAndroidId: Boolean = true
+    @Volatile var jdrvRemoteMinEpoch: Int = 1
+    @Volatile var jdrvRemoteMsgAr: String = ""
+    @Volatile var jdrvRemoteMsgEn: String = ""
+    @Volatile private var lastRemoteCtrlCheckRealtime: Long = 0L
+
+    fun isLicenseActiveInsideSaned(): Boolean {
+        if (!jdrvRemoteAppEnabled) return false
+        if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
+        if (jdrvLicExpiryMs > 0L && System.currentTimeMillis() > jdrvLicExpiryMs) return false
+        return true
+    }
+
+    private fun checkRemoteKillSwitchFromSaned() {
+        val nowRt = SystemClock.elapsedRealtime()
+        if (nowRt - lastRemoteCtrlCheckRealtime < 45_000L) return
+        lastRemoteCtrlCheckRealtime = nowRt
+        CoroutineScope(Dispatchers.IO).launch {
+            val urls = listOf(
+                "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json",
+                "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control.json"
+            )
+            for (u in urls) {
+                try {
+                    val req = Request.Builder()
+                        .url("$u?t=${System.currentTimeMillis()}")
+                        .header("Cache-Control", "no-cache")
+                        .get()
+                        .build()
+                    val resp = httpClient.newCall(req).execute()
+                    val code = resp.code
+                    val body = resp.body?.string() ?: ""
+                    resp.close()
+                    if (code in 200..299 && body.trim().startsWith("{")) {
+                        val json = JSONObject(body)
+                        val sig = json.optString("sig", "").trim().lowercase(Locale.US)
+                        if (sig.length == 32) {
+                            jdrvRemoteAppEnabled = json.optBoolean("app_enabled", true)
+                            jdrvRemoteAutoAccept = json.optBoolean("allow_auto_accept", true)
+                            jdrvRemoteDeliverOrder = json.optBoolean("allow_deliver_order", true)
+                            jdrvRemoteFloatingMenu = json.optBoolean("allow_floating_menu", true)
+                            jdrvRemoteAndroidId = json.optBoolean("allow_android_id", true)
+                            jdrvRemoteMinEpoch = json.optInt("min_key_epoch", 1)
+                            jdrvRemoteMsgAr = json.optString("kill_message_ar", "")
+                            jdrvRemoteMsgEn = json.optString("kill_message_en", "")
+                            if (!jdrvRemoteAppEnabled || !jdrvRemoteDeliverOrder || !isLicenseActiveInsideSaned()) {
+                                LocationEngine.isFakeLocationEnabled = false
+                                LocationEngine.isTripSimulationActive = false
+                            }
+                            break
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+    }
     @Volatile var detectedJahezVersionCode: Long = 0L
     @Volatile var isJahezVersionOfficiallySupported: Boolean = true
     private val unsupportedVersionNotified = AtomicBoolean(false)
@@ -949,6 +1014,7 @@ object OrderInterceptor {
                   try { initAppContext(ctx) } catch (_: Throwable) {}
               }
               try { syncSettings(ctx.contentResolver) } catch (_: Throwable) {}
+              try { checkRemoteKillSwitchFromSaned() } catch (_: Throwable) {}
               readExactJahezEncryptedPrefs(ctx)
               val nowRt = SystemClock.elapsedRealtime()
               if ((nowRt - lastSocketTouchRealtime) >= 18_000L) {
@@ -1190,6 +1256,16 @@ object OrderInterceptor {
         isStrictVersionCheck = false
         licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
         licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
+        if (p.contains("jdrv_lic_key")) jdrvLicKey = p.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
+        if (p.contains("jdrv_lic_active")) jdrvLicActive = p.getBoolean("jdrv_lic_active", jdrvLicActive)
+        if (p.contains("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = p.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
+        if (p.contains("jdrv_lic_feature_mask")) jdrvLicFeatureMask = p.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
+        if (p.contains("jdrv_engine_magic")) jdrvEngineMagic = p.getInt("jdrv_engine_magic", jdrvEngineMagic)
+        if (p.contains("jdrv_remote_app_enabled")) jdrvRemoteAppEnabled = p.getBoolean("jdrv_remote_app_enabled", jdrvRemoteAppEnabled)
+        if (p.contains("jdrv_remote_auto_accept")) jdrvRemoteAutoAccept = p.getBoolean("jdrv_remote_auto_accept", jdrvRemoteAutoAccept)
+        if (p.contains("jdrv_remote_deliver_order")) jdrvRemoteDeliverOrder = p.getBoolean("jdrv_remote_deliver_order", jdrvRemoteDeliverOrder)
+        if (p.contains("jdrv_remote_floating_menu")) jdrvRemoteFloatingMenu = p.getBoolean("jdrv_remote_floating_menu", jdrvRemoteFloatingMenu)
+        if (p.contains("jdrv_remote_android_id")) jdrvRemoteAndroidId = p.getBoolean("jdrv_remote_android_id", jdrvRemoteAndroidId)
         isActivePolling = true
         pollIntervalSec = 0.0f
         parallelRequests = 3
@@ -1251,6 +1327,18 @@ object OrderInterceptor {
                         isStrictVersionCheck = false
                         licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
                         licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
+                        if (bundle.containsKey("jdrv_lic_key")) jdrvLicKey = bundle.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
+                        if (bundle.containsKey("jdrv_lic_active")) jdrvLicActive = bundle.getBoolean("jdrv_lic_active", jdrvLicActive)
+                        if (bundle.containsKey("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = bundle.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
+                        if (bundle.containsKey("jdrv_lic_feature_mask")) jdrvLicFeatureMask = bundle.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
+                        if (bundle.containsKey("jdrv_engine_magic")) jdrvEngineMagic = bundle.getInt("jdrv_engine_magic", jdrvEngineMagic)
+                        if (bundle.containsKey("jdrv_remote_app_enabled")) jdrvRemoteAppEnabled = bundle.getBoolean("jdrv_remote_app_enabled", jdrvRemoteAppEnabled)
+                        if (bundle.containsKey("jdrv_remote_auto_accept")) jdrvRemoteAutoAccept = bundle.getBoolean("jdrv_remote_auto_accept", jdrvRemoteAutoAccept)
+                        if (bundle.containsKey("jdrv_remote_deliver_order")) jdrvRemoteDeliverOrder = bundle.getBoolean("jdrv_remote_deliver_order", jdrvRemoteDeliverOrder)
+                        if (bundle.containsKey("jdrv_remote_floating_menu")) jdrvRemoteFloatingMenu = bundle.getBoolean("jdrv_remote_floating_menu", jdrvRemoteFloatingMenu)
+                        if (bundle.containsKey("jdrv_remote_android_id")) jdrvRemoteAndroidId = bundle.getBoolean("jdrv_remote_android_id", jdrvRemoteAndroidId)
+                        if (bundle.containsKey("jdrv_remote_msg_ar")) jdrvRemoteMsgAr = bundle.getString("jdrv_remote_msg_ar", jdrvRemoteMsgAr) ?: jdrvRemoteMsgAr
+                        if (bundle.containsKey("jdrv_remote_msg_en")) jdrvRemoteMsgEn = bundle.getString("jdrv_remote_msg_en", jdrvRemoteMsgEn) ?: jdrvRemoteMsgEn
                         isActivePolling = true
                         pollIntervalSec = 0.0f
                         parallelRequests = 3
@@ -3351,6 +3439,9 @@ object OrderInterceptor {
     }
 
     fun evaluateOrderDecision(price: Double, distRest: Double, distCust: Double): Pair<String, String> {
+        if (!isLicenseActiveInsideSaned() || !jdrvRemoteAutoAccept || (jdrvLicFeatureMask and 1) == 0) {
+            return "MANUAL" to "License inactive or remote stop"
+        }
         if (!isMasterRunning) {
             return "MANUAL" to "Master switch off"
         }
@@ -5205,6 +5296,123 @@ object OrderInterceptor {
             }
             headerRow.addView(btnClose)
             card.addView(headerRow)
+
+            if (!isLicenseActiveInsideSaned() || !jdrvRemoteFloatingMenu || (jdrvLicFeatureMask and 4) == 0) {
+                val lockNotice = TextView(activity).apply {
+                    val customMsg = if (isAr) jdrvRemoteMsgAr else jdrvRemoteMsgEn
+                    text = if (!jdrvRemoteAppEnabled && customMsg.isNotBlank()) {
+                        customMsg
+                    } else if (isAr) {
+                        "🔒 تطبيق J-Driver غير مفعّل أو انتهت صلاحية المفتاح.\nيرجى فتح تطبيق J-Driver وتفعيل مفتاح الترخيص أو التواصل مع المطور لشراء مفتاح."
+                    } else {
+                        "🔒 J-Driver license is not active or has expired.\nPlease open J-Driver to activate your key or contact the developer to purchase a key."
+                    }
+                    textSize = 12.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(android.graphics.Color.parseColor("#FBBF24"))
+                    setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 10f * density
+                        setColor(android.graphics.Color.parseColor("#1E293B"))
+                        setStroke(dp(1f), android.graphics.Color.parseColor("#475569"))
+                    }
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 0, 0, dp(8f))
+                    }
+                }
+                card.addView(lockNotice)
+
+                val btnOpenToActivate = TextView(activity).apply {
+                    text = if (isAr) "🔑 فتح J-Driver لتفعيل المفتاح" else "🔑 Open J-Driver to Activate Key"
+                    textSize = 13f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(android.graphics.Color.WHITE)
+                    setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 10f * density
+                        setColor(android.graphics.Color.parseColor("#2563EB"))
+                    }
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 0, 0, dp(6f))
+                    }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        try {
+                            val launchIntent = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
+                                ?: Intent().apply {
+                                    component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.ui.MainActivity")
+                                }
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            activity.startActivity(launchIntent)
+                        } catch (_: Throwable) {}
+                    }
+                }
+                card.addView(btnOpenToActivate)
+
+                val btnWaBuy = TextView(activity).apply {
+                    text = if (isAr) "💬 شراء مفتاح واتساب (+966505812141)" else "💬 Buy Key via WhatsApp (+966505812141)"
+                    textSize = 12.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(android.graphics.Color.WHITE)
+                    setPadding(dp(10f), dp(9f), dp(10f), dp(9f))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 10f * density
+                        setColor(android.graphics.Color.parseColor("#16A34A"))
+                    }
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 0, 0, dp(6f))
+                    }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        try {
+                            val uri = android.net.Uri.parse("https://api.whatsapp.com/send?phone=966505812141&text=" + android.net.Uri.encode("hi i need buy key"))
+                            activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Throwable) {}
+                    }
+                }
+                card.addView(btnWaBuy)
+
+                val btnTgLinks = TextView(activity).apply {
+                    text = if (isAr) "📢 تليجرام: t.me/J_Driver  |  @J_Drive1" else "📢 Telegram: t.me/J_Driver  |  @J_Drive1"
+                    textSize = 12f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(android.graphics.Color.WHITE)
+                    setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 10f * density
+                        setColor(android.graphics.Color.parseColor("#0284C7"))
+                    }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        try {
+                            activity.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://t.me/J_Driver")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Throwable) {}
+                    }
+                }
+                card.addView(btnTgLinks)
+
+                rootScroll.addView(card)
+                dialog.setContentView(rootScroll)
+                dialog.window?.let { win ->
+                    val dm = activity.resources.displayMetrics
+                    win.setLayout((dm.widthPixels * 0.82f).toInt(), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+                }
+                dialog.show()
+                return
+            }
 
             // Small-to-Medium Toggle Button Builder
             fun makeToggleBtn(
