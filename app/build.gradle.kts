@@ -17,14 +17,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("officialRelease") {
+            storeFile = rootProject.file("jdriver_release.keystore")
+            storePassword = "JDriverPro2026!"
+            keyAlias = "jdriver_official"
+            keyPassword = "JDriverPro2026!"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = false
+            signingConfig = signingConfigs.getByName("officialRelease")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("officialRelease")
         }
     }
     compileOptions {

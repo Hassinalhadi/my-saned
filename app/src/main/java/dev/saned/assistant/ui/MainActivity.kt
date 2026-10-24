@@ -1062,15 +1062,15 @@ class MainActivity : AppCompatActivity() {
         return java.security.MessageDigest.getInstance("SHA-256").digest(raw)
     }
 
+    @Volatile private var cachedRuntimeHwId: String = ""
+
     private fun getHardwareDeviceId(): String {
-        val rankPrefs = getOrderRankPrefs()
-        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
-        val existing = rankPrefs.getString("jdrv_hw_device_id", null)
-            ?: mainPrefs.getString("jdrv_hw_device_id", null)
-        if (!existing.isNullOrEmpty() && existing.startsWith("JID-") && existing.length == 13) {
-            return existing
-        }
+        if (cachedRuntimeHwId.isNotEmpty()) return cachedRuntimeHwId
+        val androidId = try {
+            android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
+        } catch (_: Throwable) { "" }
         val hwRaw = buildString {
+            append(androidId).append('|')
             append(Build.BOARD).append('|')
             append(Build.BRAND).append('|')
             append(Build.DEVICE).append('|')
@@ -1086,8 +1086,9 @@ class MainActivity : AppCompatActivity() {
             chars[i] = LIC_ALPHABET[b % LIC_ALPHABET.length]
         }
         val formatted = "JID-${String(chars, 0, 4)}-${String(chars, 4, 4)}"
-        rankPrefs.edit().putString("jdrv_hw_device_id", formatted).commit()
-        mainPrefs.edit().putString("jdrv_hw_device_id", formatted).commit()
+        cachedRuntimeHwId = formatted
+        getOrderRankPrefs().edit().putString("jdrv_hw_device_id", formatted).apply()
+        getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit().putString("jdrv_hw_device_id", formatted).apply()
         return formatted
     }
 
@@ -1143,10 +1144,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun reconstructOfficialCertSha256(): ByteArray {
+        val certSeeds = intArrayOf(
+            0x04EA4414.toInt(), 0x2DC949DA.toInt(), 0x14EDEAF9.toInt(), 0xACAE78B3.toInt(),
+            0xA5CF0D92.toInt(), 0x064463D1.toInt(), 0x33C46013.toInt(), 0xBCF223A2.toInt()
+        )
+        val out = ByteArray(32)
+        for (idx in certSeeds.indices) {
+            val mask = 0x3C6EF372 + idx * 0x27D4EB2D
+            val word = certSeeds[idx] xor mask
+            val off = idx * 4
+            out[off] = ((word ushr 24) and 0xFF).toByte()
+            out[off + 1] = ((word ushr 16) and 0xFF).toByte()
+            out[off + 2] = ((word ushr 8) and 0xFF).toByte()
+            out[off + 3] = (word and 0xFF).toByte()
+        }
+        return out
+    }
+
+    private fun verifyOfficialApkSignature(): Boolean {
+        try {
+            @Suppress("DEPRECATION")
+            val pkgInfo = packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+            @Suppress("DEPRECATION")
+            val sigs = pkgInfo.signatures
+            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
+                val actual = java.security.MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray())
+                val expected = reconstructOfficialCertSha256()
+                return java.security.MessageDigest.isEqual(actual, expected)
+            }
+        } catch (_: Throwable) {}
+        return false
+    }
+
     private fun isEnvironmentTampered(): Boolean {
         try {
-            if (android.os.Debug.isDebuggerConnected()) return true
+            if (android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()) return true
             if (packageName != "dev.jing.sanedhook") return true
+            if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) return true
+            if (!verifyOfficialApkSignature()) return true
+            val patcherPkgs = arrayOf(
+                "com.chelpus.lackypatch",
+                "com.dimonvideo.luckypatcher",
+                "com.forpda.lp",
+                "com.android.vending.billing.InAppBillingService.COIN",
+                "com.android.vending.billing.InAppBillingService.LACK"
+            )
+            for (p in patcherPkgs) {
+                try {
+                    packageManager.getPackageInfo(p, 0)
+                    return true
+                } catch (_: Throwable) {}
+            }
         } catch (_: Throwable) {}
         return false
     }
@@ -1314,10 +1363,19 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        if (activateIfNew) {
-            val formattedKey = if (cleanKeyNorm.startsWith("JDRV-")) cleanKeyNorm else "JDRV-$cleanKeyNorm"
+        val formattedKey = if (cleanKeyNorm.startsWith("JDRV-")) cleanKeyNorm else "JDRV-$cleanKeyNorm"
+        val tokenCanonical = "$formattedKey|$myDevId|$expiryMs|$featureMask|$keyEpoch|19012"
+        val tokMac = javax.crypto.Mac.getInstance("HmacSHA256")
+        tokMac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        val tokenSigHex = tokMac.doFinal(tokenCanonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+            .take(32)
+
+        if (activateIfNew || mainPrefs.getString("jdrv_lic_token_sig", "") != tokenSigHex) {
             mainPrefs.edit()
                 .putString("jdrv_lic_key", formattedKey)
+                .putString("jdrv_hw_device_id", myDevId)
+                .putString("jdrv_lic_token_sig", tokenSigHex)
                 .putBoolean("jdrv_lic_active", true)
                 .putLong("jdrv_lic_expiry_ms", expiryMs)
                 .putInt("jdrv_lic_feature_mask", featureMask)
@@ -1361,12 +1419,16 @@ class MainActivity : AppCompatActivity() {
     private fun pushLicenseStateToSaned() {
         try {
             val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+            val bDevsSet = mainPrefs.getStringSet("jdrv_remote_blocked_devs", emptySet()) ?: emptySet()
+            val bKeysSet = mainPrefs.getStringSet("jdrv_remote_blocked_keys", emptySet()) ?: emptySet()
             val extras = Bundle().apply {
                 putString("jdrv_lic_key", mainPrefs.getString("jdrv_lic_key", "") ?: "")
                 putString("jdrv_hw_device_id", getHardwareDeviceId())
+                putString("jdrv_lic_token_sig", mainPrefs.getString("jdrv_lic_token_sig", "") ?: "")
                 putBoolean("jdrv_lic_active", mainPrefs.getBoolean("jdrv_lic_active", false))
                 putLong("jdrv_lic_expiry_ms", mainPrefs.getLong("jdrv_lic_expiry_ms", 0L))
                 putInt("jdrv_lic_feature_mask", mainPrefs.getInt("jdrv_lic_feature_mask", 0x0F))
+                putInt("jdrv_lic_epoch", mainPrefs.getInt("jdrv_lic_epoch", 1))
                 putInt("jdrv_engine_magic", mainPrefs.getInt("jdrv_engine_magic", 0))
                 putBoolean("jdrv_remote_app_enabled", mainPrefs.getBoolean("jdrv_remote_app_enabled", true))
                 putBoolean("jdrv_remote_auto_accept", mainPrefs.getBoolean("jdrv_remote_auto_accept", true))
@@ -1374,6 +1436,8 @@ class MainActivity : AppCompatActivity() {
                 putBoolean("jdrv_remote_floating_menu", mainPrefs.getBoolean("jdrv_remote_floating_menu", true))
                 putBoolean("jdrv_remote_android_id", mainPrefs.getBoolean("jdrv_remote_android_id", true))
                 putInt("jdrv_remote_min_epoch", mainPrefs.getInt("jdrv_remote_min_epoch", 1))
+                putString("jdrv_remote_blocked_devs_csv", bDevsSet.joinToString(","))
+                putString("jdrv_remote_blocked_keys_csv", bKeysSet.joinToString(","))
                 putString("jdrv_remote_msg_ar", mainPrefs.getString("jdrv_remote_msg_ar", "") ?: "")
                 putString("jdrv_remote_msg_en", mainPrefs.getString("jdrv_remote_msg_en", "") ?: "")
             }
@@ -1482,6 +1546,8 @@ class MainActivity : AppCompatActivity() {
                                 .putInt("jdrv_remote_min_epoch", json.optInt("min_key_epoch", 1))
                                 .putStringSet("jdrv_remote_blocked_devs", bDevs)
                                 .putStringSet("jdrv_remote_blocked_keys", bKeys)
+                                .putString("jdrv_remote_blocked_devs_csv", bDevs.joinToString(","))
+                                .putString("jdrv_remote_blocked_keys_csv", bKeys.joinToString(","))
                                 .putString("jdrv_remote_msg_ar", json.optString("kill_message_ar", ""))
                                 .putString("jdrv_remote_msg_en", json.optString("kill_message_en", ""))
                                 .commit()
@@ -1593,10 +1659,6 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             background = roundedBg("#1E293B", 40f, "#3B82F6", 3)
             setPadding(42, 32, 42, 32)
-            setOnLongClickListener {
-                promptAdminKeyGenPinDialog()
-                true
-            }
         }
         col.addView(badgeTv)
 
@@ -1888,10 +1950,6 @@ class MainActivity : AppCompatActivity() {
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
             setPadding(0, 0, 0, 8)
-            setOnLongClickListener {
-                promptAdminKeyGenPinDialog()
-                true
-            }
         }
         layout.addView(title)
 
@@ -2008,468 +2066,6 @@ class MainActivity : AppCompatActivity() {
 
         card.addView(layout)
         return card
-    }
-
-    private val ADMIN_PIN_SHA256 = "cb53c961534fcde5d835e12ac0dd785e89c0b95239fce4aeee3be9d6e45d0ed9"
-
-    private fun encodeBase32Bytes20(data: ByteArray): String {
-        var bits = 0
-        var value = 0
-        val sb = StringBuilder()
-        for (b in data) {
-            value = (value shl 8) or (b.toInt() and 0xFF)
-            bits += 8
-            while (bits >= 5) {
-                sb.append(LIC_ALPHABET[(value ushr (bits - 5)) and 31])
-                bits -= 5
-            }
-        }
-        if (bits > 0) {
-            sb.append(LIC_ALPHABET[(value shl (5 - bits)) and 31])
-        }
-        val raw = sb.toString()
-        val groups = mutableListOf<String>()
-        var i = 0
-        while (i < raw.length) {
-            val end = (i + 4).coerceAtMost(raw.length)
-            groups.add(raw.substring(i, end))
-            i += 4
-        }
-        return "JDRV-" + groups.joinToString("-")
-    }
-
-    private fun generateEncryptedLicenseKeyAdmin(
-        targetDeviceId: String,
-        durationMinutes: Int,
-        keyEpoch: Int,
-        featureMask: Int
-    ): String {
-        val mk = reconstructMasterKey()
-        val devHash = computeDeviceHashInt(targetDeviceId)
-        val expCode: Int = if (durationMinutes <= 0) {
-            -1 // 0xFFFFFFFF = Lifetime
-        } else {
-            (-0x80000000) or (durationMinutes and 0x7FFFFFFF)
-        }
-        val plain12 = ByteArray(12)
-        plain12[0] = ((devHash ushr 24) and 0xFF).toByte()
-        plain12[1] = ((devHash ushr 16) and 0xFF).toByte()
-        plain12[2] = ((devHash ushr 8) and 0xFF).toByte()
-        plain12[3] = (devHash and 0xFF).toByte()
-        plain12[4] = ((expCode ushr 24) and 0xFF).toByte()
-        plain12[5] = ((expCode ushr 16) and 0xFF).toByte()
-        plain12[6] = ((expCode ushr 8) and 0xFF).toByte()
-        plain12[7] = (expCode and 0xFF).toByte()
-        plain12[8] = (keyEpoch and 0xFF).toByte()
-        plain12[9] = (featureMask and 0xFF).toByte()
-        plain12[10] = 0x4A.toByte()
-        plain12[11] = 0x44.toByte()
-
-        val rnd = java.security.SecureRandom().nextInt(0x10000)
-        val nonce2 = byteArrayOf(((rnd ushr 8) and 0xFF).toByte(), (rnd and 0xFF).toByte())
-
-        val sha = java.security.MessageDigest.getInstance("SHA-256")
-        sha.update(mk)
-        sha.update(nonce2)
-        val stream = sha.digest()
-
-        val enc12 = ByteArray(12)
-        for (idx in 0 until 12) {
-            enc12[idx] = (plain12[idx].toInt() xor stream[idx].toInt()).toByte()
-        }
-
-        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
-        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
-        mac.update(enc12)
-        mac.update(nonce2)
-        val tag6 = mac.doFinal().copyOfRange(0, 6)
-
-        val full20 = ByteArray(20)
-        System.arraycopy(enc12, 0, full20, 0, 12)
-        System.arraycopy(nonce2, 0, full20, 12, 2)
-        System.arraycopy(tag6, 0, full20, 14, 6)
-        return encodeBase32Bytes20(full20)
-    }
-
-    private fun buildSignedRemoteControlJsonAdmin(
-        appEnabled: Boolean,
-        allowAccept: Boolean,
-        allowDeliver: Boolean,
-        allowFloating: Boolean,
-        allowAndroidId: Boolean,
-        minEpoch: Int,
-        blockedDevicesCsv: String,
-        killMsgAr: String
-    ): String {
-        val bDevs = blockedDevicesCsv.split(",")
-            .map { it.trim().uppercase(Locale.US) }
-            .filter { it.isNotEmpty() }
-            .sorted()
-        val canonical = "${if (appEnabled) 1 else 0}|${if (allowAccept) 1 else 0}|${if (allowDeliver) 1 else 0}|${if (allowFloating) 1 else 0}|${if (allowAndroidId) 1 else 0}|$minEpoch|${bDevs.joinToString(",")}|"
-        val mk = reconstructMasterKey()
-        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
-        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
-        val sigHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
-            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
-            .take(32)
-
-        val json = JSONObject().apply {
-            put("app_enabled", appEnabled)
-            put("allow_auto_accept", allowAccept)
-            put("allow_deliver_order", allowDeliver)
-            put("allow_floating_menu", allowFloating)
-            put("allow_android_id", allowAndroidId)
-            put("min_key_epoch", minEpoch)
-            put("blocked_devices", JSONArray(bDevs))
-            put("blocked_keys", JSONArray())
-            put("kill_message_ar", killMsgAr)
-            put("kill_message_en", "⚠️ This copy of J-Driver has been disabled by the developer. Contact WhatsApp +966505812141 or Telegram @J_Drive1")
-            put("sig", sigHex)
-        }
-        return json.toString(2)
-    }
-
-    private fun promptAdminKeyGenPinDialog() {
-        val dlg = android.app.Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedBg("#0F172A", 24f, "#3B82F6", 3)
-            setPadding(36, 36, 36, 36)
-        }
-        val title = TextView(this).apply {
-            text = tr("🔐 دخول لوحة المطور (مولد المفاتيح والتحكم عن بُعد)", "🔐 Developer Admin KeyGen & Remote Control")
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 16)
-        }
-        box.addView(title)
-
-        val edtPin = EditText(this).apply {
-            hint = tr("أدخل الرقم السري للمطور", "Enter Developer PIN")
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            background = roundedBg("#1E293B", 14f, "#475569", 2)
-            setPadding(26, 24, 26, 24)
-        }
-        box.addView(edtPin)
-
-        val btnEnter = TextView(this).apply {
-            text = tr("🔓 فتح مولد المفاتيح ولوحة الإيقاف عن بُعد", "🔓 Open Key Generator & Kill-Switch")
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#10B981", 16f)
-            setPadding(24, 26, 24, 26)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 20, 0, 0)
-            }
-            setOnClickListener {
-                val pin = edtPin.text.toString().trim()
-                val digest = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(("JDRV_ADMIN_PIN_SALT_2026:$pin").toByteArray(Charsets.UTF_8))
-                    .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
-                if (digest == ADMIN_PIN_SHA256) {
-                    dlg.dismiss()
-                    showNativeAdminKeyGenDialog()
-                } else {
-                    Toast.makeText(this@MainActivity, tr("❌ الرقم السري غير صحيح", "❌ Incorrect PIN"), Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-        box.addView(btnEnter)
-        dlg.setContentView(box)
-        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        dlg.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.90f).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT
-        )
-        dlg.show()
-    }
-
-    private fun showNativeAdminKeyGenDialog() {
-        val dlg = android.app.Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val scroll = ScrollView(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedBg("#0F172A", 26f, "#10B981", 3)
-            setPadding(34, 34, 34, 34)
-        }
-
-        val hdrRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, 16)
-        }
-        val hdrTitle = TextView(this).apply {
-            text = tr("🔑 مولد مفاتيح J-Driver والتحكم عن بُعد", "🔑 J-Driver KeyGen & Remote Kill-Switch")
-            textSize = 16.5f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val btnClose = TextView(this).apply {
-            text = "✖"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = roundedBg("#334155", 12f)
-            setPadding(22, 12, 22, 12)
-            setOnClickListener { dlg.dismiss() }
-        }
-        hdrRow.addView(hdrTitle)
-        hdrRow.addView(btnClose)
-        root.addView(hdrRow)
-
-        val edtTargetDev = EditText(this).apply {
-            hint = tr("معرّف جهاز العميل (JID-XXXX-XXXX) أو * لأي جهاز", "Customer Device ID (JID-XXXX-XXXX) or * for Any")
-            setText("*")
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.parseColor("#38BDF8"))
-            typeface = Typeface.MONOSPACE
-            textSize = 14f
-            background = roundedBg("#1E293B", 14f, "#475569", 2)
-            setPadding(24, 22, 24, 22)
-        }
-        root.addView(edtTargetDev)
-
-        val edtDays = EditText(this).apply {
-            hint = tr("المدة بالأيام (0 = مدى الحياة، 30 = شهر، 7 = أسبوع)", "Duration in Days (0 = Lifetime, 30 = Month, 7 = Week)")
-            setText("30")
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            background = roundedBg("#1E293B", 14f, "#475569", 2)
-            setPadding(24, 22, 24, 22)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 12, 0, 12) }
-        }
-        root.addView(edtDays)
-
-        val chkAcc = CheckBox(this).apply {
-            text = tr("⚡ تفعيل القبول التلقائي والفلاتر", "⚡ Enable Auto-Accept & Filters")
-            setTextColor(Color.WHITE)
-            isChecked = true
-        }
-        val chkDel = CheckBox(this).apply {
-            text = tr("🚗 تفعيل توصيل الطلبات والخريطة (DELIVER ORDER)", "🚗 Enable DELIVER ORDER & Map")
-            setTextColor(Color.WHITE)
-            isChecked = true
-        }
-        val chkFlt = CheckBox(this).apply {
-            text = tr("🎯 تفعيل القائمة العائمة فوق ساند", "🎯 Enable Floating Quick Menu")
-            setTextColor(Color.WHITE)
-            isChecked = true
-        }
-        val chkAid = CheckBox(this).apply {
-            text = tr("🆔 تفعيل تغيير معرّف الأندرويد", "🆔 Enable Change Android ID")
-            setTextColor(Color.WHITE)
-            isChecked = true
-        }
-        root.addView(chkAcc)
-        root.addView(chkDel)
-        root.addView(chkFlt)
-        root.addView(chkAid)
-
-        val tvGenerated = TextView(this).apply {
-            text = "JDRV-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
-            textSize = 14f
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#FBBF24"))
-            background = roundedBg("#1E293B", 14f, "#10B981", 2)
-            setPadding(24, 24, 24, 24)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 14, 0, 14) }
-        }
-
-        val btnGen = TextView(this).apply {
-            text = tr("⚡ توليد مفتاح التفعيل المشفر ونسخه", "⚡ Generate Encrypted Key & Copy")
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#10B981", 16f)
-            setPadding(24, 26, 24, 26)
-            setOnClickListener {
-                val dev = edtTargetDev.text.toString().trim().ifEmpty { "*" }
-                val days = edtDays.text.toString().trim().toIntOrNull() ?: 30
-                val mins = if (days <= 0) 0 else days * 1440
-                var mask = 0
-                if (chkAcc.isChecked) mask = mask or 1
-                if (chkDel.isChecked) mask = mask or 2
-                if (chkFlt.isChecked) mask = mask or 4
-                if (chkAid.isChecked) mask = mask or 8
-                if (mask == 0) mask = 15
-                val key = generateEncryptedLicenseKeyAdmin(dev, mins, 1, mask)
-                tvGenerated.text = key
-                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clip.setPrimaryClip(ClipData.newPlainText("J-Driver License Key", key))
-                Toast.makeText(this@MainActivity, tr("✅ تم توليد ونسخ المفتاح!", "✅ Key generated & copied!"), Toast.LENGTH_SHORT).show()
-            }
-        }
-        root.addView(btnGen)
-        root.addView(tvGenerated)
-
-        // Remote Kill-Switch Section inside Native Admin Dialog
-        val killSectionTitle = TextView(this).apply {
-            text = tr("🛡️ إيقاف التطبيق عن بُعد (Kill-Switch عبر GitHub):", "🛡️ Remote App Kill-Switch (GitHub Cloud):")
-            textSize = 14.5f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#F87171"))
-            setPadding(0, 18, 0, 8)
-        }
-        root.addView(killSectionTitle)
-
-        val adminPrefs = getOrderRankPrefs()
-        val edtGhTok = EditText(this).apply {
-            hint = tr("رمز GitHub Token (لإيقاف/تشغيل التطبيق عن بُعد بضغطة زر)", "GitHub Personal Access Token")
-            setText(adminPrefs.getString("jdrv_admin_gh_tok", "") ?: "")
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            textSize = 12.5f
-            typeface = Typeface.MONOSPACE
-            background = roundedBg("#1E293B", 14f, "#475569", 2)
-            setPadding(22, 20, 22, 20)
-        }
-        root.addView(edtGhTok)
-
-        val killBtnsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 14, 0, 0) }
-        }
-
-        fun pushRemoteKillStatus(enableApp: Boolean) {
-            val tok = edtGhTok.text.toString().trim()
-            if (tok.isNotEmpty()) adminPrefs.edit().putString("jdrv_admin_gh_tok", tok).commit()
-            val signedJson = buildSignedRemoteControlJsonAdmin(
-                appEnabled = enableApp,
-                allowAccept = chkAcc.isChecked,
-                allowDeliver = chkDel.isChecked,
-                allowFloating = chkFlt.isChecked,
-                allowAndroidId = chkAid.isChecked,
-                minEpoch = 1,
-                blockedDevicesCsv = "",
-                killMsgAr = "⚠️ تم إيقاف هذه النسخة من التطبيق عن بُعد من قِبل المطور. للتواصل وشراء مفتاح رسمي: واتساب +966505812141 أو تليجرام @J_Drive1"
-            )
-            if (tok.isEmpty()) {
-                val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clip.setPrimaryClip(ClipData.newPlainText("jdriver_control.json", signedJson))
-                Toast.makeText(
-                    this@MainActivity,
-                    tr("📋 تم نسخ ملف الإيقاف الموقّع (أضف رمز GitHub للإرسال التلقائي المباشر)", "📋 Copied signed jdriver_control.json"),
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
-            uiBgExecutor.execute {
-                try {
-                    val apiUrl = "https://api.github.com/repos/Hassinalhadi/my-saned/contents/jdriver_control.json"
-                    var existingSha = ""
-                    val getConn = (java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        setRequestProperty("Authorization", "Bearer $tok")
-                        setRequestProperty("Accept", "application/vnd.github+json")
-                    }
-                    if (getConn.responseCode in 200..299) {
-                        val getBody = getConn.inputStream.bufferedReader().use { it.readText() }
-                        existingSha = JSONObject(getBody).optString("sha", "")
-                    }
-                    getConn.disconnect()
-
-                    val b64 = android.util.Base64.encodeToString(signedJson.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-                    val putJson = JSONObject().apply {
-                        put("message", if (enableApp) "chore: enable J-Driver remotely [skip ci]" else "chore: stop J-Driver remotely [skip ci]")
-                        put("content", b64)
-                        if (existingSha.isNotEmpty()) put("sha", existingSha)
-                    }
-                    val putConn = (java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection).apply {
-                        requestMethod = "PUT"
-                        doOutput = true
-                        setRequestProperty("Authorization", "Bearer $tok")
-                        setRequestProperty("Accept", "application/vnd.github+json")
-                        setRequestProperty("Content-Type", "application/json")
-                    }
-                    putConn.outputStream.use { it.write(putJson.toString().toByteArray(Charsets.UTF_8)) }
-                    val code = putConn.responseCode
-                    putConn.disconnect()
-                    runOnUiThread {
-                        if (code in 200..299) {
-                            Toast.makeText(
-                                this@MainActivity,
-                                if (enableApp) tr("🟢 تم تفعيل التطبيق عن بُعد لجميع المستخدمين!", "🟢 App enabled remotely!")
-                                else tr("🔴 تم إيقاف التطبيق عن بُعد لدى جميع المستخدمين فوراً!", "🔴 App stopped remotely for all users!"),
-                                Toast.LENGTH_LONG
-                            ).show()
-                            syncRemoteKillSwitchAsync()
-                        } else {
-                            Toast.makeText(this@MainActivity, "GitHub HTTP $code", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                } catch (e: Throwable) {
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-        }
-
-        val btnKillNow = TextView(this).apply {
-            text = tr("🔴 إيقاف التطبيق عن بُعد", "🔴 STOP App Remotely")
-            textSize = 13.5f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#DC2626", 14f)
-            setPadding(20, 24, 20, 24)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(0, 0, 8, 0)
-            }
-            setOnClickListener { pushRemoteKillStatus(false) }
-        }
-
-        val btnEnableNow = TextView(this).apply {
-            text = tr("🟢 تشغيل التطبيق عن بُعد", "🟢 ENABLE App Remotely")
-            textSize = 13.5f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#059669", 14f)
-            setPadding(20, 24, 20, 24)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(8, 0, 0, 0)
-            }
-            setOnClickListener { pushRemoteKillStatus(true) }
-        }
-
-        killBtnsRow.addView(btnKillNow)
-        killBtnsRow.addView(btnEnableNow)
-        root.addView(killBtnsRow)
-
-        scroll.addView(root)
-        dlg.setContentView(scroll)
-        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        dlg.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.94f).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT
-        )
-        dlg.show()
     }
 
     // =========================================================================

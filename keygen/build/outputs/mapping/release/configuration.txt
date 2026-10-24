@@ -121,6 +121,8 @@
 # The proguard configuration file for the following section is /home/runner/work/my-saned/my-saned/keygen/proguard-rules.pro
 -repackageclasses 'k'
 -allowaccessmodification
+-overloadaggressively
+-renamesourcefileattribute SourceFile
 -keep public class dev.jing.jdriver.keygen.KeyGenActivity {
     public <init>();
 }

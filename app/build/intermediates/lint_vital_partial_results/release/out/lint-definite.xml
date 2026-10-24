@@ -7,12 +7,12 @@
         message="Reflective access to mFieldsMask is forbidden when targeting API 34 and above">
         <location
             file="${:app*release*MAIN*sourceProvider*0*javaDir*0}/dev/saned/assistant/LocationEngine.kt"
-            line="56"
+            line="58"
             column="15"
-            startOffset="2255"
-            endLine="56"
+            startOffset="2386"
+            endLine="58"
             endColumn="67"
-            endOffset="2307"/>
+            endOffset="2438"/>
     </incident>
 
 </incidents>

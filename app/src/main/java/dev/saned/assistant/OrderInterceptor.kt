@@ -69,9 +69,12 @@ object OrderInterceptor {
         @Volatile var licenseToken: String = ""
     @Volatile var licenseBoundId: String = ""
     @Volatile var jdrvLicKey: String = ""
+    @Volatile var jdrvHwDeviceId: String = ""
+    @Volatile var jdrvLicTokenSig: String = ""
     @Volatile var jdrvLicActive: Boolean = false
     @Volatile var jdrvLicExpiryMs: Long = 0L
     @Volatile var jdrvLicFeatureMask: Int = 0x0F
+    @Volatile var jdrvLicEpoch: Int = 1
     @Volatile var jdrvEngineMagic: Int = 0
     @Volatile var jdrvRemoteAppEnabled: Boolean = true
     @Volatile var jdrvRemoteAutoAccept: Boolean = true
@@ -79,16 +82,263 @@ object OrderInterceptor {
     @Volatile var jdrvRemoteFloatingMenu: Boolean = true
     @Volatile var jdrvRemoteAndroidId: Boolean = true
     @Volatile var jdrvRemoteMinEpoch: Int = 1
+    @Volatile var jdrvRemoteBlockedDevsCsv: String = ""
+    @Volatile var jdrvRemoteBlockedKeysCsv: String = ""
     @Volatile var jdrvRemoteMsgAr: String = ""
     @Volatile var jdrvRemoteMsgEn: String = ""
     @Volatile private var lastRemoteCtrlCheckRealtime: Long = 0L
+    @Volatile private var cachedCryptoCacheKey: String = ""
+    @Volatile private var cachedCryptoValid: Boolean = false
+    @Volatile private var cachedApkSigVerified: Int = 0 // 0=unchecked, 1=valid, -1=tampered
+
+    private const val ENGINE_LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    private fun reconstructEngineMasterKey(): ByteArray {
+        val seeds = intArrayOf(
+            0x4A445256, 0x53414E45, 0x44393850, 0x524F5345,
+            0x43555245, 0x39363635, 0x30353831, 0x32313431
+        )
+        val raw = ByteArray(32)
+        for (idx in seeds.indices) {
+            val mixed = seeds[idx] xor (0x5A3C96A5 + idx * 0x13579BDF)
+            val off = idx * 4
+            raw[off] = ((mixed ushr 24) and 0xFF).toByte()
+            raw[off + 1] = ((mixed ushr 16) and 0xFF).toByte()
+            raw[off + 2] = ((mixed ushr 8) and 0xFF).toByte()
+            raw[off + 3] = (mixed and 0xFF).toByte()
+        }
+        return java.security.MessageDigest.getInstance("SHA-256").digest(raw)
+    }
+
+    private fun reconstructExpectedCertSha256(): ByteArray {
+        val certSeeds = intArrayOf(
+            0x04EA4414.toInt(), 0x2DC949DA.toInt(), 0x14EDEAF9.toInt(), 0xACAE78B3.toInt(),
+            0xA5CF0D92.toInt(), 0x064463D1.toInt(), 0x33C46013.toInt(), 0xBCF223A2.toInt()
+        )
+        val out = ByteArray(32)
+        for (idx in certSeeds.indices) {
+            val mask = 0x3C6EF372 + idx * 0x27D4EB2D
+            val word = certSeeds[idx] xor mask
+            val off = idx * 4
+            out[off] = ((word ushr 24) and 0xFF).toByte()
+            out[off + 1] = ((word ushr 16) and 0xFF).toByte()
+            out[off + 2] = ((word ushr 8) and 0xFF).toByte()
+            out[off + 3] = (word and 0xFF).toByte()
+        }
+        return out
+    }
+
+    private fun verifyOfficialModuleApkSignature(): Boolean {
+        val cached = cachedApkSigVerified
+        if (cached != 0) return cached == 1
+        val ctx = appContext ?: currentActivity ?: return true
+        try {
+            @Suppress("DEPRECATION")
+            val pkgInfo = ctx.packageManager.getPackageInfo("dev.jing.sanedhook", android.content.pm.PackageManager.GET_SIGNATURES)
+            @Suppress("DEPRECATION")
+            val sigs = pkgInfo.signatures
+            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
+                val actualDigest = java.security.MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray())
+                val expectedDigest = reconstructExpectedCertSha256()
+                val ok = java.security.MessageDigest.isEqual(actualDigest, expectedDigest)
+                cachedApkSigVerified = if (ok) 1 else -1
+                return ok
+            }
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            // Module is embedded in non-root integrated mode without standalone package installed
+            cachedApkSigVerified = 1
+            return true
+        } catch (_: Throwable) {}
+        return true
+    }
+
+    private fun computeEngineDeviceHashInt(deviceId: String): Int {
+        val clean = deviceId.trim().uppercase(Locale.US).replace("-", "").replace(" ", "")
+        if (clean.isEmpty() || clean == "*" || clean == "ANY" || clean == "ALL" || clean == "JID00000000") {
+            return 0
+        }
+        val d = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(("JDRV_DEV:$clean").toByteArray(Charsets.UTF_8))
+        val v = ((d[0].toInt() and 0xFF) shl 24) or
+            ((d[1].toInt() and 0xFF) shl 16) or
+            ((d[2].toInt() and 0xFF) shl 8) or
+            (d[3].toInt() and 0xFF)
+        return if (v != 0) v else 1
+    }
+
+    private fun decodeEngineBase32Key(keyStr: String): ByteArray? {
+        var clean = keyStr.trim().uppercase(Locale.US).replace(" ", "")
+        if (clean.startsWith("JDRV-")) clean = clean.substring(5)
+        clean = clean.replace("-", "")
+        if (clean.length != 32) return null
+        var bits = 0
+        var value = 0
+        val out = ByteArray(20)
+        var outIdx = 0
+        for (i in 0 until clean.length) {
+            val idx = ENGINE_LIC_ALPHABET.indexOf(clean[i])
+            if (idx < 0) return null
+            value = (value shl 5) or idx
+            bits += 5
+            if (bits >= 8) {
+                if (outIdx < 20) {
+                    out[outIdx++] = ((value ushr (bits - 8)) and 0xFF).toByte()
+                }
+                bits -= 8
+            }
+        }
+        return if (outIdx == 20) out else null
+    }
+
+    private fun verifyCryptographicKeyAndTokenInEngine(): Boolean {
+        val rawKey = jdrvLicKey.trim().uppercase(Locale.US).replace(" ", "")
+        if (rawKey.isEmpty()) return false
+        val devId = jdrvHwDeviceId.trim().uppercase(Locale.US)
+        val minEp = jdrvRemoteMinEpoch
+        val blkDevs = jdrvRemoteBlockedDevsCsv
+        val blkKeys = jdrvRemoteBlockedKeysCsv
+        val sigTok = jdrvLicTokenSig
+        val stateSnapshot = "$rawKey|$devId|$jdrvLicExpiryMs|$jdrvLicFeatureMask|$jdrvLicEpoch|$minEp|$blkDevs|$blkKeys|$sigTok"
+        if (stateSnapshot == cachedCryptoCacheKey) {
+            return cachedCryptoValid
+        }
+
+        val valid = try {
+            if (blkDevs.isNotEmpty() && devId.isNotEmpty()) {
+                val setDevs = blkDevs.split(",").map { it.trim().uppercase(Locale.US) }.toSet()
+                if (setDevs.contains(devId) || setDevs.contains(devId.replace("-", ""))) {
+                    cachedCryptoCacheKey = stateSnapshot
+                    cachedCryptoValid = false
+                    return false
+                }
+            }
+            if (blkKeys.isNotEmpty()) {
+                val setKeys = blkKeys.split(",").map { it.trim().uppercase(Locale.US) }.toSet()
+                if (setKeys.contains(rawKey)) {
+                    cachedCryptoCacheKey = stateSnapshot
+                    cachedCryptoValid = false
+                    return false
+                }
+            }
+
+            val decoded = decodeEngineBase32Key(rawKey) ?: return false
+            val mk = reconstructEngineMasterKey()
+            val enc12 = decoded.copyOfRange(0, 12)
+            val nonce2 = decoded.copyOfRange(12, 14)
+            val tag6 = decoded.copyOfRange(14, 20)
+
+            val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+            mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+            mac.update(enc12)
+            mac.update(nonce2)
+            val expectedTag = mac.doFinal().copyOfRange(0, 6)
+            if (!java.security.MessageDigest.isEqual(tag6, expectedTag)) {
+                false
+            } else {
+                val sha = java.security.MessageDigest.getInstance("SHA-256")
+                sha.update(mk)
+                sha.update(nonce2)
+                val stream = sha.digest()
+                val plain12 = ByteArray(12)
+                for (i in 0 until 12) {
+                    plain12[i] = (enc12[i].toInt() xor stream[i].toInt()).toByte()
+                }
+                val devHash = ((plain12[0].toInt() and 0xFF) shl 24) or
+                    ((plain12[1].toInt() and 0xFF) shl 16) or
+                    ((plain12[2].toInt() and 0xFF) shl 8) or
+                    (plain12[3].toInt() and 0xFF)
+                val keyEpoch = plain12[8].toInt() and 0xFF
+                val featureMask = plain12[9].toInt() and 0xFF
+                val magic = ((plain12[10].toInt() and 0xFF) shl 8) or (plain12[11].toInt() and 0xFF)
+
+                if (magic != 0x4A44 || keyEpoch < minEp) {
+                    false
+                } else if (devHash != 0 && (devId.isEmpty() || devHash != computeEngineDeviceHashInt(devId))) {
+                    false
+                } else {
+                    // Enforce authentic featureMask & epoch decrypted directly from key
+                    jdrvLicFeatureMask = featureMask
+                    jdrvLicEpoch = keyEpoch
+                    if (sigTok.isNotEmpty()) {
+                        val tokenCanonical = "$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012"
+                        val tokMac = javax.crypto.Mac.getInstance("HmacSHA256")
+                        tokMac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                        val expectedTokHex = tokMac.doFinal(tokenCanonical.toByteArray(Charsets.UTF_8))
+                            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                            .take(32)
+                        expectedTokHex == sigTok.lowercase(Locale.US)
+                    } else {
+                        true
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            false
+        }
+
+        cachedCryptoCacheKey = stateSnapshot
+        cachedCryptoValid = valid
+        return valid
+    }
+
+    private fun verifyRemoteControlSignatureInEngine(json: JSONObject): Boolean {
+        val sig = json.optString("sig", "").trim().lowercase(Locale.US)
+        if (sig.length != 32) return false
+        val appEn = if (json.optBoolean("app_enabled", true)) 1 else 0
+        val accEn = if (json.optBoolean("allow_auto_accept", true)) 1 else 0
+        val delEn = if (json.optBoolean("allow_deliver_order", true)) 1 else 0
+        val fltEn = if (json.optBoolean("allow_floating_menu", true)) 1 else 0
+        val aidEn = if (json.optBoolean("allow_android_id", true)) 1 else 0
+        val minEp = json.optInt("min_key_epoch", 1)
+
+        val bDevs = mutableListOf<String>()
+        val devArr = json.optJSONArray("blocked_devices")
+        if (devArr != null) {
+            for (i in 0 until devArr.length()) {
+                val s = devArr.optString(i, "").trim().uppercase(Locale.US)
+                if (s.isNotEmpty()) bDevs.add(s)
+            }
+        }
+        bDevs.sort()
+
+        val bKeys = mutableListOf<String>()
+        val keyArr = json.optJSONArray("blocked_keys")
+        if (keyArr != null) {
+            for (i in 0 until keyArr.length()) {
+                val s = keyArr.optString(i, "").trim().uppercase(Locale.US)
+                if (s.isNotEmpty()) bKeys.add(s)
+            }
+        }
+        bKeys.sort()
+
+        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+        val mk = reconstructEngineMasterKey()
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        val fullHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+        return fullHex.take(32) == sig
+    }
 
     fun isLicenseActiveInsideSaned(): Boolean {
         if (!jdrvRemoteAppEnabled) return false
+        if (!verifyOfficialModuleApkSignature()) return false
         if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
         if (jdrvLicExpiryMs > 0L && System.currentTimeMillis() > jdrvLicExpiryMs) return false
-        return true
+        return verifyCryptographicKeyAndTokenInEngine()
     }
+
+    fun isAutoAcceptFeatureAllowed(): Boolean =
+        isLicenseActiveInsideSaned() && jdrvRemoteAutoAccept && (jdrvLicFeatureMask and 1) != 0
+
+    fun isDeliverOrderFeatureAllowed(): Boolean =
+        isLicenseActiveInsideSaned() && jdrvRemoteDeliverOrder && (jdrvLicFeatureMask and 2) != 0
+
+    fun isFloatingMenuFeatureAllowed(): Boolean =
+        isLicenseActiveInsideSaned() && jdrvRemoteFloatingMenu && (jdrvLicFeatureMask and 4) != 0
+
+    fun isAndroidIdFeatureAllowed(): Boolean =
+        isLicenseActiveInsideSaned() && jdrvRemoteAndroidId && (jdrvLicFeatureMask and 8) != 0
 
     private fun checkRemoteKillSwitchFromSaned() {
         val nowRt = SystemClock.elapsedRealtime()
@@ -112,17 +362,34 @@ object OrderInterceptor {
                     resp.close()
                     if (code in 200..299 && body.trim().startsWith("{")) {
                         val json = JSONObject(body)
-                        val sig = json.optString("sig", "").trim().lowercase(Locale.US)
-                        if (sig.length == 32) {
+                        if (verifyRemoteControlSignatureInEngine(json)) {
+                            val bDevs = mutableListOf<String>()
+                            val devArr = json.optJSONArray("blocked_devices")
+                            if (devArr != null) {
+                                for (i in 0 until devArr.length()) {
+                                    val s = devArr.optString(i, "").trim().uppercase(Locale.US)
+                                    if (s.isNotEmpty()) bDevs.add(s)
+                                }
+                            }
+                            val bKeys = mutableListOf<String>()
+                            val keyArr = json.optJSONArray("blocked_keys")
+                            if (keyArr != null) {
+                                for (i in 0 until keyArr.length()) {
+                                    val s = keyArr.optString(i, "").trim().uppercase(Locale.US)
+                                    if (s.isNotEmpty()) bKeys.add(s)
+                                }
+                            }
                             jdrvRemoteAppEnabled = json.optBoolean("app_enabled", true)
                             jdrvRemoteAutoAccept = json.optBoolean("allow_auto_accept", true)
                             jdrvRemoteDeliverOrder = json.optBoolean("allow_deliver_order", true)
                             jdrvRemoteFloatingMenu = json.optBoolean("allow_floating_menu", true)
                             jdrvRemoteAndroidId = json.optBoolean("allow_android_id", true)
                             jdrvRemoteMinEpoch = json.optInt("min_key_epoch", 1)
+                            jdrvRemoteBlockedDevsCsv = bDevs.joinToString(",")
+                            jdrvRemoteBlockedKeysCsv = bKeys.joinToString(",")
                             jdrvRemoteMsgAr = json.optString("kill_message_ar", "")
                             jdrvRemoteMsgEn = json.optString("kill_message_en", "")
-                            if (!jdrvRemoteAppEnabled || !jdrvRemoteDeliverOrder || !isLicenseActiveInsideSaned()) {
+                            if (!isDeliverOrderFeatureAllowed()) {
                                 LocationEngine.isFakeLocationEnabled = false
                                 LocationEngine.isTripSimulationActive = false
                             }
@@ -1257,10 +1524,16 @@ object OrderInterceptor {
         licenseToken = p.getString("license_token_v1", licenseToken) ?: licenseToken
         licenseBoundId = p.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
         if (p.contains("jdrv_lic_key")) jdrvLicKey = p.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
+        if (p.contains("jdrv_hw_device_id")) jdrvHwDeviceId = p.getString("jdrv_hw_device_id", jdrvHwDeviceId) ?: jdrvHwDeviceId
+        if (p.contains("jdrv_lic_token_sig")) jdrvLicTokenSig = p.getString("jdrv_lic_token_sig", jdrvLicTokenSig) ?: jdrvLicTokenSig
         if (p.contains("jdrv_lic_active")) jdrvLicActive = p.getBoolean("jdrv_lic_active", jdrvLicActive)
         if (p.contains("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = p.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
         if (p.contains("jdrv_lic_feature_mask")) jdrvLicFeatureMask = p.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
+        if (p.contains("jdrv_lic_epoch")) jdrvLicEpoch = p.getInt("jdrv_lic_epoch", jdrvLicEpoch)
         if (p.contains("jdrv_engine_magic")) jdrvEngineMagic = p.getInt("jdrv_engine_magic", jdrvEngineMagic)
+        if (p.contains("jdrv_remote_min_epoch")) jdrvRemoteMinEpoch = p.getInt("jdrv_remote_min_epoch", jdrvRemoteMinEpoch)
+        if (p.contains("jdrv_remote_blocked_devs_csv")) jdrvRemoteBlockedDevsCsv = p.getString("jdrv_remote_blocked_devs_csv", jdrvRemoteBlockedDevsCsv) ?: jdrvRemoteBlockedDevsCsv
+        if (p.contains("jdrv_remote_blocked_keys_csv")) jdrvRemoteBlockedKeysCsv = p.getString("jdrv_remote_blocked_keys_csv", jdrvRemoteBlockedKeysCsv) ?: jdrvRemoteBlockedKeysCsv
         if (p.contains("jdrv_remote_app_enabled")) jdrvRemoteAppEnabled = p.getBoolean("jdrv_remote_app_enabled", jdrvRemoteAppEnabled)
         if (p.contains("jdrv_remote_auto_accept")) jdrvRemoteAutoAccept = p.getBoolean("jdrv_remote_auto_accept", jdrvRemoteAutoAccept)
         if (p.contains("jdrv_remote_deliver_order")) jdrvRemoteDeliverOrder = p.getBoolean("jdrv_remote_deliver_order", jdrvRemoteDeliverOrder)
@@ -1328,10 +1601,16 @@ object OrderInterceptor {
                         licenseToken = bundle.getString("license_token_v1", licenseToken) ?: licenseToken
                         licenseBoundId = bundle.getString("license_bound_id_v1", licenseBoundId) ?: licenseBoundId
                         if (bundle.containsKey("jdrv_lic_key")) jdrvLicKey = bundle.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
+                        if (bundle.containsKey("jdrv_hw_device_id")) jdrvHwDeviceId = bundle.getString("jdrv_hw_device_id", jdrvHwDeviceId) ?: jdrvHwDeviceId
+                        if (bundle.containsKey("jdrv_lic_token_sig")) jdrvLicTokenSig = bundle.getString("jdrv_lic_token_sig", jdrvLicTokenSig) ?: jdrvLicTokenSig
                         if (bundle.containsKey("jdrv_lic_active")) jdrvLicActive = bundle.getBoolean("jdrv_lic_active", jdrvLicActive)
                         if (bundle.containsKey("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = bundle.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
                         if (bundle.containsKey("jdrv_lic_feature_mask")) jdrvLicFeatureMask = bundle.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
+                        if (bundle.containsKey("jdrv_lic_epoch")) jdrvLicEpoch = bundle.getInt("jdrv_lic_epoch", jdrvLicEpoch)
                         if (bundle.containsKey("jdrv_engine_magic")) jdrvEngineMagic = bundle.getInt("jdrv_engine_magic", jdrvEngineMagic)
+                        if (bundle.containsKey("jdrv_remote_min_epoch")) jdrvRemoteMinEpoch = bundle.getInt("jdrv_remote_min_epoch", jdrvRemoteMinEpoch)
+                        if (bundle.containsKey("jdrv_remote_blocked_devs_csv")) jdrvRemoteBlockedDevsCsv = bundle.getString("jdrv_remote_blocked_devs_csv", jdrvRemoteBlockedDevsCsv) ?: jdrvRemoteBlockedDevsCsv
+                        if (bundle.containsKey("jdrv_remote_blocked_keys_csv")) jdrvRemoteBlockedKeysCsv = bundle.getString("jdrv_remote_blocked_keys_csv", jdrvRemoteBlockedKeysCsv) ?: jdrvRemoteBlockedKeysCsv
                         if (bundle.containsKey("jdrv_remote_app_enabled")) jdrvRemoteAppEnabled = bundle.getBoolean("jdrv_remote_app_enabled", jdrvRemoteAppEnabled)
                         if (bundle.containsKey("jdrv_remote_auto_accept")) jdrvRemoteAutoAccept = bundle.getBoolean("jdrv_remote_auto_accept", jdrvRemoteAutoAccept)
                         if (bundle.containsKey("jdrv_remote_deliver_order")) jdrvRemoteDeliverOrder = bundle.getBoolean("jdrv_remote_deliver_order", jdrvRemoteDeliverOrder)

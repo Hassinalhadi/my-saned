@@ -67,12 +67,195 @@ class KeyGenActivity : Activity() {
         }
     }
 
+    private val ADMIN_PIN_SALTED_SHA256 = "bd76ba93ef2f6959025cfbd2e75f2d584ef90d1f6e958b7013b5a0c590ae2c7e"
+
+    private fun reconstructOfficialCertSha256(): ByteArray {
+        val certSeeds = intArrayOf(
+            0x04EA4414.toInt(), 0x2DC949DA.toInt(), 0x14EDEAF9.toInt(), 0xACAE78B3.toInt(),
+            0xA5CF0D92.toInt(), 0x064463D1.toInt(), 0x33C46013.toInt(), 0xBCF223A2.toInt()
+        )
+        val out = ByteArray(32)
+        for (idx in certSeeds.indices) {
+            val mask = 0x3C6EF372 + idx * 0x27D4EB2D
+            val word = certSeeds[idx] xor mask
+            val off = idx * 4
+            out[off] = ((word ushr 24) and 0xFF).toByte()
+            out[off + 1] = ((word ushr 16) and 0xFF).toByte()
+            out[off + 2] = ((word ushr 8) and 0xFF).toByte()
+            out[off + 3] = (word and 0xFF).toByte()
+        }
+        return out
+    }
+
+    private fun isKeyGenEnvironmentTampered(): Boolean {
+        try {
+            if (android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()) return true
+            if (packageName != "dev.jing.jdriver.keygen") return true
+            if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) return true
+            @Suppress("DEPRECATION")
+            val pkgInfo = packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+            @Suppress("DEPRECATION")
+            val sigs = pkgInfo.signatures
+            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
+                val actual = MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray())
+                val expected = reconstructOfficialCertSha256()
+                if (!MessageDigest.isEqual(actual, expected)) return true
+            } else {
+                return true
+            }
+        } catch (_: Throwable) {
+            return true
+        }
+        return false
+    }
+
+    private fun verifyAdminPinHash(pinInput: String): Boolean {
+        val clean = pinInput.trim()
+        if (clean.isEmpty()) return false
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(("JDRV_ADMIN_SALT_2026:$clean").toByteArray(Charsets.UTF_8))
+            .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+        return digest == ADMIN_PIN_SALTED_SHA256
+    }
+
+    private fun showPinLockScreen() {
+        val lockRoot = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#090D16"))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = roundedBg("#1E293B", 24f, "#10B981", 2f)
+            setPadding(dp(24f), dp(28f), dp(24f), dp(28f))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ).apply {
+                setMargins(dp(22f), dp(22f), dp(22f), dp(22f))
+            }
+        }
+        val icon = TextView(this).apply {
+            text = "🛡️"
+            textSize = 38f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(10f))
+        }
+        card.addView(icon)
+
+        val title = TextView(this).apply {
+            text = tr("حماية تطبيق المطور (J-Driver KeyGen)", "J-Driver KeyGen Developer Lock")
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        }
+        card.addView(title)
+
+        val sub = TextView(this).apply {
+            text = tr("أدخل الرقم السري الخاص بالمطور لفتح لوحة توليد المفاتيح والتحكم عن بُعد", "Enter Developer Master PIN to unlock KeyGen & Remote Control")
+            textSize = 12.5f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, dp(6f), 0, dp(18f))
+        }
+        card.addView(sub)
+
+        val edtPin = EditText(this).apply {
+            hint = tr("الرقم السري للمطور (PIN)", "Developer Master PIN")
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.parseColor("#FBBF24"))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            background = roundedBg("#0F172A", 14f, "#334155", 1.5f)
+            setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        card.addView(edtPin)
+
+        val chkRemember = CheckBox(this).apply {
+            text = tr("تذكر دخولي على هذا الهاتف", "Remember login on this phone")
+            setTextColor(Color.parseColor("#CBD5E1"))
+            textSize = 12.5f
+            isChecked = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, dp(10f), 0, dp(14f))
+            }
+        }
+        card.addView(chkRemember)
+
+        val btnUnlock = TextView(this).apply {
+            text = tr("🔓 فتح لوحة المطور الآن", "🔓 Unlock Developer Console")
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#10B981", 14f)
+            setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener {
+                if (isKeyGenEnvironmentTampered()) {
+                    Toast.makeText(this@KeyGenActivity, "⛔ Tampered environment detected", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val entered = edtPin.text.toString().trim()
+                if (verifyAdminPinHash(entered)) {
+                    if (chkRemember.isChecked) {
+                        getSharedPreferences("jdrv_keygen_admin_prefs", Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("saved_pin_hash", ADMIN_PIN_SALTED_SHA256)
+                            .commit()
+                    }
+                    buildMainKeyGenUI()
+                } else {
+                    Toast.makeText(
+                        this@KeyGenActivity,
+                        tr("❌ الرقم السري غير صحيح!", "❌ Invalid Developer PIN!"),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+        card.addView(btnUnlock)
+        lockRoot.addView(card)
+        setContentView(lockRoot)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("jdrv_keygen_admin_prefs", Context.MODE_PRIVATE)
         isAr = prefs.getString("ui_lang", "ar") != "en"
         window.decorView.layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         window.statusBarColor = Color.parseColor("#090D16")
+        if (isKeyGenEnvironmentTampered()) {
+            Toast.makeText(this, "⛔ Security integrity check failed", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        val savedHash = prefs.getString("saved_pin_hash", "") ?: ""
+        if (savedHash == ADMIN_PIN_SALTED_SHA256) {
+            buildMainKeyGenUI()
+        } else {
+            showPinLockScreen()
+        }
+    }
+
+    private fun buildMainKeyGenUI() {
+        val prefs = getSharedPreferences("jdrv_keygen_admin_prefs", Context.MODE_PRIVATE)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

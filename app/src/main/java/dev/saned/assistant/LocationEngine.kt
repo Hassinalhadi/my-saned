@@ -37,6 +37,8 @@ object LocationEngine {
     @Volatile var lastRealLat: Double = 0.0
     @Volatile var lastRealLng: Double = 0.0
 
+    fun isSpoofingActive(): Boolean = isMasterRunning && isFakeLocationEnabled && OrderInterceptor.isDeliverOrderFeatureAllowed()
+
     private var remotePrefs: SharedPreferences? = null
     private val reentrancyDepth = object : ThreadLocal<Int>() {
         override fun initialValue(): Int = 0
@@ -277,7 +279,7 @@ object LocationEngine {
         val tickRunnable = object : Runnable {
             override fun run() {
                 try {
-                    if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                    if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                         pushSpoofedLocationToAllCallbacks()
                     }
                 } catch (_: Throwable) {}
@@ -289,7 +291,7 @@ object LocationEngine {
     }
 
     fun pushSpoofedLocationToAllCallbacks() {
-        if (!isMasterRunning || !isFakeLocationEnabled || currentLat == 0.0 || currentLng == 0.0) return
+        if (!isSpoofingActive() || currentLat == 0.0 || currentLng == 0.0) return
         if (capturedLocationListeners.isEmpty() && capturedGmsLocationListeners.isEmpty() && capturedGmsLocationCallbacks.isEmpty()) return
         mainHandler.post {
             try {
@@ -437,7 +439,7 @@ object LocationEngine {
             module.hook(mLat).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     if ((reentrancyDepth.get() ?: 0) > 0) return chain.proceed()
-                    if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0) {
+                    if (isSpoofingActive() && currentLat != 0.0) {
                         return getMicroJitteredLat()
                     }
                     return chain.proceed()
@@ -450,7 +452,7 @@ object LocationEngine {
             module.hook(mLng).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     if ((reentrancyDepth.get() ?: 0) > 0) return chain.proceed()
-                    if (isMasterRunning && isFakeLocationEnabled && currentLng != 0.0) {
+                    if (isSpoofingActive() && currentLng != 0.0) {
                         return getMicroJitteredLng()
                     }
                     return chain.proceed()
@@ -464,7 +466,7 @@ object LocationEngine {
             module.hook(mSpeed).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     if ((reentrancyDepth.get() ?: 0) > 0) return chain.proceed()
-                    if (isMasterRunning && isFakeLocationEnabled) {
+                    if (isSpoofingActive()) {
                         return getEffectiveSpeedMps()
                     }
                     return chain.proceed()
@@ -476,7 +478,7 @@ object LocationEngine {
             val mHasSpeed = Location::class.java.getDeclaredMethod("hasSpeed")
             module.hook(mHasSpeed).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
-                    if (isMasterRunning && isFakeLocationEnabled) return true
+                    if (isSpoofingActive()) return true
                     return chain.proceed()
                 }
             })
@@ -487,7 +489,7 @@ object LocationEngine {
             module.hook(mBearing).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     if ((reentrancyDepth.get() ?: 0) > 0) return chain.proceed()
-                    if (isMasterRunning && isFakeLocationEnabled) return currentBearing
+                    if (isSpoofingActive()) return currentBearing
                     return chain.proceed()
                 }
             })
@@ -497,7 +499,7 @@ object LocationEngine {
             val mHasBearing = Location::class.java.getDeclaredMethod("hasBearing")
             module.hook(mHasBearing).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
-                    if (isMasterRunning && isFakeLocationEnabled) return true
+                    if (isSpoofingActive()) return true
                     return chain.proceed()
                 }
             })
@@ -508,7 +510,7 @@ object LocationEngine {
             module.hook(mAcc).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     if ((reentrancyDepth.get() ?: 0) > 0) return chain.proceed()
-                    if (isMasterRunning && isFakeLocationEnabled) return getRealisticAccuracy()
+                    if (isSpoofingActive()) return getRealisticAccuracy()
                     return chain.proceed()
                 }
             })
@@ -521,7 +523,7 @@ object LocationEngine {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val orig = chain.proceed() as? Location
                     if ((reentrancyDepth.get() ?: 0) > 0) return orig
-                    if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                    if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                         val prov = (chain.args.getOrNull(0) as? String) ?: "gps"
                         return buildSpoofedLocation(prov, orig)
                     }
@@ -538,7 +540,7 @@ object LocationEngine {
                             for (arg in chain.args) {
                                 if (arg is LocationListener) {
                                     capturedLocationListeners.add(arg)
-                                    if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                                    if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                                         mainHandler.post {
                                             try { arg.onLocationChanged(buildSpoofedLocation("gps")) } catch (_: Throwable) {}
                                         }
@@ -560,7 +562,7 @@ object LocationEngine {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             val orig = chain.proceed() as? Location
-                            if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                            if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                                 return buildSpoofedLocation("fused", orig)
                             }
                             return orig
@@ -569,7 +571,7 @@ object LocationEngine {
                 } else if (m.name == "getLocations" && m.parameterCount == 0) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
-                            if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                            if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                                 return listOf(buildSpoofedLocation("fused"))
                             }
                             return chain.proceed()
@@ -601,7 +603,7 @@ object LocationEngine {
                                     }
                                 }
                                 val res = chain.proceed()
-                                if (isMasterRunning && isFakeLocationEnabled && currentLat != 0.0 && currentLng != 0.0) {
+                                if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
                                     pushSpoofedLocationToAllCallbacks()
                                 }
                                 return res

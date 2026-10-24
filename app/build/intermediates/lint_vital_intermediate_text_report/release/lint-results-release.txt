@@ -1,4 +1,4 @@
-/home/runner/work/my-saned/my-saned/app/src/main/java/dev/saned/assistant/LocationEngine.kt:56: Error: Reflective access to mFieldsMask is forbidden when targeting API 34 and above [BlockedPrivateApi]
+/home/runner/work/my-saned/my-saned/app/src/main/java/dev/saned/assistant/LocationEngine.kt:58: Error: Reflective access to mFieldsMask is forbidden when targeting API 34 and above [BlockedPrivateApi]
         try { Location::class.java.getDeclaredField("mFieldsMask").apply { isAccessible = true } } catch (_: Throwable) { null }
               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -673,7 +673,7 @@ class XposedProvider : ContentProvider() {
                     "max_dist_cust", "max_dist_restaurant_to_customer",
                     "fake_lat", "fake_lng",
                     "max_orders_limit_str", "spoofed_android_id", "app_ui_language",
-                    "jdrv_lic_key", "jdrv_hw_device_id", "jdrv_remote_msg_ar", "jdrv_remote_msg_en"
+                    "jdrv_lic_key", "jdrv_hw_device_id", "jdrv_lic_token_sig", "jdrv_remote_blocked_devs_csv", "jdrv_remote_blocked_keys_csv", "jdrv_remote_msg_ar", "jdrv_remote_msg_en"
                 )
                 for (key in extras.keySet()) {
                     val v = extras.get(key) ?: continue

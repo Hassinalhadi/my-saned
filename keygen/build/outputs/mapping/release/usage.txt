@@ -14789,14 +14789,15 @@ androidx.versionedparcelable.VersionedParcelParcel:
     public final void writeInt(int)
     public final void writeParcelable()
     public final void writeString(java.lang.String)
+dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$1$cf3033feeaec8715ee4e3b66cb1a5a536e7e38936d89bf3ea14af2e65b43e186$0
 dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$2$3b0e1b821f656708f512d46ff63e07286512306325975af9e45c118f583b8a59$0
 dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$2$3b0e1b821f656708f512d46ff63e07286512306325975af9e45c118f583b8a59$5
 dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$2$6530b9480de84ff7505036ec932fbfd19ea34f038bd594badd0a1bab26517951$0
 dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$2$b3cd5573fd7e63d8c32a0e65679c8baedb4c2a93b398545e5977ce440149653a$0
 dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$2$d8ee6f46212268e428de593916e31a2ceaf20dec2c181c2432bed245edf73107$0
-dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$4$e0c6769f5e6cbdd31b572fabf5de23affeba5780018dcf3df363e9f5c0269776$0
-dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$4$e0c6769f5e6cbdd31b572fabf5de23affeba5780018dcf3df363e9f5c0269776$1
-dev.jing.jdriver.keygen.KeyGenActivity$buildSignedRemoteControlJson$sigHex$1
+dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$4$f8f6fd8f21cfe5c71db69405171bfd01367a6a6caa68a0d5b99ce0f705a04f10$0
+dev.jing.jdriver.keygen.KeyGenActivity$$InternalSyntheticLambda$4$f8f6fd8f21cfe5c71db69405171bfd01367a6a6caa68a0d5b99ce0f705a04f10$1
+dev.jing.jdriver.keygen.KeyGenActivity$verifyAdminPinHash$digest$1
 dev.jing.jdriver.keygen.KeyGenActivity:
     public int currentTab
     public static android.widget.ScrollView buildKeyGenTab()
@@ -14806,9 +14807,12 @@ dev.jing.jdriver.keygen.KeyGenActivity:
     public static int computeDeviceHashInt()
     public static byte[] decodeBase32Key()
     public static java.lang.String encodeBase32Bytes20()
+    public static byte[] reconstructOfficialCertSha256()
     public static void refreshHistoryUI()
     public static synthetic android.graphics.drawable.GradientDrawable roundedBg$default(dev.jing.jdriver.keygen.KeyGenActivity,java.lang.String,float)
     public static void saveKeyToHistory()
+    public static void showPinLockScreen()
+    public static boolean verifyAdminPinHash()
 kotlin.ExceptionsKt
 kotlin.ExceptionsKt__ExceptionsKt
 kotlin.KotlinNothingValueException

@@ -119,19 +119,27 @@
 
 # End of content from /home/runner/work/my-saned/my-saned/app/build/intermediates/default_proguard_files/global/proguard-android-optimize.txt-8.2.2
 # The proguard configuration file for the following section is /home/runner/work/my-saned/my-saned/app/proguard-rules.pro
-# Keep Xposed & Android Manifest entry points while obfuscating internal methods & strings
+# Aggressive R8 Obfuscation for J-Driver
 -repackageclasses 'o'
 -allowaccessmodification
 -overloadaggressively
+-renamesourcefileattribute SourceFile
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**
 -dontwarn kotlinx.coroutines.**
 
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 -keep public class dev.saned.assistant.HookEntry {
     public <init>(...);
+    public void onModuleLoaded(...);
     public void onPackageLoaded(...);
+    public void onPackageReady(...);
     public void onSystemServerLoaded(...);
 }
 -keep public class dev.saned.assistant.ui.MainActivity {
@@ -143,26 +151,16 @@
 }
 -keep public class io.github.libxposed.service.XposedProvider {
     public <init>();
-    public static *;
+    public boolean onCreate();
+    public android.os.Bundle call(java.lang.String, java.lang.String, android.os.Bundle);
+    public android.database.Cursor query(...);
+    public java.lang.String getType(android.net.Uri);
+    public android.net.Uri insert(android.net.Uri, android.content.ContentValues);
+    public int delete(android.net.Uri, java.lang.String, java.lang.String[]);
+    public int update(android.net.Uri, android.content.ContentValues, java.lang.String, java.lang.String[]);
 }
 -keep class io.github.libxposed.api.** { *; }
 -keep interface io.github.libxposed.api.** { *; }
--keep class dev.jing.sanedhook.util.Native {
-    public static *;
-}
--keep class dev.saned.assistant.OrderModel { *; }
--keep class dev.saned.assistant.SettingsStore { *; }
--keep class dev.saned.assistant.OrderInterceptor {
-    public static final dev.saned.assistant.OrderInterceptor INSTANCE;
-    public void initAppContext(android.content.Context);
-    public void hookPackage(java.lang.ClassLoader, java.lang.String);
-    public void hookLocation(java.lang.ClassLoader);
-}
--keep class dev.saned.assistant.LocationEngine { *; }
--keep class dev.saned.assistant.DeviceSpoofer { *; }
--keep class dev.saned.assistant.PackageCloaker { *; }
--keep class dev.saned.assistant.DiagnosticLogger { *; }
--keep class dev.saned.assistant.NotificationHelper { *; }
 
 # End of content from /home/runner/work/my-saned/my-saned/app/proguard-rules.pro
 # The proguard configuration file for the following section is /home/runner/work/my-saned/my-saned/app/build/intermediates/aapt_proguard_file/release/aapt_rules.txt
