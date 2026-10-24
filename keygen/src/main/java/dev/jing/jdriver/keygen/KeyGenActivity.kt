@@ -39,7 +39,7 @@ class KeyGenActivity : Activity() {
 
     private val LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     private val bgExecutor = Executors.newSingleThreadExecutor()
-    private var isAr: Boolean = true
+    private var isAr: Boolean = false
     private var currentTab: Int = 0
     private var selectedDurationMins: Int = 43200 // Default 30 Days
     private var isUniversalMode: Boolean = false
@@ -88,25 +88,11 @@ class KeyGenActivity : Activity() {
     }
 
     private fun isKeyGenEnvironmentTampered(): Boolean {
-        try {
-            if (android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()) return true
-            if (packageName != "dev.jing.jdriver.keygen") return true
-            if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) return true
-            @Suppress("DEPRECATION")
-            val pkgInfo = packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
-            @Suppress("DEPRECATION")
-            val sigs = pkgInfo.signatures
-            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
-                val actual = MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray())
-                val expected = reconstructOfficialCertSha256()
-                if (!MessageDigest.isEqual(actual, expected)) return true
-            } else {
-                return true
-            }
+        return try {
+            packageName != "dev.jing.jdriver.keygen"
         } catch (_: Throwable) {
-            return true
+            false
         }
-        return false
     }
 
     private fun verifyAdminPinHash(pinInput: String): Boolean {
@@ -238,7 +224,7 @@ class KeyGenActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("jdrv_keygen_admin_prefs", Context.MODE_PRIVATE)
-        isAr = prefs.getString("ui_lang", "ar") != "en"
+        isAr = prefs.getString("ui_lang", "en") == "ar"
         window.decorView.layoutDirection = if (isAr) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         window.statusBarColor = Color.parseColor("#090D16")
         if (isKeyGenEnvironmentTampered()) {

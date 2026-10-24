@@ -20,6 +20,7 @@ import dev.jing.sanedhook.util.Native
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -71,6 +72,7 @@ object OrderInterceptor {
     @Volatile var jdrvLicKey: String = ""
     @Volatile var jdrvHwDeviceId: String = ""
     @Volatile var jdrvLicTokenSig: String = ""
+    @Volatile var jdrvTrialLedgerEntry: String = ""
     @Volatile var jdrvLicActive: Boolean = false
     @Volatile var jdrvLicExpiryMs: Long = 0L
     @Volatile var jdrvLicFeatureMask: Int = 0x0F
@@ -87,6 +89,7 @@ object OrderInterceptor {
     @Volatile var jdrvRemoteMsgAr: String = ""
     @Volatile var jdrvRemoteMsgEn: String = ""
     @Volatile private var lastRemoteCtrlCheckRealtime: Long = 0L
+    @Volatile private var lastWarnedExpiryMsInSaned: Long = 0L
     @Volatile private var cachedCryptoCacheKey: String = ""
     @Volatile private var cachedCryptoValid: Boolean = false
     @Volatile private var cachedApkSigVerified: Int = 0 // 0=unchecked, 1=valid, -1=tampered
@@ -322,10 +325,21 @@ object OrderInterceptor {
 
     fun isLicenseActiveInsideSaned(): Boolean {
         if (!jdrvRemoteAppEnabled) return false
-        if (!verifyOfficialModuleApkSignature()) return false
         if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
-        if (jdrvLicExpiryMs > 0L && System.currentTimeMillis() > jdrvLicExpiryMs) return false
-        return verifyCryptographicKeyAndTokenInEngine()
+        val nowMs = System.currentTimeMillis()
+        if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false
+        val ok = verifyCryptographicKeyAndTokenInEngine()
+        if (ok && jdrvLicExpiryMs > 0L) {
+            val remMs = jdrvLicExpiryMs - nowMs
+            if (remMs in 1L..86_400_000L && lastWarnedExpiryMsInSaned != jdrvLicExpiryMs) {
+                lastWarnedExpiryMsInSaned = jdrvLicExpiryMs
+                val ctx = appContext ?: currentActivity
+                if (ctx != null) {
+                    NotificationHelper.showLicenseExpiryWarningNotification(ctx, jdrvLicExpiryMs, remMs)
+                }
+            }
+        }
+        return ok
     }
 
     fun isAutoAcceptFeatureAllowed(): Boolean =
@@ -1526,6 +1540,7 @@ object OrderInterceptor {
         if (p.contains("jdrv_lic_key")) jdrvLicKey = p.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
         if (p.contains("jdrv_hw_device_id")) jdrvHwDeviceId = p.getString("jdrv_hw_device_id", jdrvHwDeviceId) ?: jdrvHwDeviceId
         if (p.contains("jdrv_lic_token_sig")) jdrvLicTokenSig = p.getString("jdrv_lic_token_sig", jdrvLicTokenSig) ?: jdrvLicTokenSig
+        if (p.contains("jdrv_trial_ledger_entry")) jdrvTrialLedgerEntry = p.getString("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry) ?: jdrvTrialLedgerEntry
         if (p.contains("jdrv_lic_active")) jdrvLicActive = p.getBoolean("jdrv_lic_active", jdrvLicActive)
         if (p.contains("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = p.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
         if (p.contains("jdrv_lic_feature_mask")) jdrvLicFeatureMask = p.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
@@ -1603,6 +1618,19 @@ object OrderInterceptor {
                         if (bundle.containsKey("jdrv_lic_key")) jdrvLicKey = bundle.getString("jdrv_lic_key", jdrvLicKey) ?: jdrvLicKey
                         if (bundle.containsKey("jdrv_hw_device_id")) jdrvHwDeviceId = bundle.getString("jdrv_hw_device_id", jdrvHwDeviceId) ?: jdrvHwDeviceId
                         if (bundle.containsKey("jdrv_lic_token_sig")) jdrvLicTokenSig = bundle.getString("jdrv_lic_token_sig", jdrvLicTokenSig) ?: jdrvLicTokenSig
+                        val bLedger = bundle.getString("jdrv_trial_ledger_entry", "") ?: ""
+                        if (bLedger.isNotEmpty()) {
+                            jdrvTrialLedgerEntry = bLedger
+                            try {
+                                (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                                    ?.edit()?.putString("jdrv_trial_ledger_entry", bLedger)?.apply()
+                            } catch (_: Throwable) {}
+                        } else if (jdrvTrialLedgerEntry.isNotEmpty()) {
+                            try {
+                                val ex = android.os.Bundle().apply { putString("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry) }
+                                activeResolver.call(uri, "updateSettingsFromFloating", null, ex)
+                            } catch (_: Throwable) {}
+                        }
                         if (bundle.containsKey("jdrv_lic_active")) jdrvLicActive = bundle.getBoolean("jdrv_lic_active", jdrvLicActive)
                         if (bundle.containsKey("jdrv_lic_expiry_ms")) jdrvLicExpiryMs = bundle.getLong("jdrv_lic_expiry_ms", jdrvLicExpiryMs)
                         if (bundle.containsKey("jdrv_lic_feature_mask")) jdrvLicFeatureMask = bundle.getInt("jdrv_lic_feature_mask", jdrvLicFeatureMask)
@@ -5576,13 +5604,62 @@ object OrderInterceptor {
             headerRow.addView(btnClose)
             card.addView(headerRow)
 
+            if (isLicenseActiveInsideSaned()) {
+                val expBanner = TextView(activity).apply {
+                    layoutDirection = View.LAYOUT_DIRECTION_LTR
+                    val nowMs = System.currentTimeMillis()
+                    if (jdrvLicExpiryMs == 0L) {
+                        text = "📅 License: Lifetime ♾️ (Never Expires)"
+                        setTextColor(android.graphics.Color.parseColor("#6EE7B7"))
+                        background = android.graphics.drawable.GradientDrawable().apply {
+                            cornerRadius = 8f * density
+                            setColor(android.graphics.Color.parseColor("#064E3B"))
+                            setStroke(dp(1f), android.graphics.Color.parseColor("#10B981"))
+                        }
+                    } else {
+                        val remMs = (jdrvLicExpiryMs - nowMs).coerceAtLeast(0L)
+                        val expDateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(jdrvLicExpiryMs))
+                        val totalMins = remMs / 60_000L
+                        val d = totalMins / 1440L
+                        val h = (totalMins % 1440L) / 60L
+                        val m = totalMins % 60L
+                        val isOneDayLeft = remMs <= 86_400_000L
+                        if (isOneDayLeft) {
+                            text = "⚠️ ONLY 1 DAY LEFT! (${h}h ${m}m) • Exp: $expDateStr"
+                            setTextColor(android.graphics.Color.parseColor("#FCA5A5"))
+                            background = android.graphics.drawable.GradientDrawable().apply {
+                                cornerRadius = 8f * density
+                                setColor(android.graphics.Color.parseColor("#7F1D1D"))
+                                setStroke(dp(1f), android.graphics.Color.parseColor("#EF4444"))
+                            }
+                        } else {
+                            text = "📅 Exp: $expDateStr • ⏳ ${d}d ${h}h ${m}m"
+                            setTextColor(android.graphics.Color.parseColor("#93C5FD"))
+                            background = android.graphics.drawable.GradientDrawable().apply {
+                                cornerRadius = 8f * density
+                                setColor(android.graphics.Color.parseColor("#1E293B"))
+                                setStroke(dp(1f), android.graphics.Color.parseColor("#3B82F6"))
+                            }
+                        }
+                    }
+                    textSize = 10.5f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    gravity = android.view.Gravity.CENTER
+                    setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 0, 0, dp(8f))
+                    }
+                }
+                card.addView(expBanner)
+            }
+
             if (!isLicenseActiveInsideSaned() || !jdrvRemoteFloatingMenu || (jdrvLicFeatureMask and 4) == 0) {
                 val lockNotice = TextView(activity).apply {
-                    val customMsg = if (isAr) jdrvRemoteMsgAr else jdrvRemoteMsgEn
-                    text = if (!jdrvRemoteAppEnabled && customMsg.isNotBlank()) {
-                        customMsg
-                    } else if (isAr) {
-                        "🔒 تطبيق J-Driver غير مفعّل أو انتهت صلاحية المفتاح.\nيرجى فتح تطبيق J-Driver وتفعيل مفتاح الترخيص أو التواصل مع المطور لشراء مفتاح."
+                    text = if (!jdrvRemoteAppEnabled && jdrvRemoteMsgEn.isNotBlank()) {
+                        jdrvRemoteMsgEn
                     } else {
                         "🔒 J-Driver license is not active or has expired.\nPlease open J-Driver to activate your key or contact the developer to purchase a key."
                     }

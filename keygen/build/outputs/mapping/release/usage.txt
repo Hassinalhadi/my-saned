@@ -6535,6 +6535,8 @@ androidx.viewpager.widget.ViewPager$SimpleOnPageChangeListener
 androidx.viewpager.widget.ViewPager$ViewPositionComparator
 androidx.viewpager.widget.ViewPager
 com.google.common.util.concurrent.ListenableFuture
+dev.jing.jdriver.keygen.KeyGenActivity:
+    private final byte[] reconstructOfficialCertSha256()
 dev.jing.jdriver.keygen.R$drawable
 dev.jing.jdriver.keygen.R
 kotlin.ArrayIntrinsicsKt
@@ -14807,7 +14809,7 @@ dev.jing.jdriver.keygen.KeyGenActivity:
     public static int computeDeviceHashInt()
     public static byte[] decodeBase32Key()
     public static java.lang.String encodeBase32Bytes20()
-    public static byte[] reconstructOfficialCertSha256()
+    public final boolean isKeyGenEnvironmentTampered()
     public static void refreshHistoryUI()
     public static synthetic android.graphics.drawable.GradientDrawable roundedBg$default(dev.jing.jdriver.keygen.KeyGenActivity,java.lang.String,float)
     public static void saveKeyToHistory()

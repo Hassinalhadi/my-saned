@@ -16,6 +16,79 @@ import java.util.Locale
 object NotificationHelper {
 
     const val CHANNEL_ACCEPTED = "sanedhook_accepted"
+    const val CHANNEL_LICENSE_EXPIRY = "jdrv_license_expiry"
+
+    fun showLicenseExpiryWarningNotification(context: Context, expiryMs: Long, remainingMs: Long) {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val existing = nm.getNotificationChannel(CHANNEL_LICENSE_EXPIRY)
+                if (existing == null) {
+                    val chan = NotificationChannel(
+                        CHANNEL_LICENSE_EXPIRY,
+                        "J-Driver License Expiry Alerts",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Alerts when 1 day remains before J-Driver license expiration"
+                        enableLights(true)
+                        enableVibration(true)
+                        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    }
+                    nm.createNotificationChannel(chan)
+                }
+            }
+
+            val totalMins = (remainingMs / 60_000L).coerceAtLeast(1L)
+            val hours = totalMins / 60L
+            val mins = totalMins % 60L
+            val expDateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(expiryMs))
+
+            val title = "⚠️ J-Driver Key Expiring Soon (1 Day Left!)"
+            val shortText = "⏳ Only ${hours}h ${mins}m left • Expires: $expDateStr"
+            val bigText = "⚠️ Warning: Only 1 day (${hours}h ${mins}m) remaining before your J-Driver license expires on $expDateStr.\n" +
+                "Tap to open J-Driver and renew your license key via WhatsApp or Telegram."
+
+            val pm = context.packageManager
+            val launchIntent = pm.getLaunchIntentForPackage("dev.jing.sanedhook")
+                ?: pm.getLaunchIntentForPackage(context.packageName)
+                ?: Intent()
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+            val pFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val notifId = 994411
+            val pendingIntent = PendingIntent.getActivity(context, notifId, launchIntent, pFlags)
+
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, CHANNEL_LICENSE_EXPIRY)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(context)
+            }
+
+            builder.setContentTitle(title)
+                .setContentText(shortText)
+                .setStyle(Notification.BigTextStyle().bigText(bigText))
+                .apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        setSmallIcon(android.graphics.drawable.Icon.createWithResource("dev.jing.sanedhook", R.drawable.ic_notif_original))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        setSmallIcon(R.drawable.ic_notif_original)
+                    }
+                }
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_REMINDER)
+                .setDefaults(Notification.DEFAULT_ALL)
+
+            nm.notify(notifId, builder.build())
+        } catch (_: Throwable) {}
+    }
+
 
     fun showOrderNotification(context: Context, order: OrderModel, isAccepted: Boolean = true) {
         try {

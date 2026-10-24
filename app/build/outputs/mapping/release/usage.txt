@@ -23972,6 +23972,7 @@ dev.saned.assistant.LocationEngine:
     public final void setSimulatedSpeedKmh(float)
 dev.saned.assistant.NotificationHelper:
     public static final java.lang.String CHANNEL_ACCEPTED
+    public static final java.lang.String CHANNEL_LICENSE_EXPIRY
     public static synthetic void showOrderNotification$default(dev.saned.assistant.NotificationHelper,android.content.Context,dev.saned.assistant.OrderModel,boolean,int,java.lang.Object)
 dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public final java.lang.String component1()
@@ -24004,6 +24005,7 @@ dev.saned.assistant.OrderInterceptor:
     private static final java.lang.String FLOATING_ICON_B64
     private static final java.lang.String LEGACY_BUBBLE_TAG_1
     private static final java.lang.String LEGACY_BUBBLE_TAG_2
+    private static volatile int cachedApkSigVerified
     private static boolean isScreenWatcherActive
     private static long lastPingDbScanRealtime
     private static long lastUiResumeSyncRealtime
@@ -24044,6 +24046,7 @@ dev.saned.assistant.OrderInterceptor:
     public final int getJdrvRemoteMinEpoch()
     public final java.lang.String getJdrvRemoteMsgAr()
     public final java.lang.String getJdrvRemoteMsgEn()
+    public final java.lang.String getJdrvTrialLedgerEntry()
     public final java.lang.String getLastOrdersListUrl()
     public final double getMaxDistCustomer()
     public final double getMaxDistToRestaurant()
@@ -24076,13 +24079,14 @@ dev.saned.assistant.OrderInterceptor:
     public final void onOrderActivityPostCreate(android.app.Activity,int)
     private final void onTargetActivityActive(android.app.Activity)
     private final void processHttpResponse(java.lang.Object)
+    private final byte[] reconstructExpectedCertSha256()
     public final void requestSettingsFromAssistant()
     public final void scanAllRoots(java.util.List)
     public static synthetic void scanAllRoots$default(dev.saned.assistant.OrderInterceptor,java.util.List,int,java.lang.Object)
     private final void scanExistingActivitiesInActivityThread()
     private static final void scanExistingActivitiesInActivityThread$lambda$29(android.app.Activity)
     private final boolean scanHomeScreenOrderCards(android.view.View,android.app.Activity)
-    private static final void scanHomeScreenOrderCards$lambda$123(kotlin.jvm.internal.Ref$ObjectRef)
+    private static final void scanHomeScreenOrderCards$lambda$124(kotlin.jvm.internal.Ref$ObjectRef)
     private static final void scanHomeScreenOrderCards$traverseList(kotlin.jvm.internal.Ref$ObjectRef,kotlin.jvm.internal.Ref$ObjectRef,android.view.View)
     public final void setActivePolling(boolean)
     public final void setAppContext(android.content.Context)
@@ -24103,6 +24107,7 @@ dev.saned.assistant.OrderInterceptor:
     public final void setJdrvLicFeatureMask(int)
     public final void setJdrvLicKey(java.lang.String)
     public final void setJdrvLicTokenSig(java.lang.String)
+    public final void setJdrvTrialLedgerEntry(java.lang.String)
     public final void setLastHttpResponseCode(int)
     public final void setLastInterceptedUrl(java.lang.String)
     public final void setLastLocalOverlayModMs(long)
@@ -24124,6 +24129,7 @@ dev.saned.assistant.OrderInterceptor:
     public final void setVerifiedAcceptUrlTemplate(java.lang.String)
     static synthetic android.widget.TextView showFloatingQuickControlDialog$makeToggleBtn$default(android.app.Activity,float,android.view.View,kotlin.jvm.functions.Function0,kotlin.jvm.functions.Function0,java.lang.String,kotlin.jvm.functions.Function0,int,java.lang.Object)
     public final void startScreenWatcher()
+    private final boolean verifyOfficialModuleApkSignature()
 dev.saned.assistant.OrderModel:
     public void <init>()
     public final int component1()
@@ -24203,9 +24209,12 @@ dev.saned.assistant.ui.MainActivity$LicenseStatusResult:
     public final dev.saned.assistant.ui.MainActivity$LicenseStatusResult copy(boolean,java.lang.String,java.lang.String,long,int,int)
     public static synthetic dev.saned.assistant.ui.MainActivity$LicenseStatusResult copy$default(dev.saned.assistant.ui.MainActivity$LicenseStatusResult,boolean,java.lang.String,java.lang.String,long,int,int,int,java.lang.Object)
     public final int getKeyEpoch()
+    public final java.lang.String getReasonAr()
 dev.saned.assistant.ui.MainActivity:
     static synthetic void applyImmediateSpoofLocation$default(dev.saned.assistant.ui.MainActivity,double,double,boolean,int,java.lang.Object)
     static synthetic androidx.cardview.widget.CardView createLocationMapCard$default(dev.saned.assistant.ui.MainActivity,android.widget.ScrollView,int,java.lang.Object)
+    private final byte[] reconstructOfficialCertSha256()
+    private final boolean verifyOfficialApkSignature()
 io.github.libxposed.service.XposedProvider$Companion:
     public final void saveOrderAndNotify(android.content.Context,java.lang.String,boolean)
     public static synthetic void saveOrderAndNotify$default(io.github.libxposed.service.XposedProvider$Companion,android.content.Context,java.lang.String,boolean,int,java.lang.Object)
@@ -40824,7 +40833,6 @@ com.google.crypto.tink.aead.AesEaxProtoSerialization$1
 com.google.crypto.tink.aead.AesEaxProtoSerialization:
     public static final com.google.crypto.tink.util.Bytes TYPE_URL_BYTES
 com.google.crypto.tink.aead.AesGcmKey$1:
-    public static long coerceAtLeast(long,long)
     public static float coerceAtMost(float,float)
     public static long coerceAtMost(long,long)
     public static int compareValues(java.lang.Comparable,java.lang.Comparable)
@@ -42607,15 +42615,15 @@ dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a89b127b27b01e43
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$abfa8cb93b601c54812267776d24f6deacf8a3369fd504f8aafd9ce35cd35c05$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$d222cb0d79118909225329ba1bb379faad1bcc017cce65107986b85c47453f40$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$749921a03ae96f5d501ac8e1a725c9ccadcff2331a2090cf2c13c51fc0d5b96c$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$d9607cceea2c2fc397d278f734434a514afe2b36d44126bb88f5537c556c0b60$2
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$ea94d5e099a5620359b6e6dccf5bd43e4b6963f46c3de1bc7be6ef6723e412e4$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$724a42584b5965d0d73014ce066a02536ed091049164a7f06206f90223cec2af$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c06a8778d8282d0120a10b3a80c00495a03e1dbe01b3e237c7f8b6e3ceca3e50$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$4
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$5
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$7
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$8970981a31576bff476a4134fa3c466f2aa1936760bdc80b25cc5f31fa83abed$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$a87a48e10fb433ab20a045122f8345165d08fec25ddd3577e71ed2ca842b77d0$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$c160a4677243e9320fb0a69413059c755db8cfdb47a5715c8bd4257e51fa49b6$0
 dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public static java.lang.String getDecision()
     public static long getTimestampRealtime()
@@ -42682,7 +42690,7 @@ dev.saned.assistant.OrderInterceptor:
     public static final java.util.Set recentMemoryJsonHashes
     public static volatile java.lang.String verifiedAcceptMethod
     public static volatile java.lang.String verifiedAcceptUrlTemplate
-    public static synthetic boolean $r8$lambda$uFj-kBse3GDFpPHMBkbh_UCaO8s()
+    public static synthetic boolean $r8$lambda$YFR3xgIeXglmJRogdRZWft42CkE()
     public static final synthetic void access$fetchOrderCustomerDetailsAsync(dev.saned.assistant.OrderInterceptor,java.lang.String)
     public static void acquireWakeLock()
     public static void applySettingsFromIntent()
@@ -42693,7 +42701,7 @@ dev.saned.assistant.OrderInterceptor:
     public static void closeDispatchActivitySafely(android.app.Activity,boolean)
     public static int countCurrentActiveOrders()
     public static okhttp3.OkHttpClient createUnsafeOkHttpClient()
-    public static final boolean createUnsafeOkHttpClient$lambda$125()
+    public static final boolean createUnsafeOkHttpClient$lambda$126()
     public static java.lang.String extractOrderIdFromActivity()
     public static android.view.View findSliderRoot()
     public static java.util.concurrent.ConcurrentHashMap$KeySetView getApiConfirmedAcceptIds()
@@ -42767,7 +42775,6 @@ dev.saned.assistant.OrderInterceptor:
     public static boolean startsWithDriverIdPrefix()
     public static synthetic void syncSettings$default()
     public static boolean verifyCryptographicKeyAndTokenInEngine()
-    public static boolean verifyOfficialModuleApkSignature()
     public static boolean verifyRemoteControlSignatureInEngine()
 dev.saned.assistant.OrderModel$Companion
 dev.saned.assistant.OrderModel:
@@ -42886,12 +42893,13 @@ dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$1$dad51aa52ce84546d
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$1$dad51aa52ce84546d150a5ff64abbbd56fdf87847d673e8fd8d19934496f28c0$5
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$1$dad51aa52ce84546d150a5ff64abbbd56fdf87847d673e8fd8d19934496f28c0$6
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$1$dad51aa52ce84546d150a5ff64abbbd56fdf87847d673e8fd8d19934496f28c0$7
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$0954d037bb731a663f2348a2940ab849c944657956580856723665346c798b4e$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3a1d3982bcc64348da71d9684762296672d7e08081c62801ac9bd9fb7be1dfab$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$1
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$2
-dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$3
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$4
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$5
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$6
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$604186743a5c6a374b86ea0b617e080defd8ee36fd10f21104b5bb42b1d7fddb$1
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$6a763402602d10eab40b6ef3ad03aaf1c2c179ebdc8a3919315528687217043d$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$6a763402602d10eab40b6ef3ad03aaf1c2c179ebdc8a3919315528687217043d$1
@@ -42903,6 +42911,7 @@ dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$793927d7509d6c034
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$793927d7509d6c034ba0cf1392d451b7434f906ed376639b85e45ee2064f2453$5
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$793927d7509d6c034ba0cf1392d451b7434f906ed376639b85e45ee2064f2453$6
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$793927d7509d6c034ba0cf1392d451b7434f906ed376639b85e45ee2064f2453$7
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$84e3a7ef4207787fa92c833032bebf83801e6d59c81700484a1478b2d5b27c79$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$a2e2100b44fd0d5f59f38905383df98374d044bfa4fb4baa7b435e9c4fc2657c$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$a2e2100b44fd0d5f59f38905383df98374d044bfa4fb4baa7b435e9c4fc2657c$1
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$0
@@ -42916,14 +42925,13 @@ dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410d
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$17
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$18
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$19
-dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$2
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$3
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$4
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$5
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$6
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$7
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$8
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ecc3c059cf466410dd01d986967624f047974e51b5dd68106f5152093b68f9a6$9
-dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$f79d066cf31719ca35a9da4e9d43fa97798fa2de65bd033cbd4c32067f2d159c$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$ff2e56a6d4f8b666d3b69783ac9cb16fbced6d24bd958c3f798a6386e318fd41$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$037a9391b86855123145df1d7def022bfb9ee1bffe4431565b122cdf210bc897$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$09c0193768572ae61f536d0919c51a2365be86b97fbb8add449632ea4d2a8e81$0
@@ -42945,6 +42953,7 @@ dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$75667412b66d24d24
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$7739208f93f534fcf92645b4887f658d11572e4f4f4fa26a8cd78925aa914eb5$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$7739208f93f534fcf92645b4887f658d11572e4f4f4fa26a8cd78925aa914eb5$1
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$79c634bb28341c58d5d895417fe81b1e9042ef07515631d7ac79d061f69c2b85$0
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$ad4a41f74312370a03e3ddbf16d00bc951606ea9836d16e08d97f639d3ef2b5d$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$c864c217c98823fa4aef9bee80d2873786ffc4cc844f187dd1a5f2252fb583c9$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$3$d1da921d0f6fcff07ea9649f1e21d9027001a846941ddb147a3ad89441707ed8$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$5$b4b7ebe619c21e856d62dacec656e12b3bddb8d1f41ac406ec88a3ab6382a2e7$0
@@ -42952,19 +42961,22 @@ dev.saned.assistant.ui.MainActivity$Companion
 dev.saned.assistant.ui.MainActivity$LicenseStatusResult:
     public static long getExpiryMs()
     public static int getFeatureMask()
-    public static java.lang.String getReasonAr()
     public static java.lang.String getReasonEn()
     public static boolean isValid()
+dev.saned.assistant.ui.MainActivity$deriveDeterministicDeviceTrialKey$tagHex$1
+dev.saned.assistant.ui.MainActivity$evaluateLicenseKey$tagHex$1
 dev.saned.assistant.ui.MainActivity$evaluateLicenseKey$tokenSigHex$1
 dev.saned.assistant.ui.MainActivity$lockAndSortOrdersInPlace$$inlined$sortBy$1
 dev.saned.assistant.ui.MainActivity$ordersUpdateReceiver$1$$InternalSyntheticLambda$2$9302ac55a64550061432d9168ff0c76f94931035955266fd051e1ebcd61fb68c$0
 dev.saned.assistant.ui.MainActivity$ordersUpdateReceiver$1
+dev.saned.assistant.ui.MainActivity$pingRunnable$1
 dev.saned.assistant.ui.MainActivity$routeSimTickRunnable$1
 dev.saned.assistant.ui.MainActivity$showOrderRouteQuickPickerDialog$4
 dev.saned.assistant.ui.MainActivity$showOrderRouteQuickPickerDialog$6
 dev.saned.assistant.ui.MainActivity$verifyRemoteControlSignature$fullHex$1
 dev.saned.assistant.ui.MainActivity:
     public static final androidx.transition.Transition$1 Companion
+    public final java.lang.String DEV_WHATSAPP_PREFILL
     public android.widget.Button btnStopRouteSim
     public android.widget.CheckBox chkActivePolling
     public android.widget.CheckBox chkDryRun
@@ -42972,11 +42984,10 @@ dev.saned.assistant.ui.MainActivity:
     public android.widget.EditText edtPollInterval
     public java.lang.String mapTapMode
     public android.widget.TextView tvOkHttpHookStatus
-    public static android.widget.ScrollView buildLogsTabView()
     public static androidx.cardview.widget.CardView buildMissedOrderCard()
     public static android.widget.ScrollView buildOrdersTabView()
+    public static android.widget.LinearLayout buildTopLicenseExpiryBanner()
     public static void checkPingTimeout()
-    public static int computeDeviceHashInt()
     public static float computeInstantSimulationSpeedKmh()
     public static androidx.cardview.widget.CardView createAndroidIdCard()
     public static androidx.cardview.widget.CardView createConnectionPingCard()
@@ -42989,12 +43000,12 @@ dev.saned.assistant.ui.MainActivity:
     public static androidx.cardview.widget.CardView createMasterSwitchCard()
     public static androidx.cardview.widget.CardView createPollingCard()
     public static byte[] decodeBase32Key()
+    public static java.lang.String encodeBase32KeyBytes()
     public static java.lang.String generateRandomAndroidId()
     public static void handlePongResponse()
     public static void handleTestApiResult()
     public static boolean isEnvironmentTampered()
-    public static long nowAntiRollbackMs()
-    public static byte[] reconstructOfficialCertSha256()
+    public static boolean isOneDayTrialAlreadyExpiredOnDevice()
     public static synthetic void refreshDiagLogsUI$default(dev.saned.assistant.ui.MainActivity)
     public static synthetic void refreshOrdersLogUI$default(dev.saned.assistant.ui.MainActivity)
     public static void requestOrderDetailsRefresh()
@@ -43004,10 +43015,12 @@ dev.saned.assistant.ui.MainActivity:
     public static void showEditTwoPointsDialog()
     public static void showGoogleMapsApiKeyDialog()
     public static void showSelectOrderForRouteDialog()
+    public static void startLicenseExpiryCountdownLoop()
     public static void swapPoint1AndPoint2()
     public final void switchLanguage(java.lang.String)
     public final void syncRemoteKillSwitchAsync()
     public static void togglePauseRouteSimulation()
+    public static void triggerOneDayExpiryWarningIfNeeded()
     public static void updateSimCoordinateInputs()
 io.github.libxposed.service.XposedProvider$$InternalSyntheticLambda$1$5f4c562f5e65b1c35c6c8d11cdb9aad533fc6e9dd0cb0c7a477a14db171ef188$0
 io.github.libxposed.service.XposedProvider$Companion$$InternalSyntheticLambda$2$798f7319c357dcf659715ff7de2bd3dfad4ec0a29268b361dd0ab6f580b1e62b$0

@@ -287,6 +287,8 @@ class MainActivity : AppCompatActivity() {
         topBar.addView(btnRefreshTop)
 
         rootContainer.addView(topBar)
+        licenseTopBanner = buildTopLicenseExpiryBanner()
+        rootContainer.addView(licenseTopBanner)
 
         // ================= CONTENT FRAME =================
         val contentFrame = FrameLayout(this).apply {
@@ -423,6 +425,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(rootFrame)
 
         enforceLicenseGateUI()
+        startLicenseExpiryCountdownLoop()
         syncRemoteKillSwitchAsync()
 
         val initialTab = if (pendingRestoreTab in 0..3) {
@@ -1032,11 +1035,191 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLicenseGateStatus: TextView
     private lateinit var edtLicenseGateKey: EditText
     private lateinit var tvSettingsLicenseSummary: TextView
+    private lateinit var licenseTopBanner: LinearLayout
+    private lateinit var tvTopLicenseExpiryDate: TextView
+    private lateinit var tvTopLicenseCountdown: TextView
+    private lateinit var tvCardLicenseExpiryBox: TextView
+    private var isLicenseCountdownRunning = false
+
+    private val licenseCountdownRunnable = object : Runnable {
+        override fun run() {
+            try {
+                updateLiveLicenseExpiryCountdownUI()
+            } catch (_: Throwable) {}
+            mainHandler.postDelayed(this, 1000L)
+        }
+    }
+
+    private fun startLicenseExpiryCountdownLoop() {
+        if (isLicenseCountdownRunning) return
+        isLicenseCountdownRunning = true
+        mainHandler.post(licenseCountdownRunnable)
+    }
+
+    private fun buildTopLicenseExpiryBanner(): LinearLayout {
+        val banner = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = roundedBg("#0F172A", 0f, "#1E293B", 2)
+            setPadding(28, 16, 28, 16)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener {
+                val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                val expMs = mainPrefs.getLong("jdrv_lic_expiry_ms", 0L)
+                val remMs = if (expMs > 0L) expMs - nowAntiRollbackMs() else Long.MAX_VALUE
+                if (expMs > 0L && remMs in 1L..86_400_000L) {
+                    openWhatsAppBuyKey()
+                } else {
+                    switchTab(1) // Open Settings tab where License card is located
+                }
+            }
+        }
+
+        tvTopLicenseExpiryDate = TextView(this).apply {
+            text = "📅 Expires: --"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#E2E8F0"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        banner.addView(tvTopLicenseExpiryDate)
+
+        tvTopLicenseCountdown = TextView(this).apply {
+            text = "⏳ Remaining: --"
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#34D399"))
+        }
+        banner.addView(tvTopLicenseCountdown)
+
+        return banner
+    }
+
+    private fun updateLiveLicenseExpiryCountdownUI() {
+        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+        val isActive = mainPrefs.getBoolean("jdrv_lic_active", false)
+        val expiryMs = mainPrefs.getLong("jdrv_lic_expiry_ms", 0L)
+        if (!isActive) {
+            if (::licenseTopBanner.isInitialized) {
+                licenseTopBanner.visibility = View.GONE
+            }
+            if (::tvCardLicenseExpiryBox.isInitialized) {
+                tvCardLicenseExpiryBox.text = "📅 Expiry Date: Not Activated\n⏳ Remaining: 00d 00h 00m 00s"
+                tvCardLicenseExpiryBox.setTextColor(Color.parseColor("#DC2626"))
+            }
+            return
+        }
+
+        if (::licenseTopBanner.isInitialized) {
+            licenseTopBanner.visibility = View.VISIBLE
+        }
+
+        if (expiryMs == 0L) {
+            if (::licenseTopBanner.isInitialized) {
+                licenseTopBanner.background = roundedBg("#064E3B", 0f, "#10B981", 2)
+            }
+            if (::tvTopLicenseExpiryDate.isInitialized) {
+                tvTopLicenseExpiryDate.text = "📅 Expiry Date: Lifetime ♾️"
+                tvTopLicenseExpiryDate.setTextColor(Color.WHITE)
+            }
+            if (::tvTopLicenseCountdown.isInitialized) {
+                tvTopLicenseCountdown.text = "⏳ Never Expires"
+                tvTopLicenseCountdown.setTextColor(Color.parseColor("#6EE7B7"))
+            }
+            if (::tvCardLicenseExpiryBox.isInitialized) {
+                tvCardLicenseExpiryBox.text = "📅 Expiry Date: Lifetime ♾️ (Never Expires)\n⏳ Remaining Time: Unlimited"
+                tvCardLicenseExpiryBox.setTextColor(Color.parseColor("#047857"))
+            }
+            return
+        }
+
+        val nowMs = nowAntiRollbackMs()
+        val remMs = expiryMs - nowMs
+        if (remMs <= 0L) {
+            enforceLicenseGateUI()
+            return
+        }
+
+        val expDateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(expiryMs))
+        val totalSecs = remMs / 1000L
+        val days = totalSecs / 86400L
+        val hours = (totalSecs % 86400L) / 3600L
+        val mins = (totalSecs % 3600L) / 60L
+        val secs = totalSecs % 60L
+        val countdownStr = String.format(Locale.US, "%02dd %02dh %02dm %02ds", days, hours, mins, secs)
+
+        val isOneDayOrLess = remMs <= 86_400_000L
+
+        if (::licenseTopBanner.isInitialized) {
+            licenseTopBanner.background = if (isOneDayOrLess) {
+                roundedBg("#7F1D1D", 0f, "#EF4444", 2)
+            } else {
+                roundedBg("#0F172A", 0f, "#1E293B", 2)
+            }
+        }
+        if (::tvTopLicenseExpiryDate.isInitialized) {
+            tvTopLicenseExpiryDate.text = if (isOneDayOrLess) {
+                "⚠️ ONLY 1 DAY LEFT! (Exp: $expDateStr)"
+            } else {
+                "📅 Expires: $expDateStr"
+            }
+            tvTopLicenseExpiryDate.setTextColor(if (isOneDayOrLess) Color.parseColor("#FCA5A5") else Color.parseColor("#E2E8F0"))
+        }
+        if (::tvTopLicenseCountdown.isInitialized) {
+            tvTopLicenseCountdown.text = "⏳ $countdownStr"
+            tvTopLicenseCountdown.setTextColor(if (isOneDayOrLess) Color.parseColor("#FDE047") else Color.parseColor("#34D399"))
+        }
+        if (::tvCardLicenseExpiryBox.isInitialized) {
+            tvCardLicenseExpiryBox.text = if (isOneDayOrLess) {
+                "⚠️ WARNING: ONLY 1 DAY REMAINING!\n📅 Expiry Date: $expDateStr\n⏳ Live Countdown: $countdownStr"
+            } else {
+                "📅 Expiry Date: $expDateStr\n⏳ Live Countdown: $countdownStr"
+            }
+            tvCardLicenseExpiryBox.setTextColor(if (isOneDayOrLess) Color.parseColor("#DC2626") else Color.parseColor("#0F172A"))
+        }
+
+        if (isOneDayOrLess) {
+            triggerOneDayExpiryWarningIfNeeded(expiryMs, remMs, expDateStr)
+        }
+    }
+
+    private fun triggerOneDayExpiryWarningIfNeeded(expiryMs: Long, remMs: Long, expDateStr: String) {
+        val rankPrefs = getOrderRankPrefs()
+        val warnPrefKey = "jdrv_warned_24h_notified_$expiryMs"
+        if (!rankPrefs.getBoolean(warnPrefKey, false)) {
+            rankPrefs.edit().putBoolean(warnPrefKey, true).apply()
+            NotificationHelper.showLicenseExpiryWarningNotification(this, expiryMs, remMs)
+            val totalMins = (remMs / 60_000L).coerceAtLeast(1L)
+            val hrs = totalMins / 60L
+            val mns = totalMins % 60L
+            try {
+                AlertDialog.Builder(this)
+                    .setTitle("⚠️ License Expiring Soon (1 Day Left!)")
+                    .setMessage(
+                        "Only 1 day (${hrs}h ${mns}m) remains before your J-Driver license key expires on $expDateStr.\n\n" +
+                        "تنبيه: متبقي يوم واحد فقط (${hrs} ساعة و ${mns} دقيقة) على انتهاء صلاحية مفتاح التفعيل الخاص بك!\n" +
+                        "يرجى تجديد المفتاح لضمان استمرار عمل التطبيق دون توقف."
+                    )
+                    .setPositiveButton("💬 Renew on WhatsApp") { dlg, _ ->
+                        dlg.dismiss()
+                        openWhatsAppBuyKey()
+                    }
+                    .setNegativeButton("OK") { dlg, _ ->
+                        dlg.dismiss()
+                    }
+                    .show()
+            } catch (_: Throwable) {}
+        }
+    }
 
     private val LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     private val DEV_WHATSAPP_NUMBER = "966505812141"
     private val DEV_WHATSAPP_DISPLAY = "+966505812141"
-    private val DEV_WHATSAPP_PREFILL = "hi i need buy key"
+    private val DEV_WHATSAPP_PREFILL = "I need key J-Driver Autoaccpet"
     private val DEV_TELEGRAM_CHANNEL_URL = "https://t.me/J_Driver"
     private val DEV_TELEGRAM_USER_URL = "https://t.me/J_Drive1"
     private val DEV_TELEGRAM_USER_HANDLE = "@J_Drive1"
@@ -1104,6 +1287,227 @@ class MainActivity : AppCompatActivity() {
             ((d[2].toInt() and 0xFF) shl 8) or
             (d[3].toInt() and 0xFF)
         return if (v != 0) v else 1
+    }
+
+    private fun encodeBase32KeyBytes(data: ByteArray): String {
+        var bits = 0
+        var value = 0
+        val sb = StringBuilder()
+        for (b in data) {
+            value = (value shl 8) or (b.toInt() and 0xFF)
+            bits += 8
+            while (bits >= 5) {
+                sb.append(LIC_ALPHABET[(value ushr (bits - 5)) and 31])
+                bits -= 5
+            }
+        }
+        if (bits > 0) {
+            sb.append(LIC_ALPHABET[(value shl (5 - bits)) and 31])
+        }
+        val raw = sb.toString()
+        val groups = mutableListOf<String>()
+        var i = 0
+        while (i < raw.length) {
+            val end = (i + 4).coerceAtMost(raw.length)
+            groups.add(raw.substring(i, end))
+            i += 4
+        }
+        return "JDRV-" + groups.joinToString("-")
+    }
+
+    private fun deriveDeterministicDeviceTrialKey(myDevId: String): Pair<String, String> {
+        val mk = reconstructMasterKey()
+        val devHash = computeDeviceHashInt(myDevId)
+        val expCode = (-0x80000000) or 1440 // 1440 mins = 1 Day (24 Hours)
+        val keyEpoch = 1
+        val featureMask = 0x0F
+        val plain12 = ByteArray(12)
+        plain12[0] = ((devHash ushr 24) and 0xFF).toByte()
+        plain12[1] = ((devHash ushr 16) and 0xFF).toByte()
+        plain12[2] = ((devHash ushr 8) and 0xFF).toByte()
+        plain12[3] = (devHash and 0xFF).toByte()
+        plain12[4] = ((expCode ushr 24) and 0xFF).toByte()
+        plain12[5] = ((expCode ushr 16) and 0xFF).toByte()
+        plain12[6] = ((expCode ushr 8) and 0xFF).toByte()
+        plain12[7] = (expCode and 0xFF).toByte()
+        plain12[8] = (keyEpoch and 0xFF).toByte()
+        plain12[9] = (featureMask and 0xFF).toByte()
+        plain12[10] = 0x4A.toByte()
+        plain12[11] = 0x44.toByte()
+
+        val nonceSeed = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(("JDRV_ONE_TIME_TRIAL_2026:$myDevId").toByteArray(Charsets.UTF_8))
+        val nonce2 = byteArrayOf(nonceSeed[0], nonceSeed[1])
+
+        val sha = java.security.MessageDigest.getInstance("SHA-256")
+        sha.update(mk)
+        sha.update(nonce2)
+        val stream = sha.digest()
+
+        val enc12 = ByteArray(12)
+        for (idx in 0 until 12) {
+            enc12[idx] = (plain12[idx].toInt() xor stream[idx].toInt()).toByte()
+        }
+
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        mac.update(enc12)
+        mac.update(nonce2)
+        val tag6 = mac.doFinal().copyOfRange(0, 6)
+        val tagHex = tag6.joinToString("") { String.format(Locale.US, "%02X", it.toInt() and 0xFF) }
+
+        val full20 = ByteArray(20)
+        System.arraycopy(enc12, 0, full20, 0, 12)
+        System.arraycopy(nonce2, 0, full20, 12, 2)
+        System.arraycopy(tag6, 0, full20, 14, 6)
+        return encodeBase32KeyBytes(full20) to tagHex
+    }
+
+    private fun computeActivationStampHmac(tagHex: String, myDevId: String, firstActMs: Long): String {
+        val mk = reconstructMasterKey()
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+        val raw = "ACT_STAMP|$tagHex|$myDevId|$firstActMs".toByteArray(Charsets.UTF_8)
+        return mac.doFinal(raw).joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }.take(32)
+    }
+
+    private fun getHiddenLedgerFiles(tagHex: String): List<File> {
+        val list = mutableListOf<File>()
+        try { list.add(File(noBackupFilesDir, ".jdrv_act_$tagHex.dat")) } catch (_: Throwable) {}
+        try { list.add(File(filesDir, ".jdrv_act_$tagHex.dat")) } catch (_: Throwable) {}
+        try {
+            externalCacheDirs?.forEach { dir ->
+                if (dir != null) list.add(File(dir, ".jdrv_act_$tagHex.dat"))
+            }
+        } catch (_: Throwable) {}
+        try {
+            @Suppress("DEPRECATION")
+            externalMediaDirs?.forEach { dir ->
+                if (dir != null) list.add(File(dir, ".jdrv_act_$tagHex.dat"))
+            }
+        } catch (_: Throwable) {}
+        return list
+    }
+
+    private fun parseAndVerifyLedgerLine(line: String, expectedTagHex: String, myDevId: String): Long {
+        val parts = line.trim().split("|")
+        if (parts.size != 4) return 0L
+        val tHex = parts[0]
+        val dId = parts[1]
+        val ts = parts[2].toLongOrNull() ?: return -1L
+        val sig = parts[3]
+        if (tHex != expectedTagHex || dId != myDevId || ts <= 0L) return 0L
+        val expectedSig = computeActivationStampHmac(expectedTagHex, myDevId, ts)
+        return if (sig.equals(expectedSig, ignoreCase = true)) ts else -1L
+    }
+
+    private fun readVerifiedFirstActivationMs(tagHex: String, myDevId: String): Long {
+        val rankPrefs = getOrderRankPrefs()
+        val mainPrefs = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+        val actKeyPref = "jdrv_first_act_$tagHex"
+        val sigKeyPref = "jdrv_first_act_sig_$tagHex"
+
+        // 1. Check rankPrefs
+        if (rankPrefs.contains(actKeyPref)) {
+            val ts = rankPrefs.getLong(actKeyPref, 0L)
+            val sig = rankPrefs.getString(sigKeyPref, "") ?: ""
+            if (ts > 0L) {
+                val expectedSig = computeActivationStampHmac(tagHex, myDevId, ts)
+                if (sig.isNotEmpty() && !sig.equals(expectedSig, ignoreCase = true)) {
+                    return -1L // Tampered!
+                }
+                if (sig.isEmpty()) {
+                    // Upgrade legacy unsigned entry
+                    saveVerifiedFirstActivationMs(tagHex, myDevId, ts)
+                }
+                return ts
+            }
+        }
+
+        // 2. Check mainPrefs & XposedProvider cross-process ledger (survives J-Driver reinstall while Saned is installed)
+        val ledgerLine = mainPrefs.getString("jdrv_ledger_$tagHex", null)
+            ?: mainPrefs.getString("jdrv_trial_ledger_entry", null)
+        if (!ledgerLine.isNullOrEmpty() && ledgerLine.startsWith("$tagHex|")) {
+            val verifiedTs = parseAndVerifyLedgerLine(ledgerLine, tagHex, myDevId)
+            if (verifiedTs != 0L) {
+                if (verifiedTs > 0L) saveVerifiedFirstActivationMs(tagHex, myDevId, verifiedTs)
+                return verifiedTs
+            }
+        }
+
+        // 3. Query XposedProvider ContentProvider directly
+        try {
+            val b = contentResolver.call(
+                Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                "getSettings",
+                null,
+                null
+            )
+            val remoteLedger = b?.getString("jdrv_trial_ledger_entry", null)
+            if (!remoteLedger.isNullOrEmpty() && remoteLedger.startsWith("$tagHex|")) {
+                val verifiedTs = parseAndVerifyLedgerLine(remoteLedger, tagHex, myDevId)
+                if (verifiedTs != 0L) {
+                    if (verifiedTs > 0L) saveVerifiedFirstActivationMs(tagHex, myDevId, verifiedTs)
+                    return verifiedTs
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 4. Check hidden files in noBackupFilesDir / externalCacheDirs / externalMediaDirs
+        for (f in getHiddenLedgerFiles(tagHex)) {
+            try {
+                if (f.exists()) {
+                    val vTs = parseAndVerifyLedgerLine(f.readText(Charsets.UTF_8), tagHex, myDevId)
+                    if (vTs != 0L) {
+                        if (vTs > 0L) saveVerifiedFirstActivationMs(tagHex, myDevId, vTs)
+                        return vTs
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        return 0L
+    }
+
+    private fun saveVerifiedFirstActivationMs(tagHex: String, myDevId: String, firstActMs: Long) {
+        val sig = computeActivationStampHmac(tagHex, myDevId, firstActMs)
+        val entryLine = "$tagHex|$myDevId|$firstActMs|$sig"
+        val actKeyPref = "jdrv_first_act_$tagHex"
+        val sigKeyPref = "jdrv_first_act_sig_$tagHex"
+
+        getOrderRankPrefs().edit()
+            .putLong(actKeyPref, firstActMs)
+            .putString(sigKeyPref, sig)
+            .commit()
+
+        val (_, trialTagHex) = deriveDeterministicDeviceTrialKey(myDevId)
+        val mainEd = getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+            .putString("jdrv_ledger_$tagHex", entryLine)
+        if (tagHex == trialTagHex) {
+            mainEd.putString("jdrv_trial_ledger_entry", entryLine)
+        }
+        mainEd.commit()
+
+        for (f in getHiddenLedgerFiles(tagHex)) {
+            try {
+                f.parentFile?.mkdirs()
+                f.writeText(entryLine, Charsets.UTF_8)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun isOneDayTrialAlreadyExpiredOnDevice(): Boolean {
+        val myDevId = getHardwareDeviceId()
+        val (_, trialTagHex) = deriveDeterministicDeviceTrialKey(myDevId)
+        val firstAct = readVerifiedFirstActivationMs(trialTagHex, myDevId)
+        if (firstAct == -1L) return true
+        if (firstAct > 0L) {
+            val nowMs = nowAntiRollbackMs()
+            if (nowMs > firstAct + 1440L * 60_000L) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun decodeBase32Key(keyStr: String): ByteArray? {
@@ -1178,26 +1582,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isEnvironmentTampered(): Boolean {
-        try {
-            if (android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()) return true
-            if (packageName != "dev.jing.sanedhook") return true
-            if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) return true
-            if (!verifyOfficialApkSignature()) return true
-            val patcherPkgs = arrayOf(
-                "com.chelpus.lackypatch",
-                "com.dimonvideo.luckypatcher",
-                "com.forpda.lp",
-                "com.android.vending.billing.InAppBillingService.COIN",
-                "com.android.vending.billing.InAppBillingService.LACK"
-            )
-            for (p in patcherPkgs) {
-                try {
-                    packageManager.getPackageInfo(p, 0)
-                    return true
-                } catch (_: Throwable) {}
-            }
-        } catch (_: Throwable) {}
-        return false
+        return try {
+            packageName != "dev.jing.sanedhook"
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     data class LicenseStatusResult(
@@ -1226,7 +1615,7 @@ class MainActivity : AppCompatActivity() {
             val msgAr = mainPrefs.getString("jdrv_remote_msg_ar", null)
                 ?: "⚠️ تم إيقاف التطبيق عن بُعد من قِبل المطور. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY أو تليجرام $DEV_TELEGRAM_USER_HANDLE"
             val msgEn = mainPrefs.getString("jdrv_remote_msg_en", null)
-                ?: "⚠️ App has been remotely disabled by the developer. Contact WhatsApp $DEV_WHATSAPP_DISPLAY or Telegram $DEV_TELEGRAM_USER_HANDLE"
+                ?: "⚠️ App has been remotely disabled by the developer. Please use the buttons below to contact support."
             return LicenseStatusResult(false, msgAr, msgEn)
         }
 
@@ -1236,7 +1625,7 @@ class MainActivity : AppCompatActivity() {
             return LicenseStatusResult(
                 false,
                 "⛔ تم إيقاف ترخيص هذا الجهاز ($myDevId) من قِبل المطور. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY",
-                "⛔ This device ($myDevId) has been blocked by the developer. Contact WhatsApp $DEV_WHATSAPP_DISPLAY"
+                "⛔ This device ($myDevId) has been blocked by the developer."
             )
         }
 
@@ -1338,11 +1727,18 @@ class MainActivity : AppCompatActivity() {
             expCode == -1 -> 0L // 0xFFFFFFFF = Lifetime
             (expCode and -0x80000000) != 0 -> {
                 val durationMinutes = (expCode and 0x7FFFFFFF).toLong()
-                var firstAct = rankPrefs.getLong(actKeyPref, 0L)
+                var firstAct = readVerifiedFirstActivationMs(tagHex, myDevId)
+                if (firstAct == -1L) {
+                    return LicenseStatusResult(
+                        false,
+                        "⛔ تم اكتشاف تلاعب ببيانات وقت التفعيل على هذا الجهاز",
+                        "⛔ Activation timestamp tampering detected on this device"
+                    )
+                }
                 if (firstAct <= 0L) {
                     firstAct = nowMs
                     if (activateIfNew) {
-                        rankPrefs.edit().putLong(actKeyPref, firstAct).commit()
+                        saveVerifiedFirstActivationMs(tagHex, myDevId, firstAct)
                     }
                 }
                 firstAct + durationMinutes * 60_000L
@@ -1356,7 +1752,7 @@ class MainActivity : AppCompatActivity() {
             return LicenseStatusResult(
                 false,
                 "⏰ انتهت مدة صلاحية مفتاح التفعيل الخاص بك. تواصل عبر واتساب $DEV_WHATSAPP_DISPLAY لتجديد الاشتراك",
-                "⏰ Your license key has expired. Contact WhatsApp $DEV_WHATSAPP_DISPLAY to renew",
+                "⏰ Your license key has expired. Please buy a new key via WhatsApp or Telegram below.",
                 expiryMs = expiryMs,
                 featureMask = featureMask,
                 keyEpoch = keyEpoch
@@ -1424,6 +1820,7 @@ class MainActivity : AppCompatActivity() {
             val extras = Bundle().apply {
                 putString("jdrv_lic_key", mainPrefs.getString("jdrv_lic_key", "") ?: "")
                 putString("jdrv_hw_device_id", getHardwareDeviceId())
+                putString("jdrv_trial_ledger_entry", mainPrefs.getString("jdrv_trial_ledger_entry", "") ?: "")
                 putString("jdrv_lic_token_sig", mainPrefs.getString("jdrv_lic_token_sig", "") ?: "")
                 putBoolean("jdrv_lic_active", mainPrefs.getBoolean("jdrv_lic_active", false))
                 putLong("jdrv_lic_expiry_ms", mainPrefs.getLong("jdrv_lic_expiry_ms", 0L))
@@ -1565,7 +1962,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openWhatsAppBuyKey() {
         val devId = getHardwareDeviceId()
-        val msg = DEV_WHATSAPP_PREFILL
+        val msg = "I need key J-Driver Autoaccpet $devId"
         val encodedMsg = Uri.encode(msg)
         try {
             val waIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$DEV_WHATSAPP_NUMBER&text=$encodedMsg")).apply {
@@ -1576,7 +1973,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$DEV_WHATSAPP_NUMBER?text=$encodedMsg")))
             } catch (_: Throwable) {
-                Toast.makeText(this, "$DEV_WHATSAPP_DISPLAY ($devId)", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -1603,7 +2000,7 @@ class MainActivity : AppCompatActivity() {
             pushLicenseStateToSaned()
             if (::licenseGateOverlay.isInitialized) {
                 licenseGateOverlay.visibility = View.VISIBLE
-                tvLicenseGateStatus.text = tr(status.reasonAr, status.reasonEn)
+                tvLicenseGateStatus.text = status.reasonEn
             }
         } else {
             mainPrefs.edit()
@@ -1619,18 +2016,20 @@ class MainActivity : AppCompatActivity() {
         }
         if (::tvSettingsLicenseSummary.isInitialized) {
             tvSettingsLicenseSummary.text = if (status.isValid) {
-                tr(status.reasonAr, status.reasonEn)
+                status.reasonEn
             } else {
-                tr("🔴 غير مفعّل — ${status.reasonAr}", "🔴 Not Activated — ${status.reasonEn}")
+                "🔴 Not Activated — ${status.reasonEn}"
             }
             tvSettingsLicenseSummary.setTextColor(
                 Color.parseColor(if (status.isValid) "#059669" else "#DC2626")
             )
         }
+        updateLiveLicenseExpiryCountdownUI()
     }
 
     private fun buildLicenseLockOverlay(): FrameLayout {
         val overlay = FrameLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             setBackgroundColor(Color.parseColor("#0F172A"))
             isClickable = true
             isFocusable = true
@@ -1648,6 +2047,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val col = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(40, 72, 40, 72)
@@ -1663,7 +2063,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(badgeTv)
 
         val titleTv = TextView(this).apply {
-            text = tr("تفعيل ترخيص J-Driver الرسمي", "J-Driver Official License Activation")
+            text = "J-Driver Official License Activation"
             textSize = 21f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -1673,10 +2073,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(titleTv)
 
         tvLicenseGateStatus = TextView(this).apply {
-            text = tr(
-                "🔑 التطبيق محمي بنظام ترخيص مشفر. أدخل مفتاح التفعيل أو تواصل مع المطور لشراء مفتاح.",
-                "🔑 Protected by cryptographic licensing. Enter your license key or contact the developer to buy a key."
-            )
+            text = "🔑 Protected by cryptographic licensing. Enter your license key or contact the developer to buy a key."
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#FBBF24"))
@@ -1694,6 +2091,7 @@ class MainActivity : AppCompatActivity() {
 
         // Card 1: Hardware Device ID + License Key Activation
         val actCard = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.VERTICAL
             background = roundedBg("#1E293B", 24f, "#334155", 2)
             setPadding(34, 32, 34, 32)
@@ -1706,7 +2104,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val devIdTitle = TextView(this).apply {
-            text = tr("🆔 معرّف جهازك الخاص (أرسله للمطور للحصول على مفتاح):", "🆔 Your Device ID (Send to developer to get a key):")
+            text = "🆔 Your Device ID (Send to developer to get a key):"
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#94A3B8"))
@@ -1715,6 +2113,7 @@ class MainActivity : AppCompatActivity() {
 
         val myDeviceId = getHardwareDeviceId()
         val devIdRow = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = roundedBg("#0F172A", 16f, "#475569", 2)
@@ -1737,7 +2136,7 @@ class MainActivity : AppCompatActivity() {
         devIdRow.addView(tvDevIdValue)
 
         val btnCopyDevId = TextView(this).apply {
-            text = tr("📋 نسخ", "📋 Copy")
+            text = "📋 Copy"
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -1748,7 +2147,7 @@ class MainActivity : AppCompatActivity() {
                 clip.setPrimaryClip(ClipData.newPlainText("J-Driver Device ID", myDeviceId))
                 Toast.makeText(
                     this@MainActivity,
-                    tr("✅ تم نسخ معرّف الجهاز: $myDeviceId", "✅ Device ID copied: $myDeviceId"),
+                    "✅ Device ID copied: $myDeviceId",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -1757,7 +2156,7 @@ class MainActivity : AppCompatActivity() {
         actCard.addView(devIdRow)
 
         val keyLabel = TextView(this).apply {
-            text = tr("🔑 مفتاح التفعيل (JDRV-XXXX-...):", "🔑 License Key (JDRV-XXXX-...):")
+            text = "🔑 License Key (JDRV-XXXX-...):"
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#E2E8F0"))
@@ -1780,6 +2179,7 @@ class MainActivity : AppCompatActivity() {
         actCard.addView(edtLicenseGateKey)
 
         val keyActionsRow = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -1791,7 +2191,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnPasteKey = TextView(this).apply {
-            text = tr("📋 لصق المفتاح", "📋 Paste Key")
+            text = "📋 Paste Key"
             textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -1817,7 +2217,7 @@ class MainActivity : AppCompatActivity() {
         keyActionsRow.addView(btnPasteKey)
 
         val btnActivateNow = TextView(this).apply {
-            text = tr("✅ تفعيل المفتاح وتشغيل التطبيق", "✅ Activate Key & Unlock App")
+            text = "✅ Activate Key & Unlock App"
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -1831,15 +2231,15 @@ class MainActivity : AppCompatActivity() {
                 if (res.isValid) {
                     Toast.makeText(
                         this@MainActivity,
-                        tr(res.reasonAr, res.reasonEn),
+                        res.reasonEn,
                         Toast.LENGTH_LONG
                     ).show()
                     enforceLicenseGateUI()
                 } else {
-                    tvLicenseGateStatus.text = tr(res.reasonAr, res.reasonEn)
+                    tvLicenseGateStatus.text = res.reasonEn
                     Toast.makeText(
                         this@MainActivity,
-                        tr(res.reasonAr, res.reasonEn),
+                        res.reasonEn,
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1847,10 +2247,60 @@ class MainActivity : AppCompatActivity() {
         }
         keyActionsRow.addView(btnActivateNow)
         actCard.addView(keyActionsRow)
+
+        val btnOneDayTrial = TextView(this).apply {
+            val trialExpired = isOneDayTrialAlreadyExpiredOnDevice()
+            text = if (trialExpired) {
+                "⛔   One Day Trial (Already Used on This Device)"
+            } else {
+                "🎁   One Day Trial"
+            }
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg(if (trialExpired) "#475569" else "#D97706", 16f)
+            setPadding(28, 26, 28, 26)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 16, 0, 0)
+            }
+            setOnClickListener {
+                val devId = getHardwareDeviceId()
+                val (trialKey, trialTagHex) = deriveDeterministicDeviceTrialKey(devId)
+                val prevAct = readVerifiedFirstActivationMs(trialTagHex, devId)
+                val nowMs = nowAntiRollbackMs()
+                if (prevAct == -1L || (prevAct > 0L && nowMs > prevAct + 1440L * 60_000L)) {
+                    text = "⛔   One Day Trial (Already Used on This Device)"
+                    background = roundedBg("#475569", 16f)
+                    val msg = "⛔ One Day Trial has already been used and expired on this device ($devId). Please buy a license key below."
+                    tvLicenseGateStatus.text = msg
+                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                edtLicenseGateKey.setText(trialKey)
+                val res = evaluateLicenseKey(trialKey, activateIfNew = true)
+                if (res.isValid) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "🎁 One Day Trial Activated! (${res.reasonEn})",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    enforceLicenseGateUI()
+                } else {
+                    tvLicenseGateStatus.text = res.reasonEn
+                    Toast.makeText(this@MainActivity, res.reasonEn, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        actCard.addView(btnOneDayTrial)
         col.addView(actCard)
 
         // Card 2: Official Developer Contact & Buy Key Links (WhatsApp +966505812141 & Telegram)
         val rightsCard = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.VERTICAL
             background = roundedBg("#1E293B", 24f, "#334155", 2)
             setPadding(34, 32, 34, 32)
@@ -1861,7 +2311,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val rightsTitle = TextView(this).apply {
-            text = tr("👑 شراء مفتاح التفعيل والتواصل الرسمي مع المطور", "👑 Buy License Key & Official Developer Contact")
+            text = "👑 Buy License Key & Official Updates"
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
@@ -1870,10 +2320,7 @@ class MainActivity : AppCompatActivity() {
         rightsCard.addView(rightsTitle)
 
         val btnBuyWhatsApp = TextView(this).apply {
-            text = tr(
-                "💬   شراء مفتاح عبر واتساب ($DEV_WHATSAPP_DISPLAY)",
-                "💬   Buy Key on WhatsApp ($DEV_WHATSAPP_DISPLAY)"
-            )
+            text = "💬   Buy Key via WhatsApp"
             textSize = 15.5f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -1890,32 +2337,8 @@ class MainActivity : AppCompatActivity() {
         }
         rightsCard.addView(btnBuyWhatsApp)
 
-        val btnTgChannel = TextView(this).apply {
-            text = tr(
-                "📢   قناة تليجرام الرسمية (t.me/J_Driver)",
-                "📢   Official Telegram Channel (t.me/J_Driver)"
-            )
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#0284C7", 18f)
-            setPadding(28, 28, 28, 28)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 0, 0, 16)
-            }
-            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
-        }
-        rightsCard.addView(btnTgChannel)
-
         val btnTgPersonal = TextView(this).apply {
-            text = tr(
-                "👤   حساب المطور الشخصي ($DEV_TELEGRAM_USER_HANDLE)",
-                "👤   Developer Personal Account ($DEV_TELEGRAM_USER_HANDLE)"
-            )
+            text = "🛒   Buy Key via Telegram"
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -1925,10 +2348,28 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_USER_URL) }
+            ).apply {
+                setMargins(0, 0, 0, 16)
+            }
+            setOnClickListener { openTelegramUrl("$DEV_TELEGRAM_USER_URL?text=" + Uri.encode("I need key J-Driver Autoaccpet ${getHardwareDeviceId()}")) }
         }
         rightsCard.addView(btnTgPersonal)
+
+        val btnTgChannel = TextView(this).apply {
+            text = "📢   Join Telegram for Update"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#0284C7", 18f)
+            setPadding(28, 28, 28, 28)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
+        }
+        rightsCard.addView(btnTgChannel)
 
         col.addView(rightsCard)
         scroll.addView(col)
@@ -1939,13 +2380,14 @@ class MainActivity : AppCompatActivity() {
     private fun createLicenseAndRightsCard(): CardView {
         val card = createStyledCard()
         val layout = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.VERTICAL
             setPadding(26, 26, 26, 26)
             setBackgroundColor(Color.WHITE)
         }
 
         val title = TextView(this).apply {
-            text = tr("👑 الترخيص الرسمي وحقوق المطور (J-Driver)", "👑 Official License & Developer Rights (J-Driver)")
+            text = "👑 Official License & Developer Rights (J-Driver)"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#0F172A"))
@@ -1959,7 +2401,7 @@ class MainActivity : AppCompatActivity() {
         val status = evaluateLicenseKey(savedKey, activateIfNew = false)
 
         tvSettingsLicenseSummary = TextView(this).apply {
-            text = tr(status.reasonAr, status.reasonEn)
+            text = status.reasonEn
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor(if (status.isValid) "#059669" else "#DC2626"))
@@ -1967,8 +2409,25 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(tvSettingsLicenseSummary)
 
+        tvCardLicenseExpiryBox = TextView(this).apply {
+            text = "📅 Expiry Date: --\n⏳ Live Countdown: --"
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#0F172A"))
+            background = roundedBg("#ECFDF5", 12f, "#10B981", 2)
+            setPadding(22, 18, 22, 18)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 4, 0, 10)
+            }
+        }
+        layout.addView(tvCardLicenseExpiryBox)
+        updateLiveLicenseExpiryCountdownUI()
+
         val devIdLine = TextView(this).apply {
-            text = tr("🆔 معرّف الجهاز: $myDevId (اضغط للنسخ)", "🆔 Device ID: $myDevId (Tap to copy)")
+            text = "🆔 Device ID: $myDevId (Tap to copy)"
             textSize = 13f
             typeface = Typeface.MONOSPACE
             setTextColor(Color.parseColor("#1E293B"))
@@ -1983,13 +2442,13 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clip.setPrimaryClip(ClipData.newPlainText("Device ID", myDevId))
-                Toast.makeText(this@MainActivity, tr("✅ تم نسخ $myDevId", "✅ Copied $myDevId"), Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "✅ Copied $myDevId", Toast.LENGTH_SHORT).show()
             }
         }
         layout.addView(devIdLine)
 
         val btnBuyWa = TextView(this).apply {
-            text = tr("💬 شراء أو تجديد مفتاح واتساب ($DEV_WHATSAPP_DISPLAY)", "💬 Buy / Renew Key on WhatsApp ($DEV_WHATSAPP_DISPLAY)")
+            text = "💬 Buy Key via WhatsApp"
             textSize = 14.5f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -2007,6 +2466,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(btnBuyWa)
 
         val tgRow = LinearLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -2017,39 +2477,39 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val btnChannel = TextView(this).apply {
-            text = tr("📢 قناة تليجرام", "📢 Telegram Channel")
-            textSize = 13.5f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#0284C7", 14f)
-            setPadding(18, 22, 18, 22)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(0, 0, 8, 0)
-            }
-            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
-        }
-        tgRow.addView(btnChannel)
-
         val btnPersonal = TextView(this).apply {
-            text = tr("👤 المطور $DEV_TELEGRAM_USER_HANDLE", "👤 Dev $DEV_TELEGRAM_USER_HANDLE")
-            textSize = 13.5f
+            text = "🛒 Buy Key via Telegram"
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             background = roundedBg("#4F46E5", 14f)
-            setPadding(18, 22, 18, 22)
+            setPadding(16, 22, 16, 22)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, 8, 0)
+            }
+            setOnClickListener { openTelegramUrl("$DEV_TELEGRAM_USER_URL?text=" + Uri.encode("I need key J-Driver Autoaccpet ${getHardwareDeviceId()}")) }
+        }
+        tgRow.addView(btnPersonal)
+
+        val btnChannel = TextView(this).apply {
+            text = "📢 Join Telegram for Update"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#0284C7", 14f)
+            setPadding(16, 22, 16, 22)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(8, 0, 0, 0)
             }
-            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_USER_URL) }
+            setOnClickListener { openTelegramUrl(DEV_TELEGRAM_CHANNEL_URL) }
         }
-        tgRow.addView(btnPersonal)
+        tgRow.addView(btnChannel)
         layout.addView(tgRow)
 
         val btnChangeKey = TextView(this).apply {
-            text = tr("🔑 إدخال أو تغيير مفتاح التفعيل", "🔑 Enter or Change License Key")
+            text = "🔑 Enter or Change License Key"
             textSize = 13.5f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
