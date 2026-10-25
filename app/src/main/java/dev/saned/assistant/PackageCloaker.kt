@@ -51,15 +51,12 @@ object PackageCloaker {
     private val isRuntimeHooked = AtomicBoolean(false)
     private val isNativeStubbed = AtomicBoolean(false)
     private val stubbedNativeClasses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val scannedPromonPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val dynamicBlockedActivities = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val hookedExceptionGuardMethods = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    @Volatile private var lastKnownClassLoader: ClassLoader? = null
     private val isLoaderHooked = AtomicBoolean(false)
     private val isBlockedActHooked = AtomicBoolean(false)
     private val isSecurityHooked = AtomicBoolean(false)
     private val isMapsAndPkgHooked = AtomicBoolean(false)
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
+    private val isFvfeiucoiGuardHooked = AtomicBoolean(false)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
 
@@ -164,137 +161,15 @@ object PackageCloaker {
         (activeProfile ?: getAllVersionProfiles().firstOrNull())?.mainActivity?.takeIf { it.isNotEmpty() } ?: "net.jahez.fleets.MainActivity"
 
     private fun defaultReturnValueForType(type: Class<*>): Any? = when (type) {
-        Boolean::class.javaPrimitiveType, java.lang.Boolean::class.java -> java.lang.Boolean.TRUE
-        Int::class.javaPrimitiveType, java.lang.Integer::class.java -> 0
-        Long::class.javaPrimitiveType, java.lang.Long::class.java -> 0L
-        Short::class.javaPrimitiveType, java.lang.Short::class.java -> 0.toShort()
-        Byte::class.javaPrimitiveType, java.lang.Byte::class.java -> 0.toByte()
-        Char::class.javaPrimitiveType, java.lang.Character::class.java -> ' '
-        Float::class.javaPrimitiveType, java.lang.Float::class.java -> 0f
-        Double::class.javaPrimitiveType, java.lang.Double::class.java -> 0.0
-        String::class.java -> ""
-        ByteArray::class.java -> ByteArray(0)
-        IntArray::class.java -> IntArray(0)
-        BooleanArray::class.java -> BooleanArray(0)
-        else -> if (type.isArray) java.lang.reflect.Array.newInstance(type.componentType ?: Any::class.java, 0) else null
-    }
-
-    private fun isSystemOrFrameworkPackage(pkg: String): Boolean {
-        if (pkg.isBlank()) return true
-        return pkg.startsWith("java.") ||
-            pkg.startsWith("javax.") ||
-            pkg.startsWith("android.") ||
-            pkg.startsWith("androidx.") ||
-            pkg.startsWith("kotlin") ||
-            pkg.startsWith("kotlinx.") ||
-            pkg.startsWith("com.android.") ||
-            pkg.startsWith("dalvik.") ||
-            pkg.startsWith("org.matrix.") ||
-            pkg.startsWith("top.nkbe.") ||
-            pkg.startsWith("org.lsposed.") ||
-            pkg.startsWith("io.github.libxposed") ||
-            pkg.startsWith("dev.saned.") ||
-            pkg.startsWith("dev.jing.") ||
-            pkg.startsWith("net.jahez.") ||
-            pkg.startsWith("net.saned.") ||
-            pkg == "o"
-    }
-
-    /**
-     * Dynamically scans an obfuscated Promon Shield package (such as `fvfeiucoi` in Saned 6.2.0 / 40104,
-     * `oxxqbaxw` in 40099, `ggk` in 40093, `lrbppeks` in 40089, or any future obfuscated package)
-     * WITHOUT initializing classes (`Class.forName(name, false, classLoader)`):
-     * 1. Stubs all `native` JNI methods on every class in the package so blocking `libjahez_fleets.so` never causes `UnsatisfiedLinkError`.
-     * 2. Hooks loader methods (e.g. `fvfeiucoi.ag.b(String)`) to prevent `System.loadLibrary("jahez_fleets")`.
-     * 3. Wraps Promon Shield tamper-check methods (such as `fvfeiucoi.I.a` / `fvfeiucoi.I.b`) to suppress `fvfeiucoi.r` exceptions.
-     * 4. Detects any `Activity` subclass in the package and registers it in `dynamicBlockedActivities`.
-     */
-    private fun scanAndStubPromonPackage(module: XposedModule, classLoader: ClassLoader, pkgPrefix: String) {
-        if (isSystemOrFrameworkPackage(pkgPrefix)) return
-        if (!scannedPromonPackages.add(pkgPrefix)) return
-
-        val shortNames = ArrayList<String>(160)
-        for (c in 'a'..'z') shortNames.add(c.toString())
-        for (c in 'A'..'Z') shortNames.add(c.toString())
-        for (c1 in listOf('a', 'b', 'c')) {
-            for (c2 in 'a'..'z') shortNames.add("$c1$c2")
-            for (c2 in 'A'..'Z') shortNames.add("$c1$c2")
-        }
-
-        var totalNativeStubbed = 0
-        for (shortName in shortNames) {
-            val clsName = "$pkgPrefix.$shortName"
-            val cls = try {
-                Class.forName(clsName, false, classLoader)
-            } catch (_: Throwable) {
-                null
-            } ?: continue
-
-            try {
-                if (Activity::class.java.isAssignableFrom(cls)) {
-                    dynamicBlockedActivities.add(clsName)
-                }
-            } catch (_: Throwable) {}
-
-            try {
-                var clsNativeCount = 0
-                for (m in cls.declaredMethods) {
-                    val mod = m.modifiers
-                    if (Modifier.isNative(mod)) {
-                        if (!stubbedNativeClasses.contains("$clsName#${m.name}/${m.parameterTypes.size}")) {
-                            val retType = m.returnType
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
-                            })
-                            stubbedNativeClasses.add("$clsName#${m.name}/${m.parameterTypes.size}")
-                            clsNativeCount++
-                            totalNativeStubbed++
-                        }
-                    } else if (shortName == "I" || shortName == "ag" || m.exceptionTypes.any { it.name.startsWith("$pkgPrefix.") }) {
-                        val mKey = "$clsName#${m.name}/${m.parameterTypes.size}"
-                        if (hookedExceptionGuardMethods.add(mKey)) {
-                            val isStringLoader = (shortName == "ag") &&
-                                m.parameterTypes.size == 1 &&
-                                m.parameterTypes[0] == String::class.java &&
-                                (m.returnType == Void.TYPE || m.returnType == Boolean::class.javaPrimitiveType)
-                            val retType = m.returnType
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? {
-                                    if (isStringLoader) {
-                                        val arg0 = chain.args.firstOrNull() as? String
-                                        if (arg0 == null || arg0.contains("jahez_fleets") || arg0.isNotEmpty()) {
-                                            return defaultReturnValueForType(retType)
-                                        }
-                                    }
-                                    return try {
-                                        chain.proceed()
-                                    } catch (t: Throwable) {
-                                        val inner = if (t is java.lang.reflect.InvocationTargetException) (t.targetException ?: t) else t
-                                        if (inner.javaClass.name.startsWith("$pkgPrefix.")) {
-                                            DiagnosticLogger.logStep("PackageCloaker", "Suppressed Promon tamper exception ${inner.javaClass.name}: ${inner.message}")
-                                            defaultReturnValueForType(retType)
-                                        } else {
-                                            throw inner
-                                        }
-                                    }
-                                }
-                            })
-                        }
-                    }
-                }
-                if (clsNativeCount > 0) {
-                    stubbedNativeClasses.add(clsName)
-                }
-            } catch (_: Throwable) {}
-        }
-
-        if (totalNativeStubbed > 0) {
-            isNativeStubbed.set(true)
-        }
-        DiagnosticLogger.logStep(
-            "PackageCloaker",
-            "Scanned Promon package '$pkgPrefix': stubbed $totalNativeStubbed JNI methods, blockedActivities=$dynamicBlockedActivities"
-        )
+        Boolean::class.javaPrimitiveType -> java.lang.Boolean.TRUE
+        Int::class.javaPrimitiveType -> 0
+        Long::class.javaPrimitiveType -> 0L
+        Short::class.javaPrimitiveType -> 0.toShort()
+        Byte::class.javaPrimitiveType -> 0.toByte()
+        Char::class.javaPrimitiveType -> ' '
+        Float::class.javaPrimitiveType -> 0f
+        Double::class.javaPrimitiveType -> 0.0
+        else -> null
     }
 
     /**
@@ -365,50 +240,123 @@ object PackageCloaker {
     /**
      * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk.
      * Note: Stubs JNI native methods FIRST, and only suppresses Runtime.loadLibrary0("jahez_fleets")
-     * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build.
+     * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build (such as 40104).
      */
     fun hookEarly(module: XposedModule, classLoader: ClassLoader) {
-        lastKnownClassLoader = classLoader
-
         // 0. Install Universal Google Maps API Key & PackageManager hooks immediately in hookEarly!
         installMapsAndPackageCloakerHooks(module)
+
+        // 0B. On Saned 6.2.0 (40104), allow libjahez_fleets.so to load normally (required for 40104 on both LSPosed & NPatch)
+        // and ONLY catch the NPatch signature-check exception `fvfeiucoi.r: 01` thrown by `fvfeiucoi.I.a` / `fvfeiucoi.I.b`.
+        if (isFvfeiucoiGuardHooked.compareAndSet(false, true)) {
+            try {
+                val clsI = Class.forName("fvfeiucoi.I", false, classLoader)
+                for (m in clsI.declaredMethods) {
+                    if (m.name == "a" || m.name == "b") {
+                        val retType = m.returnType
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                return try {
+                                    chain.proceed()
+                                } catch (t: Throwable) {
+                                    val inner = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+                                    if (inner.javaClass.name == "fvfeiucoi.r") {
+                                        DiagnosticLogger.logStep("PackageCloaker", "Suppressed fvfeiucoi.r (${inner.message}) in fvfeiucoi.I.${m.name}")
+                                        defaultReturnValueForType(retType)
+                                    } else {
+                                        throw inner
+                                    }
+                                }
+                            }
+                        })
+                    }
+                }
+                DiagnosticLogger.logStep("PackageCloaker", "Installed pass-through fvfeiucoi.r guard on fvfeiucoi.I for 40104")
+            } catch (_: Throwable) {}
+        }
 
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
 
-        // 1. Hook Runtime.loadLibrary0 / load0 FIRST so any attempt to load libjahez_fleets.so is intercepted!
+        // 1. Lvh1.q: Stub native methods on resolved profile's nativeClasses FIRST (c[1] and c[2], e.g. oxxqbaxw.an and oxxqbaxw.e)
+        try {
+            val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
+            var newlyHookedCount = 0
+            for (clsName in nativeClassNames) {
+                if (stubbedNativeClasses.contains(clsName)) continue
+                try {
+                    val cls = Class.forName(clsName, false, classLoader)
+                    var clsHooked = 0
+                    for (m in cls.declaredMethods) {
+                        if (Modifier.isNative(m.modifiers)) {
+                            val retType = m.returnType
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
+                            })
+                            clsHooked++
+                            newlyHookedCount++
+                        }
+                    }
+                    if (clsHooked > 0) {
+                        stubbedNativeClasses.add(clsName)
+                    }
+                } catch (_: Throwable) {}
+            }
+            val allRequiredStubbed = if (resolved != null && resolved.nativeClasses.isNotEmpty()) {
+                stubbedNativeClasses.containsAll(resolved.nativeClasses)
+            } else {
+                stubbedNativeClasses.isNotEmpty()
+            }
+            if (allRequiredStubbed) {
+                isNativeStubbed.set(true)
+            }
+            if (newlyHookedCount > 0) {
+                DiagnosticLogger.logStep("PackageCloaker", "Stubbed $newlyHookedCount JNI methods on $stubbedNativeClasses (allReady=$allRequiredStubbed)")
+            } else if (!isNativeStubbed.get()) {
+                DiagnosticLogger.logWarn(
+                    "PackageCloaker",
+                    "No matching native classes found for vCode=$lastCheckedVersionCode (expected=${resolved?.nativeClasses ?: nativeClassNames})."
+                )
+            }
+        } catch (t: Throwable) {
+            DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
+        }
+
+        // 2. Lvh1.j: Hook loaderClass.loaderMethod(String)
+        if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
+            try {
+                val cls = Class.forName(resolved.loaderClass, false, classLoader)
+                val m = cls.getDeclaredMethod(resolved.loaderMethod, String::class.java)
+                module.hook(m).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? = null
+                })
+                isLoaderHooked.set(true)
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked loader ${resolved.loaderClass}.${resolved.loaderMethod}(String)")
+            } catch (t: Throwable) {
+                DiagnosticLogger.logError("PackageCloaker:Loader", "Error hooking loader ${resolved.loaderClass}.${resolved.loaderMethod}", t)
+            }
+        }
+
+        // 3. Lvh1.o: Hook Runtime.loadLibrary0 (only suppress blockedLibName if its JNI methods were stubbed!)
         if (isRuntimeHooked.compareAndSet(false, true)) {
             try {
+                val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
                 val blockedLibName = profiles.firstOrNull { it.nativeLibName.isNotEmpty() }?.nativeLibName ?: "jahez_fleets"
-                val runtimeHookMethods = setOf("loadLibrary0", "loadLibrary", "load0")
                 for (m in Runtime::class.java.declaredMethods) {
-                    if (m.name in runtimeHookMethods && m.parameterTypes.any { it == String::class.java }) {
+                    if (m.name == targetMethodName && m.parameterTypes.lastOrNull() == String::class.java) {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
-                                val libArg = chain.args.firstOrNull { it is String && (it as String).contains(blockedLibName) } as? String
-                                if (libArg != null) {
-                                    // Dynamically discover caller package (e.g. fvfeiucoi in Saned 6.2.0 / 40104 or any future version)
-                                    val callerCls = chain.args.firstOrNull { it is Class<*> } as? Class<*>
-                                    val activeCl = (chain.args.firstOrNull { it is ClassLoader } as? ClassLoader)
-                                        ?: callerCls?.classLoader
-                                        ?: lastKnownClassLoader
-                                        ?: classLoader
-                                    if (callerCls != null) {
-                                        val callerPkg = callerCls.name.substringBeforeLast('.', "")
-                                        scanAndStubPromonPackage(module, activeCl, callerPkg)
+                                val lastArg = chain.args.lastOrNull() as? String
+                                if (lastArg != null && (lastArg == blockedLibName || lastArg.contains(blockedLibName))) {
+                                    if (isNativeStubbed.get()) {
+                                        DiagnosticLogger.logStep("Runtime.loadLibrary0", "Blocked loading native lib '$lastArg' (JNI methods stubbed)")
+                                        return null
+                                    } else {
+                                        DiagnosticLogger.logWarn(
+                                            "Runtime.loadLibrary0",
+                                            "Allowing '$lastArg' to load because JNI methods were NOT stubbed for vCode=$lastCheckedVersionCode (prevents UnsatisfiedLinkError)"
+                                        )
                                     }
-                                    try {
-                                        for (frame in Thread.currentThread().stackTrace) {
-                                            val cn = frame.className ?: continue
-                                            val pkg = cn.substringBeforeLast('.', "")
-                                            if (!isSystemOrFrameworkPackage(pkg)) {
-                                                scanAndStubPromonPackage(module, activeCl, pkg)
-                                                break
-                                            }
-                                        }
-                                    } catch (_: Throwable) {}
-                                    DiagnosticLogger.logStep("Runtime.${m.name}", "Blocked loading Promon Shield native lib '$libArg'")
-                                    return null
                                 }
                                 return chain.proceed()
                             }
@@ -420,83 +368,12 @@ object PackageCloaker {
             }
         }
 
-        // 2. Scan and stub all classes in the active Promon Shield package (fvfeiucoi, oxxqbaxw, ggk, lrbppeks)
-        try {
-            val candidatePackages = linkedSetOf<String>()
-            if (resolved != null && resolved.loaderClass.contains('.')) {
-                candidatePackages.add(resolved.loaderClass.substringBeforeLast('.'))
-            }
-            for (p in profiles) {
-                if (p.loaderClass.contains('.')) {
-                    val pkg = p.loaderClass.substringBeforeLast('.')
-                    try {
-                        Class.forName(p.loaderClass, false, classLoader)
-                        candidatePackages.add(pkg)
-                    } catch (_: Throwable) {}
-                }
-            }
-            for (pkg in candidatePackages) {
-                scanAndStubPromonPackage(module, classLoader, pkg)
-            }
-        } catch (t: Throwable) {
-            DiagnosticLogger.logError("PackageCloaker:PromonScan", "Error scanning Promon package", t)
-        }
-
-        // 3. Lvh1.q: Also explicitly stub nativeClasses from profiles
-        try {
-            val nativeClassNames = resolved?.nativeClasses ?: profiles.flatMap { it.nativeClasses }
-            for (clsName in nativeClassNames) {
-                if (stubbedNativeClasses.contains(clsName)) continue
-                try {
-                    val cls = Class.forName(clsName, false, classLoader)
-                    var clsHooked = 0
-                    for (m in cls.declaredMethods) {
-                        if (Modifier.isNative(m.modifiers)) {
-                            val mKey = "$clsName#${m.name}/${m.parameterTypes.size}"
-                            if (!stubbedNativeClasses.contains(mKey)) {
-                                val retType = m.returnType
-                                module.hook(m).intercept(object : XposedInterface.Hooker {
-                                    override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
-                                })
-                                stubbedNativeClasses.add(mKey)
-                                clsHooked++
-                            }
-                        }
-                    }
-                    if (clsHooked > 0) {
-                        stubbedNativeClasses.add(clsName)
-                        isNativeStubbed.set(true)
-                    }
-                } catch (_: Throwable) {}
-            }
-        } catch (t: Throwable) {
-            DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
-        }
-
-        // 4. Lvh1.j: Hook loaderClass.loaderMethod(String)
-        if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
-            try {
-                val cls = Class.forName(resolved.loaderClass, false, classLoader)
-                val m = cls.getDeclaredMethod(resolved.loaderMethod, String::class.java)
-                val mKey = "${resolved.loaderClass}#${m.name}/1"
-                if (hookedExceptionGuardMethods.add(mKey)) {
-                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                        override fun intercept(chain: XposedInterface.Chain): Any? = null
-                    })
-                }
-                isLoaderHooked.set(true)
-                DiagnosticLogger.logStep("PackageCloaker", "Hooked loader ${resolved.loaderClass}.${resolved.loaderMethod}(String)")
-            } catch (t: Throwable) {
-                DiagnosticLogger.logError("PackageCloaker:Loader", "Error hooking loader ${resolved.loaderClass}.${resolved.loaderMethod}", t)
-            }
-        }
-
-        // 5. Lvh1.e: Hook Activity.onResume for blockedActivities redirect
+        // 4. Lvh1.e: Hook Activity.onResume for blockedActivities redirect
         if (isBlockedActHooked.compareAndSet(false, true)) {
             try {
                 val blockedActivities = profiles.mapNotNull { it.blockedActivity.takeIf { s -> s.isNotEmpty() } }.toSet()
                 val mainActName = getMainActivityClassName()
-                if (mainActName.isNotEmpty()) {
+                if (blockedActivities.isNotEmpty() && mainActName.isNotEmpty()) {
                     val mResume = Activity::class.java.getDeclaredMethod("onResume")
                     module.hook(mResume).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
@@ -504,16 +381,11 @@ object PackageCloaker {
                             val act = chain.thisObject as? Activity
                             if (act != null) {
                                 val actClsName = act.javaClass.name
-                                val actPkg = actClsName.substringBeforeLast('.', "")
                                 DiagnosticLogger.logStep("Activity.onResume", "Resumed: $actClsName")
-                                val isBlocked = blockedActivities.contains(actClsName) ||
-                                    dynamicBlockedActivities.contains(actClsName) ||
-                                    scannedPromonPackages.contains(actPkg)
-                                if (isBlocked && !act.isFinishing) {
+                                if (blockedActivities.contains(actClsName) && !act.isFinishing) {
                                     try {
                                         DiagnosticLogger.logWarn("BlockedActivity", "Intercepted blocked activity $actClsName -> redirecting to $mainActName")
-                                        val activeCl = lastKnownClassLoader ?: classLoader
-                                        val mainCls = activeCl.loadClass(mainActName)
+                                        val mainCls = classLoader.loadClass(mainActName)
                                         act.startActivity(android.content.Intent(act, mainCls))
                                         act.finish()
                                     } catch (t: Throwable) {
@@ -704,21 +576,6 @@ object PackageCloaker {
                 else -> return
             }
             if (appInfo.packageName != "net.jahez.fleets") return
-
-            // Cloak NPatch / LSPatch metaloader appComponentFactory & debuggable flag from Jahez security inspection
-            if (OrderInterceptor.isMasterRunning) {
-                appInfo.flags = appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    val factory = appInfo.appComponentFactory ?: ""
-                    if (factory.contains("npatch", ignoreCase = true) ||
-                        factory.contains("lspatch", ignoreCase = true) ||
-                        factory.contains("vector", ignoreCase = true) ||
-                        factory.contains("metaloader", ignoreCase = true)
-                    ) {
-                        appInfo.appComponentFactory = "androidx.core.app.CoreComponentFactory"
-                    }
-                }
-            }
 
             if (mapsCertCheckResult == 0) {
                 val srcDir = appInfo.sourceDir

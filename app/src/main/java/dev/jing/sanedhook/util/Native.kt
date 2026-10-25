@@ -75,8 +75,7 @@ object Native {
     private val FALLBACK_VERSION_PROFILES = arrayOf(
         "jahez_fleets", "ggk.am", "ggk.P", "ggk.ar", "net.jahez.fleets.MainActivity", "ggk.z", "b", "loadLibrary0",
         "jahez_fleets", "oxxqbaxw.an", "oxxqbaxw.e", "oxxqbaxw.ao", "net.jahez.fleets.MainActivity", "oxxqbaxw.b", "a", "loadLibrary0",
-        "jahez_fleets", "lrbppeks.U", "lrbppeks.b", "lrbppeks.ak", "net.jahez.fleets.MainActivity", "lrbppeks.am", "a", "loadLibrary0",
-        "jahez_fleets", "fvfeiucoi.I", "fvfeiucoi.ag", "fvfeiucoi.r", "net.jahez.fleets.MainActivity", "fvfeiucoi.ag", "b", "loadLibrary0"
+        "jahez_fleets", "lrbppeks.U", "lrbppeks.b", "lrbppeks.ak", "net.jahez.fleets.MainActivity", "lrbppeks.am", "a", "loadLibrary0"
     )
     private val FALLBACK_GUARD_CLASSES = arrayOf(
         "S86", "yM", "ta3", "xD", "cj6", "tEa", "Ke0", "MV5", "XS", "wRa", "A76", "gM", "B93", "fD", "Jh6"
@@ -186,10 +185,9 @@ object Native {
 
     fun safeS(versionCode: Long): Int = when (versionCode) {
         40093L -> 0
-        40099L, 4099L -> 1
+        40099L, 4099L, 40104L -> 1
         40089L -> 2
-        40104L -> 3
-        else -> 3
+        else -> 1
     }
     fun safeT(): Array<String> = FALLBACK_GUARD_CLASSES
     fun safeU(): Array<String> = FALLBACK_FEATURE_FLAGS
