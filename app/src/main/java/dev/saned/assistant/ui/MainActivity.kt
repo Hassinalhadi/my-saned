@@ -794,11 +794,15 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 val nextRun = !SettingsStore.isMasterRunning(this@MainActivity)
                 SettingsStore.setMasterRunning(this@MainActivity, nextRun)
+                if (nextRun) {
+                    SettingsStore.setAutoAccept(this@MainActivity, true)
+                    if (::chkAutoAccept.isInitialized) chkAutoAccept.isChecked = true
+                }
                 if (::swMaster.isInitialized) swMaster.isChecked = nextRun
                 refreshOrdersLogUI()
                 Toast.makeText(
                     this@MainActivity,
-                    if (nextRun) tr("🟢 تم تشغيل J-Driver", "🟢 J-Driver Enabled") else tr("🔴 تم إيقاف J-Driver مؤقتاً", "🔴 J-Driver Paused"),
+                    if (nextRun) tr("🟢 تم تشغيل J-Driver والقبول التلقائي", "🟢 J-Driver & Auto-Accept Enabled") else tr("🔴 تم إيقاف J-Driver مؤقتاً", "🔴 J-Driver Paused"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -2858,6 +2862,9 @@ class MainActivity : AppCompatActivity() {
 
         if (::tvOrdersSubStatus.isInitialized) {
             val isRun = SettingsStore.isMasterRunning(this)
+            if (isRun && !SettingsStore.isAutoAccept(this)) {
+                SettingsStore.setAutoAccept(this, true)
+            }
             val isAcc = SettingsStore.isAutoAccept(this)
             val isRej = SettingsStore.isAutoReject(this)
             val maxRest = SettingsStore.getMaxDistRest(this)
@@ -3635,6 +3642,35 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(priceRightTv)
 
+        val btnAcceptMissedInApp = TextView(this).apply {
+            text = tr("⚡ قبول", "⚡ Accept")
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = roundedBg("#059669", 12f)
+            setPadding(20, 12, 20, 12)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(12, 0, 0, 0)
+            }
+            setOnClickListener {
+                Toast.makeText(
+                    this@MainActivity,
+                    tr("⚡ جاري قبول الطلب من داخل J-Driver...", "⚡ Accepting order from J-Driver..."),
+                    Toast.LENGTH_SHORT
+                ).show()
+                io.github.libxposed.service.XposedProvider.acceptOrderDirectlyFromJDriver(
+                    this@MainActivity,
+                    order,
+                    forceManual = true
+                )
+            }
+        }
+        row.addView(btnAcceptMissedInApp)
+
         val btnDeleteMissed = TextView(this).apply {
             text = "🗑️"
             textSize = 14.5f
@@ -3999,6 +4035,10 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, isChecked ->
                 updateMasterStatusUI(isChecked)
                 SettingsStore.setMasterRunning(this@MainActivity, isChecked)
+                if (isChecked) {
+                    SettingsStore.setAutoAccept(this@MainActivity, true)
+                    if (::chkAutoAccept.isInitialized) chkAutoAccept.isChecked = true
+                }
             }
         }
         layout.addView(swMaster)

@@ -12,12 +12,30 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.SystemClock
+import android.os.Process
 import dev.saned.assistant.NotificationHelper
 import dev.saned.assistant.OrderModel
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class XposedProvider : ContentProvider() {
 
@@ -50,6 +68,276 @@ class XposedProvider : ContentProvider() {
         private val deletedOrderKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         @Volatile
         private var deletedKeysLoaded: Boolean = false
+
+        @Volatile var ramAuthToken: String = ""
+        @Volatile var ramDriverCipher: String = ""
+        @Volatile var ramLang: String = "en"
+        val inAppAcceptedOrderIds = ConcurrentHashMap.newKeySet<Int>()
+        private val inAppInFlightOrderIds = ConcurrentHashMap.newKeySet<Int>()
+        private val EMPTY_BODY = ByteArray(0).toRequestBody(null)
+
+        private val jdriverAcceptExecutor = Executors.newFixedThreadPool(6) { r ->
+            Thread({
+                try { Process.setThreadPriority(-19) } catch (_: Throwable) {
+                    try { Process.setThreadPriority(-8) } catch (_: Throwable) {}
+                }
+                r.run()
+            }, "JDriver-InApp-Accept").apply {
+                isDaemon = true
+                priority = Thread.MAX_PRIORITY
+            }
+        }.also { exec ->
+            repeat(6) { exec.submit {} }
+        }
+
+        private val jdriverHttpClient: OkHttpClient by lazy {
+            try {
+                val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+                })
+                val sslCtx = SSLContext.getInstance("TLS")
+                sslCtx.init(null, trustAll, SecureRandom())
+                OkHttpClient.Builder()
+                    .sslSocketFactory(sslCtx.socketFactory, trustAll[0] as X509TrustManager)
+                    .hostnameVerifier { _, _ -> true }
+                    .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                    .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+                    .connectTimeout(2500, TimeUnit.MILLISECONDS)
+                    .readTimeout(2800, TimeUnit.MILLISECONDS)
+                    .writeTimeout(2500, TimeUnit.MILLISECONDS)
+                    .retryOnConnectionFailure(true)
+                    .build()
+            } catch (_: Throwable) {
+                OkHttpClient()
+            }
+        }
+
+        fun cacheAuthCredentials(ctx: Context, token: String, driverCipher: String = "", lang: String = "") {
+            try {
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val ed = prefs.edit()
+                val cleanTok = token.trim()
+                val cleanCiph = driverCipher.trim()
+                val cleanLang = lang.trim()
+                if (cleanTok.isNotEmpty()) {
+                    ramAuthToken = cleanTok
+                    ed.putString("cached_jahez_auth_token", cleanTok)
+                }
+                if (cleanCiph.isNotEmpty()) {
+                    ramDriverCipher = cleanCiph
+                    ed.putString("cached_jahez_driver_cipher", cleanCiph)
+                }
+                if (cleanLang.isNotEmpty()) {
+                    ramLang = cleanLang
+                    ed.putString("cached_jahez_lang", cleanLang)
+                }
+                ed.apply()
+            } catch (_: Throwable) {}
+        }
+
+        private fun resolveJDriverAuthToken(ctx: Context): String {
+            if (ramAuthToken.isNotEmpty()) return ramAuthToken
+            try {
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val saved = prefs.getString("cached_jahez_auth_token", "")?.trim() ?: ""
+                if (saved.isNotEmpty()) {
+                    ramAuthToken = saved
+                    return saved
+                }
+            } catch (_: Throwable) {}
+            try {
+                val f = File("/data/local/tmp/saned_auth_token.txt")
+                if (f.exists()) {
+                    val t = f.readText().trim()
+                    if (t.isNotEmpty()) {
+                        ramAuthToken = t
+                        return t
+                    }
+                }
+            } catch (_: Throwable) {}
+            return ""
+        }
+
+        private fun resolveJDriverCipher(ctx: Context): String {
+            if (ramDriverCipher.isNotEmpty()) return ramDriverCipher
+            try {
+                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                val saved = prefs.getString("cached_jahez_driver_cipher", "")?.trim() ?: ""
+                if (saved.isNotEmpty()) {
+                    ramDriverCipher = saved
+                    return saved
+                }
+            } catch (_: Throwable) {}
+            return ""
+        }
+
+        private fun readDoublePrefSafe(prefs: android.content.SharedPreferences, k1: String, k2: String): Double {
+            val raw = prefs.all[k1] ?: prefs.all[k2] ?: return 0.0
+            val v = raw.toString().trim().toDoubleOrNull() ?: 0.0
+            return if (v.isNaN() || v < 0.0) 0.0 else v
+        }
+
+        private fun shouldInAppAutoAcceptOrder(ctx: Context, order: OrderModel): Boolean {
+            val orderIdInt = if (order.id > 0) order.id else (order.reference.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0)
+            if (orderIdInt <= 0) return false
+            if (inAppAcceptedOrderIds.contains(orderIdInt) || inAppInFlightOrderIds.contains(orderIdInt)) return false
+
+            val lowSt = order.status.lowercase(Locale.US)
+            val lowReason = order.decisionReason.lowercase(Locale.US)
+            // Already accepted, delivered, cancelled, or taken by another driver
+            if (lowSt.startsWith("accepted") || lowSt.contains("accepted ✅") || lowSt.contains("مقبول") ||
+                lowSt.contains("تم قبول") || lowSt.contains("picked") ||
+                lowSt.contains("deliver") || lowSt.contains("complet") || lowSt.contains("cancel") ||
+                lowSt.contains("آخر") || lowReason.contains("already accepted") || lowReason.contains("سائق آخر")) {
+                return false
+            }
+
+            val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+            val masterOn = prefs.getBoolean("master_running", prefs.getBoolean("enabled", true))
+            if (!masterOn) return false
+
+            val minPrice = readDoublePrefSafe(prefs, "min_price", "min_order_price")
+            val maxRest = readDoublePrefSafe(prefs, "max_dist_rest", "max_dist_to_restaurant")
+            val maxCust = readDoublePrefSafe(prefs, "max_dist_cust", "max_dist_restaurant_to_customer")
+            val fixLocUnknown = prefs.getBoolean("fix_location_unknown", true)
+
+            if (minPrice > 0.0 && (order.price <= 0.0 || order.price < minPrice)) return false
+            if (maxRest > 0.0) {
+                if (order.distanceKm <= 0.0 && !fixLocUnknown) return false
+                if (order.distanceKm > maxRest) return false
+            }
+            if (maxCust > 0.0) {
+                if (order.customerDistanceKm <= 0.0 && !fixLocUnknown) return false
+                if (order.customerDistanceKm > maxCust) return false
+            }
+            return true
+        }
+
+        fun acceptOrderDirectlyFromJDriver(ctx: Context, order: OrderModel, forceManual: Boolean = false) {
+            val appCtx = ctx.applicationContext ?: ctx
+            val orderIdInt = if (order.id > 0) order.id else (order.reference.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0)
+            if (orderIdInt <= 0) return
+            if (!forceManual && !shouldInAppAutoAcceptOrder(appCtx, order)) return
+            if (!inAppInFlightOrderIds.add(orderIdInt)) return
+
+            val token = resolveJDriverAuthToken(appCtx)
+            if (token.isEmpty()) {
+                inAppInFlightOrderIds.remove(orderIdInt)
+                appendDiagLog(appCtx, "[JDriver-InApp] Cannot accept #$orderIdInt: auth token not synced yet")
+                return
+            }
+            val cipher = resolveJDriverCipher(appCtx)
+            val rawTok = if (token.startsWith("Bearer ", ignoreCase = true)) token.substring(7).trim() else token.trim()
+            val url = "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt"
+
+            jdriverAcceptExecutor.execute {
+                try {
+                    val wonAtom = AtomicBoolean(false)
+                    val winCodeRef = AtomicReference<Int?>(null)
+                    val winBodyRef = AtomicReference<String>("")
+                    val doneLatch = CountDownLatch(1)
+                    val finishedStreams = AtomicInteger(0)
+                    val streamCount = 4
+
+                    fun fireStream(idx: Int, delayMs: Long) {
+                        jdriverAcceptExecutor.execute {
+                            if (delayMs > 0L) {
+                                try { Thread.sleep(delayMs) } catch (_: Throwable) {}
+                            }
+                            if (wonAtom.get()) {
+                                if (finishedStreams.incrementAndGet() >= streamCount) doneLatch.countDown()
+                                return@execute
+                            }
+                            var attempt = 0
+                            while (attempt < 2 && !wonAtom.get()) {
+                                attempt++
+                                try {
+                                    val rb = Request.Builder().url(url).put(EMPTY_BODY)
+                                        .header("Authorization", "Bearer $rawTok")
+                                        .header("Accept-Language", ramLang.ifEmpty { "en" })
+                                        .header("User-Agent", "okhttp/5.1.0")
+                                    if (cipher.isNotEmpty()) rb.header("x-unique-Identifier", cipher)
+                                    val resp = jdriverHttpClient.newCall(rb.build()).execute()
+                                    val code = resp.code
+                                    val bodyStr = try { resp.body?.string() ?: "" } catch (_: Throwable) { "" }
+                                    resp.close()
+                                    if (code in 200..299) {
+                                        if (wonAtom.compareAndSet(false, true)) {
+                                            winCodeRef.set(code)
+                                            winBodyRef.set(bodyStr)
+                                            inAppAcceptedOrderIds.add(orderIdInt)
+                                            appendDiagLog(appCtx, "[JDriver-InApp] ✅ Accepted #$orderIdInt directly inside J-Driver [stream#$idx] (HTTP $code)")
+                                            doneLatch.countDown()
+                                        }
+                                        break
+                                    }
+                                    if (code == 429 || code in 500..599) {
+                                        try { Thread.sleep(70L) } catch (_: Throwable) {}
+                                        continue
+                                    }
+                                    break
+                                } catch (_: Throwable) {}
+                            }
+                            if (finishedStreams.incrementAndGet() >= streamCount) doneLatch.countDown()
+                        }
+                    }
+
+                    fireStream(0, 0L)
+                    fireStream(1, 8L)
+                    fireStream(2, 20L)
+                    fireStream(3, 85L)
+
+                    try { doneLatch.await(3000L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
+
+                    val winCode = winCodeRef.get()
+                    if (winCode != null) {
+                        var updatedOrder = order.copy(
+                            id = orderIdInt,
+                            status = "Accepted ✅",
+                            decisionReason = "Accepted in J-Driver ⚡ (HTTP $winCode)"
+                        )
+                        // Fetch full customer phone & foodPrice directly from J-Driver
+                        try {
+                            val dReq = Request.Builder().url("https://gateway.saned.io/api/v1/dispatch/$orderIdInt").get()
+                                .header("Authorization", "Bearer $rawTok")
+                                .header("Accept-Language", ramLang.ifEmpty { "en" })
+                                .header("User-Agent", "okhttp/5.1.0")
+                                .apply { if (cipher.isNotEmpty()) header("x-unique-Identifier", cipher) }
+                                .build()
+                            val dResp = jdriverHttpClient.newCall(dReq).execute()
+                            val dBody = try { dResp.body?.string() ?: "" } catch (_: Throwable) { "" }
+                            dResp.close()
+                            if (dResp.code in 200..299 && dBody.trim().startsWith("{")) {
+                                val j = JSONObject(dBody)
+                                val dObj = j.optJSONObject("data") ?: j
+                                val payObj = dObj.optJSONObject("payment") ?: j.optJSONObject("payment")
+                                val clObj = dObj.optJSONObject("client") ?: dObj.optJSONObject("customer")
+                                val refVal = dObj.optString("referenceId", dObj.optString("reference", "")).trim()
+                                val fp = payObj?.optDouble("foodPrice", payObj.optDouble("collectionAmount", 0.0))
+                                    ?: dObj.optDouble("foodPrice", dObj.optDouble("collectionAmount", 0.0))
+                                val ca = payObj?.optDouble("collectionAmount", 0.0) ?: dObj.optDouble("collectionAmount", 0.0)
+                                val ph = (clObj?.optString("clientPhone", clObj.optString("contactNumber", "")) ?: "")
+                                    .ifEmpty { dObj.optString("clientPhone", dObj.optString("contactNumber", "")) }.trim()
+                                val nm = (clObj?.optString("subscriberName", clObj.optString("name", "")) ?: "")
+                                    .ifEmpty { dObj.optString("subscriberName", "") }.trim()
+                                updatedOrder = updatedOrder.copy(
+                                    reference = if (refVal.isNotEmpty()) refVal else updatedOrder.reference,
+                                    foodPrice = if (!fp.isNaN() && fp > 0.0) fp else updatedOrder.foodPrice,
+                                    cashAmount = if (!ca.isNaN() && ca > 0.0) ca else updatedOrder.cashAmount,
+                                    customerPhone = if (ph.isNotEmpty()) ph else updatedOrder.customerPhone,
+                                    customerName = if (nm.isNotEmpty()) nm else updatedOrder.customerName
+                                )
+                            }
+                        } catch (_: Throwable) {}
+                        saveOrderAndNotify(appCtx, updatedOrder, notifyUser = true)
+                    }
+                } finally {
+                    inAppInFlightOrderIds.remove(orderIdInt)
+                }
+            }
+        }
 
         private fun ensureDeletedKeysLoaded(ctx: Context) {
             if (deletedKeysLoaded) return
@@ -539,6 +827,10 @@ class XposedProvider : ContentProvider() {
                     ctx.sendBroadcast(Intent("dev.saned.assistant.UI_REFRESH_ORDERS"))
                 }
 
+                if (shouldInAppAutoAcceptOrder(ctx, mergedOrder)) {
+                    acceptOrderDirectlyFromJDriver(ctx, mergedOrder, forceManual = false)
+                }
+
                 if (notifyUser) {
                     val isAccepted = !mergedOrder.isMissedOrRejected &&
                         (mergedOrder.status.contains("Accept", ignoreCase = true) ||
@@ -602,11 +894,16 @@ class XposedProvider : ContentProvider() {
                         if (matchIdx >= 0) workingList.removeAt(matchIdx)
                         continue
                     }
-                    if (matchIdx >= 0) {
+                    val finalBatchModel = if (matchIdx >= 0) {
                         val merged = mergeWithExistingModel(incomingModel, workingList[matchIdx])
                         workingList[matchIdx] = merged
+                        merged
                     } else {
                         workingList.add(0, incomingModel)
+                        incomingModel
+                    }
+                    if (shouldInAppAutoAcceptOrder(ctx, finalBatchModel)) {
+                        acceptOrderDirectlyFromJDriver(ctx, finalBatchModel, forceManual = false)
                     }
                 }
 
@@ -706,11 +1003,13 @@ class XposedProvider : ContentProvider() {
             try {
                 val tok = extras?.getString("auth_token") ?: arg ?: ""
                 val host = extras?.getString("api_host") ?: ""
-                val prefs = ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
-                val ed = prefs.edit()
-                if (tok.isNotEmpty()) ed.putString("cached_jahez_auth_token", tok)
-                if (host.isNotEmpty()) ed.putString("cached_jahez_api_host", host)
-                ed.apply()
+                val ciph = extras?.getString("driver_cipher") ?: ""
+                val lang = extras?.getString("lang") ?: ""
+                cacheAuthCredentials(ctx, tok, ciph, lang)
+                if (host.isNotEmpty()) {
+                    ctx.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
+                        .edit().putString("cached_jahez_api_host", host).apply()
+                }
                 bundle.putBoolean("ok", true)
             } catch (_: Throwable) {}
             return bundle
@@ -718,12 +1017,21 @@ class XposedProvider : ContentProvider() {
 
         if (method == "logOrder" && extras != null) {
             try {
+                val tok = extras.getString("auth_token") ?: ""
+                val ciph = extras.getString("driver_cipher") ?: ""
+                val lang = extras.getString("lang") ?: ""
+                if (tok.isNotEmpty() || ciph.isNotEmpty()) {
+                    cacheAuthCredentials(ctx, tok, ciph, lang)
+                }
                 val orderJsonStr = extras.getString("order_json")
                 val notifyUser = extras.getBoolean("notify_user", true)
                 if (!orderJsonStr.isNullOrEmpty()) {
                     val order = OrderModel.fromJson(JSONObject(orderJsonStr))
                     saveOrderAndNotify(ctx, order, notifyUser = notifyUser)
                     bundle.putBoolean("ok", true)
+                    if (inAppAcceptedOrderIds.isNotEmpty()) {
+                        bundle.putIntArray("jdriver_accepted_ids", inAppAcceptedOrderIds.toIntArray())
+                    }
                     return bundle
                 }
             } catch (_: Throwable) {}

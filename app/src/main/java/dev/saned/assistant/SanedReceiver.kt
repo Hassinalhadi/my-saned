@@ -35,8 +35,20 @@ class SanedReceiver : BroadcastReceiver() {
       val customerPhone = intent.getStringExtra("customer_phone") ?: ""
       val address = intent.getStringExtra("address") ?: ""
       val cashAmount = intent.getDoubleExtra("cash_amount", 0.0)
+      val foodPrice = intent.getDoubleExtra("food_price", cashAmount)
+      val paymentMethod = intent.getStringExtra("payment_method") ?: ""
+      val pLat = intent.getDoubleExtra("pickup_lat", 0.0)
+      val pLng = intent.getDoubleExtra("pickup_lng", 0.0)
+      val dLat = intent.getDoubleExtra("dest_lat", 0.0)
+      val dLng = intent.getDoubleExtra("dest_lng", 0.0)
       val currency = intent.getStringExtra("currency") ?: "SAR"
       val notifyUser = intent.getBooleanExtra("notify_user", true)
+      val tok = intent.getStringExtra("auth_token") ?: ""
+      val ciph = intent.getStringExtra("driver_cipher") ?: ""
+      val lang = intent.getStringExtra("lang") ?: ""
+      if (tok.isNotEmpty() || ciph.isNotEmpty()) {
+          XposedProvider.cacheAuthCredentials(context, tok, ciph, lang)
+      }
 
       val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
 
@@ -52,8 +64,14 @@ class SanedReceiver : BroadcastReceiver() {
           price = price,
           currency = currency,
           cashAmount = cashAmount,
+          foodPrice = if (foodPrice > 0.0) foodPrice else cashAmount,
+          paymentMethod = paymentMethod,
           distanceKm = dist,
           customerDistanceKm = custDist,
+          pickupLat = pLat,
+          pickupLng = pLng,
+          destLat = dLat,
+          destLng = dLng,
           decisionReason = reason,
           time = timeStr
       )

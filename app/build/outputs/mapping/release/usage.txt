@@ -23998,7 +23998,6 @@ dev.saned.assistant.OrderInterceptor$hookUI$2
 dev.saned.assistant.OrderInterceptor$hookWebSocket$1
 dev.saned.assistant.OrderInterceptor$hookWebSocket$2
 dev.saned.assistant.OrderInterceptor$onTargetActivityActive$1
-dev.saned.assistant.OrderInterceptor$startScreenWatcher$1
 dev.saned.assistant.OrderInterceptor:
     private static final java.lang.String ENGINE_LIC_ALPHABET
     private static final java.lang.String FLOATING_BUBBLE_TAG
@@ -24007,12 +24006,10 @@ dev.saned.assistant.OrderInterceptor:
     private static final java.lang.String LEGACY_BUBBLE_TAG_1
     private static final java.lang.String LEGACY_BUBBLE_TAG_2
     private static volatile int cachedApkSigVerified
-    private static boolean isScreenWatcherActive
     private static long lastPingDbScanRealtime
     private static long lastUiResumeSyncRealtime
     public static final synthetic void access$captureRequestMetadata(dev.saned.assistant.OrderInterceptor,java.lang.Object)
     public static final synthetic boolean access$findAndTriggerOrder(dev.saned.assistant.OrderInterceptor,android.view.View,android.app.Activity,long)
-    public static final synthetic android.os.Handler access$getMainHandler$p()
     public static final synthetic java.util.Set access$getRecentMemoryJsonHashes$p()
     public static final synthetic dev.saned.assistant.OrderInterceptor$isInsideJsonHook$1 access$isInsideJsonHook$p()
     public static final synthetic void access$onTargetActivityActive(dev.saned.assistant.OrderInterceptor,android.app.Activity)
@@ -24022,12 +24019,10 @@ dev.saned.assistant.OrderInterceptor:
     public static synthetic void cacheOrderPayment$default(dev.saned.assistant.OrderInterceptor,java.lang.String,double,double,java.lang.String,int,java.lang.Object)
     private final void captureRequestMetadata(java.lang.Object)
     public static synthetic void checkAndSetToken$default(dev.saned.assistant.OrderInterceptor,java.lang.String,java.lang.String,int,java.lang.Object)
-    static synthetic okhttp3.Request executeDirectApiCall$lambda$103$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
-    public final java.util.List getAllRootViews()
+    static synthetic okhttp3.Request executeDirectApiCall$lambda$110$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
+    static synthetic void extractAndProcessOrderFromIntent$default(dev.saned.assistant.OrderInterceptor,android.content.Intent,android.app.Activity,int,java.lang.Object)
     public final android.content.Context getAppContext()
     public final java.lang.String getAppUiLanguage()
-    private final java.lang.Object getCachedWmgInstance()
-    private final java.lang.reflect.Field getCachedWmgViewsField()
     public final java.util.List getCandidateApiHosts()
     public final long getDetectedJahezVersionCode()
     public final int getJdrvEngineMagic()
@@ -24076,20 +24071,15 @@ dev.saned.assistant.OrderInterceptor:
     public final void onActivityCreated(android.app.Activity)
     public final void onActivityResumed(android.app.Activity)
     public final void onDialogShown(android.app.Dialog)
-    private static final void onDialogShown$lambda$17()
     private static final void onDialogShown$lambda$18()
+    private static final void onDialogShown$lambda$19()
     public final void onOrderActivityPostCreate(android.app.Activity,int)
     private final void onTargetActivityActive(android.app.Activity)
     private final void processHttpResponse(java.lang.Object)
     private final byte[] reconstructExpectedCertSha256()
     public final void requestSettingsFromAssistant()
-    public final void scanAllRoots(java.util.List)
-    public static synthetic void scanAllRoots$default(dev.saned.assistant.OrderInterceptor,java.util.List,int,java.lang.Object)
     private final void scanExistingActivitiesInActivityThread()
-    private static final void scanExistingActivitiesInActivityThread$lambda$30(android.app.Activity)
-    private final boolean scanHomeScreenOrderCards(android.view.View,android.app.Activity)
-    private static final void scanHomeScreenOrderCards$lambda$134(kotlin.jvm.internal.Ref$ObjectRef)
-    private static final void scanHomeScreenOrderCards$traverseList(kotlin.jvm.internal.Ref$ObjectRef,kotlin.jvm.internal.Ref$ObjectRef,android.view.View)
+    private static final void scanExistingActivitiesInActivityThread$lambda$31(android.app.Activity)
     public final void setActivePolling(boolean)
     public final void setAppContext(android.content.Context)
     public final void setAppUiLanguage(java.lang.String)
@@ -24131,7 +24121,6 @@ dev.saned.assistant.OrderInterceptor:
     public final void setVerifiedAcceptMethod(java.lang.String)
     public final void setVerifiedAcceptUrlTemplate(java.lang.String)
     static synthetic android.widget.TextView showFloatingQuickControlDialog$makeToggleBtn$default(android.app.Activity,float,android.view.View,kotlin.jvm.functions.Function0,kotlin.jvm.functions.Function0,java.lang.String,kotlin.jvm.functions.Function0,int,java.lang.Object)
-    public final void startScreenWatcher()
     static synthetic boolean startsWithDriverIdPrefix$default(dev.saned.assistant.OrderInterceptor,byte[],int,int,int,java.lang.Object)
     private final boolean verifyOfficialModuleApkSignature()
 dev.saned.assistant.OrderModel:
@@ -24221,6 +24210,8 @@ dev.saned.assistant.ui.MainActivity:
     private final byte[] reconstructOfficialCertSha256()
     private final boolean verifyOfficialApkSignature()
 io.github.libxposed.service.XposedProvider$Companion:
+    public static synthetic void acceptOrderDirectlyFromJDriver$default(io.github.libxposed.service.XposedProvider$Companion,android.content.Context,dev.saned.assistant.OrderModel,boolean,int,java.lang.Object)
+    public static synthetic void cacheAuthCredentials$default(io.github.libxposed.service.XposedProvider$Companion,android.content.Context,java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
     public final void saveOrderAndNotify(android.content.Context,java.lang.String,boolean)
     public static synthetic void saveOrderAndNotify$default(io.github.libxposed.service.XposedProvider$Companion,android.content.Context,java.lang.String,boolean,int,java.lang.Object)
 io.github.libxposed.service.XposedProvider:
@@ -26546,7 +26537,6 @@ kotlin.collections.CollectionsKt___CollectionsJvmKt:
     public static final synthetic java.lang.Float min(java.lang.Iterable)
     public static final synthetic java.lang.Object minBy(java.lang.Iterable,kotlin.jvm.functions.Function1)
     public static final synthetic java.lang.Object minWith(java.lang.Iterable,java.util.Comparator)
-    public static final void reverse(java.util.List)
     private static final java.math.BigDecimal sumOfBigDecimal(java.lang.Iterable,kotlin.jvm.functions.Function1)
     private static final java.math.BigInteger sumOfBigInteger(java.lang.Iterable,kotlin.jvm.functions.Function1)
     public static final java.util.SortedSet toSortedSet(java.lang.Iterable)
@@ -26722,7 +26712,6 @@ kotlin.collections.CollectionsKt___CollectionsKt:
     public static final java.lang.Object reduceRightOrNull(java.util.List,kotlin.jvm.functions.Function2)
     public static final java.lang.Iterable requireNoNulls(java.lang.Iterable)
     public static final java.util.List requireNoNulls(java.util.List)
-    public static final java.util.List reversed(java.lang.Iterable)
     public static final java.util.List runningFold(java.lang.Iterable,java.lang.Object,kotlin.jvm.functions.Function2)
     public static final java.util.List runningFoldIndexed(java.lang.Iterable,java.lang.Object,kotlin.jvm.functions.Function3)
     public static final java.util.List runningReduce(java.lang.Iterable,kotlin.jvm.functions.Function2)
@@ -26766,7 +26755,6 @@ kotlin.collections.CollectionsKt___CollectionsKt:
     public static final double[] toDoubleArray(java.util.Collection)
     public static final float[] toFloatArray(java.util.Collection)
     public static final java.util.HashSet toHashSet(java.lang.Iterable)
-    public static final int[] toIntArray(java.util.Collection)
     public static final long[] toLongArray(java.util.Collection)
     public static final java.util.Set toMutableSet(java.lang.Iterable)
     public static final short[] toShortArray(java.util.Collection)
@@ -30891,7 +30879,6 @@ okhttp3.OkHttpClient$Builder:
     public final okhttp3.OkHttpClient$Builder minWebSocketMessageToCompress(long)
     public final java.util.List networkInterceptors()
     public final okhttp3.OkHttpClient$Builder pingInterval(java.time.Duration)
-    public final okhttp3.OkHttpClient$Builder protocols(java.util.List)
     public final okhttp3.OkHttpClient$Builder proxy(java.net.Proxy)
     public final okhttp3.OkHttpClient$Builder proxyAuthenticator(okhttp3.Authenticator)
     public final okhttp3.OkHttpClient$Builder proxySelector(java.net.ProxySelector)
@@ -30954,7 +30941,6 @@ okhttp3.OkHttpClient:
     public final javax.net.SocketFactory -deprecated_socketFactory()
     public final javax.net.ssl.SSLSocketFactory -deprecated_sslSocketFactory()
     public final int -deprecated_writeTimeoutMillis()
-    public void <init>()
     public static final synthetic javax.net.ssl.SSLSocketFactory access$getSslSocketFactoryOrNull$p(okhttp3.OkHttpClient)
     public final okhttp3.internal.tls.CertificateChainCleaner certificateChainCleaner()
     public final long minWebSocketMessageToCompress()
@@ -38209,6 +38195,7 @@ androidx.transition.Scene
 androidx.transition.Transition$1:
     public static boolean sSetFrameFetched
     public static java.lang.reflect.Method sSetFrameMethod
+    public static final void acceptOrderDirectlyFromJDriver$lambda$8$fireStream(int,int,long,android.content.Context,java.lang.String,java.lang.String,java.lang.String,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicBoolean,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference)
     public static int addFailReason()
     public static void attachServiceBinder(android.content.Context,android.os.IBinder)
     public static void checkBoundsIndexes$kotlin_stdlib()
@@ -38223,6 +38210,7 @@ androidx.transition.Transition$1:
     public final com.google.crypto.tink.shaded.protobuf.Internal$EnumLite findValueByNumber(int)
     public static kotlin.ranges.IntProgression fromClosedRange()
     public static kotlin.ranges.IntRange getEMPTY()
+    public static java.util.concurrent.ConcurrentHashMap$KeySetView getInAppAcceptedOrderIds()
     public static java.security.KeyFactory getInstance()
     public static java.security.KeyPairGenerator getInstance()
     public static java.security.MessageDigest getInstance()
@@ -38230,7 +38218,11 @@ androidx.transition.Transition$1:
     public static javax.crypto.Cipher getInstance()
     public static javax.crypto.KeyAgreement getInstance()
     public static javax.crypto.Mac getInstance()
+    public static okhttp3.OkHttpClient getJdriverHttpClient()
     public static java.util.Comparator getORDER_BY_NAME$okhttp()
+    public static java.lang.String getRamAuthToken()
+    public static java.lang.String getRamDriverCipher()
+    public static java.lang.String getRamLang()
     public static android.os.IBinder getServiceBinder()
     public float getTransitionAlpha(android.view.View)
     public static int indexOfElement(int,java.lang.String,java.lang.String)
@@ -38242,9 +38234,14 @@ androidx.transition.Transition$1:
     public static int orderedHashCode$kotlin_stdlib()
     public static java.lang.String pickBestReference()
     public static java.lang.String pin(java.security.cert.X509Certificate)
+    public static java.lang.String resolveJDriverAuthToken()
+    public static java.lang.String resolveJDriverCipher()
     public void saveNonTransitionAlpha()
     public static java.lang.String secondaryName()
     public void setLeftTopRightBottom(android.view.View,int,int,int,int)
+    public static void setRamAuthToken(java.lang.String)
+    public static void setRamDriverCipher(java.lang.String)
+    public static void setRamLang()
     public void setTransitionAlpha(android.view.View,float)
     public static okio.ByteString sha1Hash()
     public static okio.ByteString sha256Hash(java.security.cert.X509Certificate)
@@ -40848,7 +40845,7 @@ com.google.crypto.tink.aead.AesGcmKey$1:
     public static final int mod(int,int)
     public static varargs java.util.ArrayList mutableListOf(java.lang.Object[])
     public static java.util.Comparator naturalOrder()
-    public static final java.util.List optimizeReadOnlyList(java.util.ArrayList)
+    public static final java.util.List optimizeReadOnlyList(java.util.List)
     public static int random(kotlin.random.Random$Default,kotlin.ranges.IntRange)
     public static final java.util.Set setOf(java.lang.Object)
     public static final void terminateCollectionToArray(int,java.lang.Object[])
@@ -42565,9 +42562,6 @@ dev.saned.assistant.HookEntry:
     public static boolean supportsPackageReadyCallback()
 dev.saned.assistant.LocationEngine$$InternalSyntheticLambda$2$95d462dee273dc1e06ea4d5dd865af8a1055671ab9c1e303e6542e779e8dc600$0
 dev.saned.assistant.LocationEngine$$InternalSyntheticLambda$5$73cf87d2afb52bf3a5e89fe8807c1ba3dea6b8fd4764bd824d8c164b75ed45d1$0
-dev.saned.assistant.LocationEngine$cachedFieldsMaskField$2:
-    public static final dev.saned.assistant.LocationEngine$cachedFieldsMaskField$2 INSTANCE$3
-    public static final dev.saned.assistant.LocationEngine$cachedFieldsMaskField$2 INSTANCE$4
 dev.saned.assistant.LocationEngine$cachedMockField1$2
 dev.saned.assistant.LocationEngine$cachedMockField2$2
 dev.saned.assistant.LocationEngine$hook$10$$InternalSyntheticLambda$2$c37f623950f8422232eab42d8e8e465d4ad1386a60ba95fedfb0aa033477cd9c$0
@@ -42615,21 +42609,22 @@ dev.saned.assistant.NotificationHelper:
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$2$c12f5f6e71b9011ae1f7580de47954d21f59265c607d046d484198d60ab9577f$1
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$84416cf5f4da04206ca47f570b855e34662b8ba67bbae14e912da97c167fd075$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$8ddd4452859e28480ba4d006ce9b759d31b0f294cc51a7e1b636dd545c9906d4$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a36ccbc2133a3956013aea9ed9ddd02fe4cb4f97a4b9d542eb4b8d2c6083d6f4$0:
+    private static boolean verify$io$github$libxposed$service$XposedProvider$Companion$jdriverHttpClient$2$$InternalSyntheticLambda$2$89a1ccff2f52f9c7d31d069a4f6d8cd5c7e4dbe34cbb8877958aaa0858395ded$0()
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a89b127b27b01e43492dd23d1ec516c37b24513222957fda5e0dea0a5fb4bc7f$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$abfa8cb93b601c54812267776d24f6deacf8a3369fd504f8aafd9ce35cd35c05$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$d222cb0d79118909225329ba1bb379faad1bcc017cce65107986b85c47453f40$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$62fbbc963d78e7ef550cdf2598511e82ec8c1d6db78e385fc0b572e291d21e96$2
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$749921a03ae96f5d501ac8e1a725c9ccadcff2331a2090cf2c13c51fc0d5b96c$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$26de514dccc5c6cbf05cfdc8a5d8aa32c30731feb471c96cc596ba1baf2fc6b4$2
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$2c0b1c06773a46f35319494126842f400d3b94c58b9ed595834a31d110984823$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$724a42584b5965d0d73014ce066a02536ed091049164a7f06206f90223cec2af$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c06a8778d8282d0120a10b3a80c00495a03e1dbe01b3e237c7f8b6e3ceca3e50$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$4
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$5
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$7
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$8caa9d4df9b9928a884b4180c981b1366454a6fd357f365e44e5cd0ab06a71f7$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$9c3e9883761dce665e6e8be2acbe8ae2baa1c153ed4861ce3d6ea6317cb4fe46$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$a87a48e10fb433ab20a045122f8345165d08fec25ddd3577e71ed2ca842b77d0$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$d4f86a8770d532e694840d0b8df863e120c8655d63159ed36215e707ada2b2c5$0
 dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
-    public static java.lang.String getDecision()
     public static long getTimestampRealtime()
     public static boolean getWasInBackground()
 dev.saned.assistant.OrderInterceptor$cachedWmgInstance$2
@@ -42639,7 +42634,7 @@ dev.saned.assistant.OrderInterceptor$checkRemoteKillSwitchFromSaned$1:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$evaluateAndProcessOrder$2:
     public final java.lang.Object invoke$1()
-dev.saned.assistant.OrderInterceptor$executeDirectApiCall$1$2:
+dev.saned.assistant.OrderInterceptor$executeDirectApiCall$2$2:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$fetchOrderCustomerDetailsAsync$1:
     public int label
@@ -42674,10 +42669,9 @@ dev.saned.assistant.OrderInterceptor$simulateSwipe$1:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$startActiveServerPolling$1:
     public final java.lang.Object invoke$1()
+dev.saned.assistant.OrderInterceptor$startScreenWatcher$1
 dev.saned.assistant.OrderInterceptor$verifyRemoteControlSignatureInEngine$fullHex$1
 dev.saned.assistant.OrderInterceptor:
-    public static final kotlin.SynchronizedLazyImpl cachedWmgInstance$delegate
-    public static final kotlin.SynchronizedLazyImpl cachedWmgViewsField$delegate
     public static final java.util.List candidateApiHosts
     public static volatile okhttp3.OkHttpClient capturedAppHttpClient
     public static volatile long detectedJahezVersionCode
@@ -42691,8 +42685,8 @@ dev.saned.assistant.OrderInterceptor:
     public static final java.util.Set recentMemoryJsonHashes
     public static volatile java.lang.String verifiedAcceptMethod
     public static volatile java.lang.String verifiedAcceptUrlTemplate
-    public static synthetic boolean $r8$lambda$n4E2bzpfCuBD5tCF-jGnbd2xucQ()
-    public static final synthetic void access$fetchOrderCustomerDetailsAsync(dev.saned.assistant.OrderInterceptor,java.lang.String)
+    public static synthetic boolean $r8$lambda$uEP00uAEZsGOr2Ow7BygWwpicC0()
+    public static final synthetic void access$fetchOrderCustomerDetailsAsync(java.lang.String)
     public static void acquireWakeLock()
     public static void applySettingsFromIntent()
     public static void attachFloatingOverlayToActivity(android.app.Activity)
@@ -42702,13 +42696,14 @@ dev.saned.assistant.OrderInterceptor:
     public static void closeDispatchActivitySafely(android.app.Activity,boolean)
     public static int countCurrentActiveOrders()
     public static okhttp3.OkHttpClient createUnsafeOkHttpClient()
-    public static final boolean createUnsafeOkHttpClient$lambda$136()
-    public static final void executeDirectApiCall$lambda$103$runSingleStream(int,int,int,long,android.content.Context,java.lang.String,java.lang.String,java.lang.String,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicBoolean,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,kotlin.jvm.internal.Ref$ObjectRef,okhttp3.OkHttpClient,boolean)
+    public static final boolean createUnsafeOkHttpClient$lambda$143()
     public static java.lang.String extractOrderIdFromActivity()
     public static android.view.View findSliderRoot()
     public static java.util.concurrent.ConcurrentHashMap$KeySetView getApiConfirmedAcceptIds()
     public static java.lang.String getCachedApiHost()
     public static java.lang.String getCachedAuthToken()
+    public static java.lang.Object getCachedWmgInstance()
+    public static java.lang.reflect.Field getCachedWmgViewsField()
     public static okhttp3.OkHttpClient getCapturedAppHttpClient()
     public static android.app.Activity getCurrentActivity()
     public static java.util.concurrent.ConcurrentHashMap getHandledOrdersMap()
@@ -42751,8 +42746,8 @@ dev.saned.assistant.OrderInterceptor:
     public static void refreshFloatingAppOrdersIfVisible()
     public static void registerActivityCallbacksOnApp(android.app.Application)
     public static void respondToPing()
+    public static synthetic void scanAllRoots$default()
     public static void scanAllSharedPreferencesForTokens()
-    public static java.lang.String scanJahezSharedPreferencesForToken()
     public static void setAutoAccept()
     public static void setAutoReject()
     public static void setCachedApiHost()
@@ -42773,8 +42768,8 @@ dev.saned.assistant.OrderInterceptor:
     public static void showToast()
     public static void simulateSwipe()
     public static void simulateTestOrder()
-    public static void startActiveServerPolling()
     public static void startBootstrapLoop()
+    public static void startScreenWatcher()
     public static boolean startsWithDriverIdPrefix()
     public static synthetic void syncSettings$default(dev.saned.assistant.OrderInterceptor)
     public static boolean verifyCryptographicKeyAndTokenInEngine()
@@ -42806,10 +42801,10 @@ dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
 dev.saned.assistant.PackageCloaker$hook$5
 dev.saned.assistant.PackageCloaker$hook$6
+dev.saned.assistant.PackageCloaker$hookEarly$1
 dev.saned.assistant.PackageCloaker$hookEarly$2
 dev.saned.assistant.PackageCloaker$hookEarly$3
 dev.saned.assistant.PackageCloaker$hookEarly$4
-dev.saned.assistant.PackageCloaker$hookEarly$5
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
 dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
@@ -42859,7 +42854,6 @@ dev.saned.assistant.SettingsStore:
     public static boolean isStrictVersionCheck()
     public static boolean isVariableSpeedEnabled()
     public static void setActivePolling()
-    public static void setAutoAccept(android.content.Context,boolean)
     public static void setAutoReject(android.content.Context,boolean)
     public static void setDryRun()
     public static void setFakeLat()
@@ -42906,6 +42900,7 @@ dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990ed
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$5
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$3b2c91ef18ad990edc896d4007a39f9786ff2d02698e2c528147ffb05ad92031$6
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$604186743a5c6a374b86ea0b617e080defd8ee36fd10f21104b5bb42b1d7fddb$1
+dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$604186743a5c6a374b86ea0b617e080defd8ee36fd10f21104b5bb42b1d7fddb$2
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$6a763402602d10eab40b6ef3ad03aaf1c2c179ebdc8a3919315528687217043d$0
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$6a763402602d10eab40b6ef3ad03aaf1c2c179ebdc8a3919315528687217043d$1
 dev.saned.assistant.ui.MainActivity$$InternalSyntheticLambda$2$6a763402602d10eab40b6ef3ad03aaf1c2c179ebdc8a3919315528687217043d$2
@@ -43028,7 +43023,16 @@ dev.saned.assistant.ui.MainActivity:
     public static void triggerOneDayExpiryWarningIfNeeded()
     public static void updateSimCoordinateInputs()
 io.github.libxposed.service.XposedProvider$$InternalSyntheticLambda$1$5f4c562f5e65b1c35c6c8d11cdb9aad533fc6e9dd0cb0c7a477a14db171ef188$0
+io.github.libxposed.service.XposedProvider$$InternalSyntheticLambda$1$5f4c562f5e65b1c35c6c8d11cdb9aad533fc6e9dd0cb0c7a477a14db171ef188$1
+io.github.libxposed.service.XposedProvider$$InternalSyntheticLambda$1$5f4c562f5e65b1c35c6c8d11cdb9aad533fc6e9dd0cb0c7a477a14db171ef188$2
+io.github.libxposed.service.XposedProvider$$InternalSyntheticLambda$2$9822751bcc88cc3aea170d9596843f9f1b94e178f97552cc5dd34593b68abbfb$0
 io.github.libxposed.service.XposedProvider$Companion$$InternalSyntheticLambda$2$798f7319c357dcf659715ff7de2bd3dfad4ec0a29268b361dd0ab6f580b1e62b$0
+io.github.libxposed.service.XposedProvider$Companion$jdriverHttpClient$2$$InternalSyntheticLambda$2$89a1ccff2f52f9c7d31d069a4f6d8cd5c7e4dbe34cbb8877958aaa0858395ded$0
+io.github.libxposed.service.XposedProvider$Companion$jdriverHttpClient$2$trustAll$1
+io.github.libxposed.service.XposedProvider$Companion$jdriverHttpClient$2:
+    public static synthetic boolean $r8$lambda$i4CSXtFQ5FVb2baVoLEvypAqZUQ()
+    public static okhttp3.OkHttpClient invoke()
+    public static final boolean invoke$lambda$0()
 io.github.libxposed.service.XposedProvider$Companion$requestPushFromNonRootManager$conn$1$$InternalSyntheticLambda$3$e05416a82e5856e5f867fe6b112b6befe6be87c8d7fc06448bb3d261bc287199$0
 io.github.libxposed.service.XposedProvider$Companion
 kotlin.ExceptionsKt
@@ -43041,8 +43045,6 @@ kotlin.LazyKt__LazyJVMKt
 kotlin.LazyKt__LazyKt
 kotlin.NoWhenBranchMatchedException
 kotlin.Pair:
-    public static java.lang.Object component1()
-    public static java.lang.Object component2()
     public static java.lang.Object getFirst()
     public static java.lang.Object getSecond()
 kotlin.Result$Companion
@@ -43108,6 +43110,7 @@ kotlin.collections.CollectionsKt___CollectionsKt:
     public static kotlin.collections.CollectionsKt___CollectionsKt$asSequence$$inlined$Sequence$1 asSequence(java.util.List)
     public static java.util.ArrayList plus(java.util.Collection,java.io.IOException)
     public static java.util.ArrayList toMutableList(java.util.Collection)
+    public static final java.util.List toMutableList(java.lang.Iterable)
 kotlin.collections.EmptyIterator:
     public static java.lang.Void next()
     public static java.lang.Void previous()
@@ -44313,11 +44316,10 @@ okhttp3.OkHttpClient$Builder:
     public static javax.net.ssl.SSLSocketFactory getSslSocketFactoryOrNull$okhttp()
     public static int getWriteTimeout$okhttp()
     public static javax.net.ssl.X509TrustManager getX509TrustManagerOrNull$okhttp()
-    public static okhttp3.OkHttpClient$Builder hostnameVerifier()
+    public final void hostnameVerifier(dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a36ccbc2133a3956013aea9ed9ddd02fe4cb4f97a4b9d542eb4b8d2c6083d6f4$0)
     public final void pingInterval(java.util.concurrent.TimeUnit)
-    public final void readTimeout(java.util.concurrent.TimeUnit)
+    public final void readTimeout(long,java.util.concurrent.TimeUnit)
     public static okhttp3.OkHttpClient$Builder retryOnConnectionFailure()
-    public static okhttp3.OkHttpClient$Builder sslSocketFactory()
     public final void writeTimeout(java.util.concurrent.TimeUnit)
 okhttp3.OkHttpClient$Companion
 okhttp3.OkHttpClient:
@@ -44361,7 +44363,7 @@ okhttp3.Request$Builder:
     public static okhttp3.Request$Builder head()
     public static okhttp3.Request$Builder headers()
     public static okhttp3.Request$Builder post()
-    public static okhttp3.Request$Builder put()
+    public final void put(okhttp3.RequestBody$Companion$toRequestBody$2)
     public final void removeHeader(java.lang.String)
     public final void url(okhttp3.HttpUrl)
 okhttp3.Request
@@ -44431,7 +44433,7 @@ okhttp3.TlsVersion:
     public static final okhttp3.Cookie$Companion Companion
     public static java.lang.String javaName()
 okhttp3.internal.HostnamesKt
-okhttp3.internal.Util$$InternalSyntheticLambda$4$2772f077014f473d42590b605bf5e0b5f44c0d6c5a0b5ed86fd77510defe4253$0
+okhttp3.internal.Util$$InternalSyntheticLambda$3$2772f077014f473d42590b605bf5e0b5f44c0d6c5a0b5ed86fd77510defe4253$0
 okhttp3.internal.Util:
     public static final okhttp3.RequestBody$Companion$toRequestBody$2 EMPTY_REQUEST
     public static final boolean assertionsEnabled
@@ -44439,7 +44441,7 @@ okhttp3.internal.Util:
     public static final void checkOffsetAndCount(long,long,long)
     public static synthetic int delimiterOffset$default(java.lang.String,char,int,int)
     public static final int skipAll(okio.Buffer)
-    public static final okhttp3.internal.Util$$InternalSyntheticLambda$4$211b5dc74c913220f256108e03a27b2026995048f2732ff5419fc945848e0c54$0 threadFactory(java.lang.String,boolean)
+    public static final okhttp3.internal.Util$$InternalSyntheticLambda$3$211b5dc74c913220f256108e03a27b2026995048f2732ff5419fc945848e0c54$0 threadFactory(java.lang.String,boolean)
     public static final void withSuppressed(java.io.IOException,java.util.List)
 okhttp3.internal.authenticator.JavaNetAuthenticator$WhenMappings
 okhttp3.internal.authenticator.JavaNetAuthenticator

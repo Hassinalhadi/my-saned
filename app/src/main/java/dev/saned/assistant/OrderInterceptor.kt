@@ -601,10 +601,46 @@ object OrderInterceptor {
 
     val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
 
+    private fun bundleIntAny(extras: android.os.Bundle, vararg keys: String): Int {
+        for (k in keys) {
+            if (k.isEmpty()) continue
+            val v = extras.get(k) ?: continue
+            val parsed = when (v) {
+                is Number -> v.toInt()
+                else -> v.toString().trim().filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+            }
+            if (parsed != 0) return parsed
+        }
+        return 0
+    }
+
+    private fun bundleDoubleAny(extras: android.os.Bundle, vararg keys: String): Double {
+        for (k in keys) {
+            if (k.isEmpty()) continue
+            val v = extras.get(k) ?: continue
+            val parsed = when (v) {
+                is Number -> v.toDouble()
+                else -> v.toString().trim().toDoubleOrNull() ?: 0.0
+            }
+            if (!parsed.isNaN() && !parsed.isInfinite() && parsed != 0.0) return parsed
+        }
+        return 0.0
+    }
+
+    private fun resolveActiveDriverLatLng(): Pair<Double, Double> {
+        if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0 && LocationEngine.currentLng != 0.0) {
+            return LocationEngine.currentLat to LocationEngine.currentLng
+        }
+        if (LocationEngine.lastRealLat != 0.0 && LocationEngine.lastRealLng != 0.0) {
+            return LocationEngine.lastRealLat to LocationEngine.lastRealLng
+        }
+        if (LocationEngine.currentLat != 0.0 && LocationEngine.currentLng != 0.0) {
+            return LocationEngine.currentLat to LocationEngine.currentLng
+        }
+        return 0.0 to 0.0
+    }
+
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
-        if (orderIdInt == 0) return
-        val entry = handledOrdersMap[orderIdInt] ?: return
-        if ((entry.decision != "ACCEPT" && entry.decision != "REJECT") || isDryRun) return
         if (isSilenceAlertTone) {
             try {
                 for (field in activity.javaClass.declaredFields) {
@@ -615,13 +651,24 @@ object OrderInterceptor {
                 }
             } catch (_: Throwable) {}
         }
-        if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
+        val entry = if (orderIdInt != 0) handledOrdersMap[orderIdInt] else null
+        if (isDryRun) return
+        if (entry != null && entry.decision == "REJECT") {
+            closeDispatchActivitySafely(activity, entry.wasInBackground)
+            return
+        }
+        if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
+            closeDispatchActivitySafely(activity, entry?.wasInBackground ?: false)
+            return
+        }
+        if (isMasterRunning && isAutoAccept && (entry == null || entry.decision == "ACCEPT" || entry.decision == "MANUAL")) {
+            val wasBg = entry?.wasInBackground ?: (isStayInBackground && isAppInBackground())
             DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending -> triggering 0ms UI auto-accept backup")
-            for (delayMs in listOf(0L, 45L, 140L, 320L)) {
+            for (delayMs in listOf(0L, 35L, 100L, 220L, 420L, 750L)) {
                 mainHandler.postDelayed({
                     try {
-                        if (apiConfirmedAcceptIds.contains(orderIdInt)) {
-                            closeDispatchActivitySafely(activity, entry.wasInBackground)
+                        if (orderIdInt != 0 && apiConfirmedAcceptIds.contains(orderIdInt)) {
+                            closeDispatchActivitySafely(activity, wasBg)
                         } else if (!activity.isFinishing && !activity.isDestroyed) {
                             val decor = activity.window?.decorView
                             if (decor != null) {
@@ -631,9 +678,7 @@ object OrderInterceptor {
                     } catch (_: Throwable) {}
                 }, delayMs)
             }
-            return
         }
-        closeDispatchActivitySafely(activity, entry.wasInBackground)
     }
 
     private fun closeDispatchActivitySafely(activity: Activity, wasInBackground: Boolean) {
@@ -701,7 +746,7 @@ object OrderInterceptor {
         return ""
     }
 
-    private fun extractAndProcessOrderFromIntent(intent: Intent, activity: Activity) {
+    private fun extractAndProcessOrderFromIntent(intent: Intent, activity: Activity? = null) {
         try {
             val extras = intent.extras ?: return
 
@@ -709,22 +754,19 @@ object OrderInterceptor {
             try {
                 val k = Native.safeK()
                 if (k.size >= 12) {
-                    val reqId = intent.getIntExtra(k[0], 0)
+                    val reqId = bundleIntAny(extras, k[0], "requestId", "dispatchId", "order_id")
                     if (reqId != 0) {
-                        val pLat = intent.getDoubleExtra(k[1], 0.0)
-                        val pLng = intent.getDoubleExtra(k[2], 0.0)
-                        val dLat = intent.getDoubleExtra(k[3], 0.0)
-                        val dLng = intent.getDoubleExtra(k[4], 0.0)
-                        val delivPrice = intent.getDoubleExtra(k[5], 0.0)
-                        val dispType = intent.getStringExtra(k[6]) ?: ""
-                        val distExtra = intent.getDoubleExtra(k[7], 0.0)
-                        val counterMs = intent.getLongExtra(k[8], 0L)
-                        val subName = intent.getStringExtra(k[9]) ?: ""
-                        val bonusAmt = intent.getDoubleExtra(k[10], 0.0)
-                        val curr = intent.getStringExtra(k[11]) ?: "SAR"
+                        val pLat = bundleDoubleAny(extras, k[1], "dispatchPickupLat", "pickupLatitude", "pickup_lat")
+                        val pLng = bundleDoubleAny(extras, k[2], "dispatchPickupLng", "pickupLongitude", "pickup_lng")
+                        val dLat = bundleDoubleAny(extras, k[3], "dispatchDestLat", "destinationLatitude", "dest_lat")
+                        val dLng = bundleDoubleAny(extras, k[4], "dispatchDestLng", "destinationLongitude", "dest_lng")
+                        val delivPrice = bundleDoubleAny(extras, k[5], "deliveryPrice", "price", "delivery_fee")
+                        val dispType = extras.get(k[6])?.toString() ?: ""
+                        val distExtra = bundleDoubleAny(extras, k[7], "distance", "km")
+                        val subName = extras.get(k[9])?.toString() ?: ""
+                        val bonusAmt = bundleDoubleAny(extras, k[10], "bonus", "bonusAmount")
 
-                        val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-                        val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+                        val (drvLat, drvLng) = resolveActiveDriverLatLng()
                         val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) {
                             LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng)
                         } else {
@@ -756,7 +798,6 @@ object OrderInterceptor {
                             destLng = dLng,
                             sourceChannel = "SCREEN"
                         )
-                        handlePostOrderActivityCreate(activity, reqId)
                         return
                     }
                 }
@@ -1364,6 +1405,11 @@ object OrderInterceptor {
               if (activity.packageName == "net.jahez.fleets") {
                   currentActivity = activity
                   attachFloatingOverlayToActivity(activity)
+                  startScreenWatcher()
+                  if (DiagnosticLogger.hookBootstrapLoop) startActiveServerPolling()
+                  if (activity.javaClass.name == Native.safeE()) {
+                      scanAllRoots()
+                  }
               }
           }
           override fun onActivityPaused(activity: Activity) {}
@@ -2432,12 +2478,11 @@ object OrderInterceptor {
                           if (intent != null) {
                               val callerObj = chain.args.getOrNull(activityIdx)
                               val orderIdInt = extractExactOrderIdFromIntent(intent)
-                              if (orderIdInt != 0 && !handledOrdersMap.containsKey(orderIdInt)) {
+                              val prevEntry = if (orderIdInt != 0) handledOrdersMap[orderIdInt] else null
+                              if (orderIdInt != 0 && (prevEntry == null || prevEntry.decision == "MANUAL")) {
                                   // Fire 0.0ms order acceptance right inside execStartActivity BEFORE system_server even launches IncomingDispatchActivity!
                                   val actContext = (callerObj as? Activity) ?: currentActivity
-                                  if (actContext != null) {
-                                      try { extractAndProcessOrderFromIntent(intent, actContext) } catch (_: Throwable) {}
-                                  }
+                                  try { extractAndProcessOrderFromIntent(intent, actContext) } catch (_: Throwable) {}
                               }
                               if (callerObj == null && orderIdInt != 0 && !isDryRun) {
                                   val entry = handledOrdersMap[orderIdInt]
@@ -2518,23 +2563,42 @@ object OrderInterceptor {
     private fun processFcmMapWithLs90(dataMap: Map<*, *>): String {
         val keys = CACHED_FCM_KEYS
         if (keys.size < 18) return ""
-        val reqId = (dataMap[keys[0]] as? String)?.trim()?.toIntOrNull() ?: return ""
-        if (reqId == 0) return ""
-        fun mapDouble(k: String): Double = (dataMap[k] as? String)?.trim()?.toDoubleOrNull() ?: 0.0
         fun mapFirstStr(vararg ks: String): String {
-            for (k in ks) { val v = (dataMap[k] as? String)?.trim(); if (!v.isNullOrEmpty()) return v }
+            for (k in ks) {
+                val v = dataMap[k]?.toString()?.trim()
+                if (!v.isNullOrEmpty() && v != "null") return v
+            }
             return ""
         }
-        val pLat = mapDouble(keys[1]); val pLng = mapDouble(keys[2])
-        val dLat = mapDouble(keys[3]); val dLng = mapDouble(keys[4])
-        val delivPrice = mapDouble(keys[5]); val distVal = mapDouble(keys[7])
-        val restName = mapFirstStr(keys[9], keys[10], keys[11], keys[12])
-        val bonusAmt = mapFirstStr(keys[13], keys[14], keys[15]).toDoubleOrNull() ?: 0.0
-        val fcmCashAmt = mapFirstStr("collectionAmount", "cashAmount", "cash_amount", "cod_amount").toDoubleOrNull() ?: 0.0
-        val fcmFoodPrice = mapFirstStr("foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount").toDoubleOrNull() ?: fcmCashAmt
+        fun mapDouble(vararg ks: String): Double {
+            for (k in ks) {
+                val d = dataMap[k]?.toString()?.trim()?.toDoubleOrNull() ?: 0.0
+                if (!d.isNaN() && !d.isInfinite() && d != 0.0) return d
+            }
+            return 0.0
+        }
+        var reqId = mapFirstStr(keys[0], "requestId", "dispatchId", "order_id", "orderId", "id").filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+        if (reqId == 0) {
+            for (v in dataMap.values) {
+                val s = v?.toString()?.trim() ?: continue
+                if (s.startsWith("{") && s.endsWith("}")) {
+                    try { findAndParseEmbeddedJson(s, "FCM Push 🔔") } catch (_: Throwable) {}
+                }
+            }
+            return ""
+        }
+        val pLat = mapDouble(keys[1], "pickupLatitude", "pickupLat", "pickup_lat")
+        val pLng = mapDouble(keys[2], "pickupLongitude", "pickupLng", "pickup_lng")
+        val dLat = mapDouble(keys[3], "destinationLatitude", "destLat", "dest_lat")
+        val dLng = mapDouble(keys[4], "destinationLongitude", "destLng", "dest_lng")
+        val delivPrice = mapDouble(keys[5], "price", "delivery_fee", "deliveryFee", "delivery_cost")
+        val distVal = mapDouble(keys[7], "km", "distanceInKm", "distanceKm")
+        val restName = mapFirstStr(keys[9], keys[10], keys[11], keys[12], "name", "store", "restaurant")
+        val bonusAmt = mapDouble(keys[13], keys[14], keys[15])
+        val fcmCashAmt = mapDouble("collectionAmount", "cashAmount", "cash_amount", "cod_amount")
+        val fcmFoodPrice = mapDouble("foodPrice", "food_price", "orderAmount", "order_amount", "totalAmount", "total_amount", "invoiceAmount", "subTotal", "collectionAmount").let { if (it > 0.0) it else fcmCashAmt }
         val fcmPayMethod = mapFirstStr("paymentMethod", "payment_method", "paymentType", "type")
-        val drvLat = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLat != 0.0) LocationEngine.currentLat else LocationEngine.lastRealLat
-        val drvLng = if (LocationEngine.isFakeLocationEnabled && LocationEngine.currentLng != 0.0) LocationEngine.currentLng else LocationEngine.lastRealLng
+        val (drvLat, drvLng) = resolveActiveDriverLatLng()
         val calcRestDist = if (pLat != 0.0 && pLng != 0.0 && drvLat != 0.0 && drvLng != 0.0) LocationEngine.calculateDistance(drvLat, drvLng, pLat, pLng) else distVal
         val calcCustDist = if (pLat != 0.0 && pLng != 0.0 && dLat != 0.0 && dLng != 0.0) LocationEngine.calculateDistance(pLat, pLng, dLat, dLng) else 0.0
         val cleanPrice = kotlin.math.round((delivPrice + bonusAmt) * 100.0) / 100.0
@@ -3142,10 +3206,22 @@ object OrderInterceptor {
 
     private fun persistDriverCipher(cipherB64: String) {
         if (cipherB64.isBlank()) return
+        val cleanCiph = cipherB64.trim()
         try {
             val ctx = resolveApplicationContext() ?: appContext ?: currentActivity
             if (ctx != null) {
-                File(ctx.filesDir, "saned_driver_cipher.txt").writeText(cipherB64.trim())
+                File(ctx.filesDir, "saned_driver_cipher.txt").writeText(cleanCiph)
+                val extras = android.os.Bundle().apply {
+                    putString("driver_cipher", cleanCiph)
+                    putString("auth_token", cachedAuthToken)
+                    putString("lang", cachedLanguage)
+                }
+                ctx.contentResolver.call(
+                    android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                    "saveAuthToken",
+                    cachedAuthToken,
+                    extras
+                )
             }
         } catch (_: Throwable) {}
     }
@@ -3811,7 +3887,10 @@ object OrderInterceptor {
 
                 val normOrderId = if (orderId.startsWith("#")) orderId else "#$orderId"
                 orderId = normOrderId
-                if (loggedOrderIds.add(normOrderId)) {
+                val numId = normOrderId.replace("#", "").trim().filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
+                val prevEntry = if (numId != 0) handledOrdersMap[numId] else null
+                if (prevEntry == null || prevEntry.decision == "MANUAL" || loggedOrderIds.add(normOrderId)) {
+                    loggedOrderIds.add(normOrderId)
                     lastOrderEvent = "Order $orderId detected via $channelSource"
                     handleOrderViaApi(
                         orderId = orderId,
@@ -3865,7 +3944,7 @@ object OrderInterceptor {
                 trimmed.startsWith("[") -> JSONArray(trimmed)
                 trimmed.startsWith("{") -> {
                     val obj = JSONObject(trimmed)
-                    obj.optJSONArray("data") ?: obj.optJSONArray("dispatches") ?: obj.optJSONArray("orders") ?: return
+                    obj.optJSONArray("data") ?: obj.optJSONArray("dispatches") ?: obj.optJSONArray("orders") ?: JSONArray()
                 }
                 else -> return
             }
@@ -3884,11 +3963,11 @@ object OrderInterceptor {
                     }
                 }
             }
-            // Remove any entry in liveActiveOrderMap that was accepted > 20s ago if the server says it is no longer active
+            // Remove any entry in liveActiveOrderMap that was accepted > 15s ago if the server says it is no longer active
             val iter = liveActiveOrderMap.entries.iterator()
             while (iter.hasNext()) {
                 val e = iter.next()
-                if (!serverActiveIds.contains(e.key) && (now - e.value) > 20_000L) {
+                if (!serverActiveIds.contains(e.key) && (now - e.value) > 15_000L) {
                     iter.remove()
                 }
             }
@@ -3901,7 +3980,7 @@ object OrderInterceptor {
         var activeCount = 0
         while (iter.hasNext()) {
             val entry = iter.next()
-            if (now - entry.value > 12 * 60_000L) {
+            if (now - entry.value > 3 * 60_000L) {
                 iter.remove()
             } else {
                 activeCount++
@@ -3971,7 +4050,7 @@ object OrderInterceptor {
             return "DRY_RUN" to "All gates passed (Dry-Run)"
         }
 
-        return if (isAutoAccept) {
+        return if (isAutoAccept || isMasterRunning) {
             "ACCEPT" to "All gates passed"
         } else {
             "MANUAL" to "All gates passed; auto-accept off"
@@ -4011,18 +4090,18 @@ object OrderInterceptor {
 
         if (orderIdInt != 0) {
             val existing = handledOrdersMap[orderIdInt]
-            if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
+            if (existing != null && existing.decision != "MANUAL" && (nowRealtime - existing.timestampRealtime) < 60_000L) {
                 return existing.decision
             }
         }
 
         val (action, reason) = evaluateOrderDecision(price, dist, custDist)
 
-        if (orderIdInt != 0) {
+        if (orderIdInt != 0 && action != "MANUAL") {
             val wasInBg = isStayInBackground && !isDryRun && isAppInBackground()
             synchronized(handledOrdersMap) {
                 val prev = handledOrdersMap[orderIdInt]
-                if (prev != null && (nowRealtime - prev.timestampRealtime) < 60_000L) {
+                if (prev != null && prev.decision != "MANUAL" && (nowRealtime - prev.timestampRealtime) < 60_000L) {
                     return prev.decision
                 }
                 handledOrdersMap[orderIdInt] = HandledOrderEntry(action, nowRealtime, wasInBg)
@@ -4058,7 +4137,8 @@ object OrderInterceptor {
                 sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "Dry-Run 🔍 · $reason", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
             }
             "ACCEPT" -> {
-                // Already fired at 0.0ms above
+                // Also push immediately to J-Driver (XposedProvider) so J-Driver's in-app engine fires in parallel at 0.0ms!
+                sendOrderToLog(orderId = normOrderId, price = price, dist = dist, restaurant = restaurant, status = "جاري القبول ⚡", customerName = custName, customerPhone = custPhone, address = custAddr, cashAmount = cashAmt, foodPrice = effFoodPrice, paymentMethod = paymentMethod, reference = reference, pickupAddress = pickupAddr, customerDistanceKm = custDist, pickupLat = pickupLat, pickupLng = pickupLng, destLat = destLat, destLng = destLng, decisionReason = reason, notifyUser = false)
             }
             else -> {
                 lastOrderEvent = "Order $normOrderId left for manual review ($reason)"
@@ -4131,13 +4211,27 @@ object OrderInterceptor {
         if (token.isEmpty()) {
             if (ctx != null) readExactJahezEncryptedPrefs(ctx)
             token = if (cachedAuthToken.isNotEmpty()) cachedAuthToken else readPersistedToken()
+            if (token.isEmpty() && ctx != null) {
+                token = scanJahezSharedPreferencesForToken(ctx)
+            }
         }
         val isAccept = (action == "ACCEPT")
         val orderIdInt = orderIdNum.toIntOrNull() ?: orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
         if (token.isEmpty()) {
-            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
-            if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
+            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum via API: token empty -> triggering UI fallback")
+            if (isAccept) {
+                currentActivity?.let { act ->
+                    if (!act.isFinishing && !act.isDestroyed) {
+                        act.runOnUiThread {
+                            try {
+                                val decor = act.window?.decorView
+                                if (decor != null) findAndTriggerOrder(decor, act, System.currentTimeMillis())
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                }
+            }
             return
         }
 
@@ -4177,7 +4271,7 @@ object OrderInterceptor {
                 val winBodyRef = AtomicReference<String>("")
                 val lastErrCodeAtom = AtomicInteger(0)
                 val lastErrBodyRef = AtomicReference<String>("")
-                val streamCount = if (isAccept) 3 else 1
+                val streamCount = if (isAccept) 4 else 1
                 val doneLatch = CountDownLatch(1)
                 val finishedStreams = AtomicInteger(0)
 
@@ -4194,7 +4288,7 @@ object OrderInterceptor {
                         var localToken = token
                         var retried401 = false
                         var attempt = 0
-                        while (attempt < 2 && !wonAtom.get()) {
+                        while (attempt < 3 && !wonAtom.get()) {
                             attempt++
                             try {
                                 httpRequestsCount.incrementAndGet()
@@ -4229,21 +4323,29 @@ object OrderInterceptor {
                                 lastErrCodeAtom.set(code)
                                 lastErrBodyRef.set(bodyStr)
 
-                                if ((code == 401 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
+                                if ((code == 401 || code == 403 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401 && ctx != null) {
                                     retried401 = true
                                     cachedAuthToken = ""
                                     cachedEncPrefs = null
                                     readExactJahezEncryptedPrefs(ctx)
+                                    if (capturedDriverCipherB64.isEmpty()) readPersistedDriverCipher(ctx)
                                     if (cachedAuthToken.isNotEmpty()) {
                                         localToken = cachedAuthToken
                                         token = cachedAuthToken
                                         continue
                                     }
                                 }
+                                if (code == 429 || code in 500..599) {
+                                    try { Thread.sleep(75L * attempt) } catch (_: Throwable) {}
+                                    continue
+                                }
                                 break
                             } catch (t: Throwable) {
                                 lastErrCodeAtom.compareAndSet(0, -1)
                                 lastErrBodyRef.set(t.message ?: t.javaClass.simpleName)
+                                if (attempt < 3 && !wonAtom.get()) {
+                                    try { Thread.sleep(60L * attempt) } catch (_: Throwable) {}
+                                }
                             }
                         }
                         if (finishedStreams.incrementAndGet() >= streamCount) {
@@ -4254,8 +4356,9 @@ object OrderInterceptor {
 
                 if (isAccept) {
                     runSingleStream(0, 0L)
-                    runSingleStream(1, 10L)
-                    runSingleStream(2, 22L)
+                    runSingleStream(1, 8L)
+                    runSingleStream(2, 20L)
+                    runSingleStream(3, 85L)
                 } else {
                     runSingleStream(0, 0L)
                 }
@@ -4629,6 +4732,9 @@ object OrderInterceptor {
             lowNormSt.contains("complet") || lowNormSt.contains("cancel") ||
             lowNormSt.contains("ملغ") || lowNormSt.contains("expired")
         if (isDeadOrder) {
+            if (idKey.isNotEmpty()) removeOrderLiveActive(idKey)
+            if (rawRef.isNotEmpty()) removeOrderLiveActive(rawRef)
+            if (cacheKey.isNotEmpty()) removeOrderLiveActive(cacheKey)
             synchronized(syncedOrdersCache) {
                 val keysToRem = mutableListOf<String>()
                 for ((k, v) in syncedOrdersCache) {
@@ -4687,8 +4793,17 @@ object OrderInterceptor {
                 val extras = android.os.Bundle().apply {
                     putString("order_json", order.toJson().toString())
                     putBoolean("notify_user", notifyUser)
+                    if (cachedAuthToken.isNotEmpty()) putString("auth_token", cachedAuthToken)
+                    if (capturedDriverCipherB64.isNotEmpty()) putString("driver_cipher", capturedDriverCipherB64)
+                    if (cachedLanguage.isNotEmpty()) putString("lang", cachedLanguage)
                 }
-                ctx.contentResolver.call(uri, "logOrder", null, extras)
+                val reply = ctx.contentResolver.call(uri, "logOrder", null, extras)
+                val jdrvAcc = reply?.getIntArray("jdriver_accepted_ids")
+                if (jdrvAcc != null) {
+                    for (aid in jdrvAcc) {
+                        if (aid != 0) apiConfirmedAcceptIds.add(aid)
+                    }
+                }
             } catch (_: Throwable) {}
 
             // 2. Explicit broadcast with FLAG_INCLUDE_STOPPED_PACKAGES and FLAG_RECEIVER_FOREGROUND
@@ -4717,6 +4832,9 @@ object OrderInterceptor {
                     putExtra("payment_method", order.paymentMethod)
                     putExtra("currency", currency)
                     putExtra("notify_user", notifyUser)
+                    if (cachedAuthToken.isNotEmpty()) putExtra("auth_token", cachedAuthToken)
+                    if (capturedDriverCipherB64.isNotEmpty()) putExtra("driver_cipher", capturedDriverCipherB64)
+                    if (cachedLanguage.isNotEmpty()) putExtra("lang", cachedLanguage)
                 }
                 ctx.sendBroadcast(logIntent)
             } catch (_: Throwable) {}

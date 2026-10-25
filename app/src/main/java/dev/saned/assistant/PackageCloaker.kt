@@ -56,7 +56,6 @@ object PackageCloaker {
     private val isSecurityHooked = AtomicBoolean(false)
     private val isMapsAndPkgHooked = AtomicBoolean(false)
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
-    private val isFvfeiucoiGuardHooked = AtomicBoolean(false)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
 
@@ -240,40 +239,11 @@ object PackageCloaker {
     /**
      * Matches Lvh1.o, Lvh1.q, Lvh1.j, Lvh1.e in SanedAssistant-98-7bac1ec.apk.
      * Note: Stubs JNI native methods FIRST, and only suppresses Runtime.loadLibrary0("jahez_fleets")
-     * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build (such as 40104).
+     * when isNativeStubbed is true, preventing UnsatisfiedLinkError if Jahez is updated to a new obfuscated build.
      */
     fun hookEarly(module: XposedModule, classLoader: ClassLoader) {
         // 0. Install Universal Google Maps API Key & PackageManager hooks immediately in hookEarly!
         installMapsAndPackageCloakerHooks(module)
-
-        // 0B. On Saned 6.2.0 (40104), allow libjahez_fleets.so to load normally (required for 40104 on both LSPosed & NPatch)
-        // and ONLY catch the NPatch signature-check exception `fvfeiucoi.r: 01` thrown by `fvfeiucoi.I.a` / `fvfeiucoi.I.b`.
-        if (isFvfeiucoiGuardHooked.compareAndSet(false, true)) {
-            try {
-                val clsI = Class.forName("fvfeiucoi.I", false, classLoader)
-                for (m in clsI.declaredMethods) {
-                    if (m.name == "a" || m.name == "b") {
-                        val retType = m.returnType
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                return try {
-                                    chain.proceed()
-                                } catch (t: Throwable) {
-                                    val inner = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
-                                    if (inner.javaClass.name == "fvfeiucoi.r") {
-                                        DiagnosticLogger.logStep("PackageCloaker", "Suppressed fvfeiucoi.r (${inner.message}) in fvfeiucoi.I.${m.name}")
-                                        defaultReturnValueForType(retType)
-                                    } else {
-                                        throw inner
-                                    }
-                                }
-                            }
-                        })
-                    }
-                }
-                DiagnosticLogger.logStep("PackageCloaker", "Installed pass-through fvfeiucoi.r guard on fvfeiucoi.I for 40104")
-            } catch (_: Throwable) {}
-        }
 
         val profiles = getAllVersionProfiles()
         val resolved = resolveProfile(classLoader)
@@ -576,6 +546,21 @@ object PackageCloaker {
                 else -> return
             }
             if (appInfo.packageName != "net.jahez.fleets") return
+
+            // Cloak NPatch / LSPatch metaloader appComponentFactory & debuggable flag from Jahez security inspection
+            if (OrderInterceptor.isMasterRunning) {
+                appInfo.flags = appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val factory = appInfo.appComponentFactory ?: ""
+                    if (factory.contains("npatch", ignoreCase = true) ||
+                        factory.contains("lspatch", ignoreCase = true) ||
+                        factory.contains("vector", ignoreCase = true) ||
+                        factory.contains("metaloader", ignoreCase = true)
+                    ) {
+                        appInfo.appComponentFactory = "androidx.core.app.CoreComponentFactory"
+                    }
+                }
+            }
 
             if (mapsCertCheckResult == 0) {
                 val srcDir = appInfo.sourceDir
