@@ -24181,9 +24181,11 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public final java.lang.String component8()
     public final dev.saned.assistant.PackageCloaker$VersionProfile copy(int,java.lang.String,java.util.List,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)
     public static synthetic dev.saned.assistant.PackageCloaker$VersionProfile copy$default(dev.saned.assistant.PackageCloaker$VersionProfile,int,java.lang.String,java.util.List,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
+    public final java.lang.String getRuntimeExecMethod()
 dev.saned.assistant.PackageCloaker:
     public final dev.saned.assistant.PackageCloaker$VersionProfile getActiveProfile()
     public final int getDetectedVersionIndex()
+    public final long getLastCheckedVersionCode()
     public final boolean isNativeStubbedFlag()
     public static synthetic void patchGoogleMapsApiKeyIfNeeded$default(dev.saned.assistant.PackageCloaker,java.lang.Object,io.github.libxposed.api.XposedModule,int,java.lang.Object)
     public final void setActiveProfile(dev.saned.assistant.PackageCloaker$VersionProfile)
@@ -25461,6 +25463,7 @@ kotlin.collections.ArraysKt___ArraysKt:
     public static final java.lang.Integer lastOrNull(int[],kotlin.jvm.functions.Function1)
     public static final java.lang.Long lastOrNull(long[])
     public static final java.lang.Long lastOrNull(long[],kotlin.jvm.functions.Function1)
+    public static final java.lang.Object lastOrNull(java.lang.Object[])
     public static final java.lang.Object lastOrNull(java.lang.Object[],kotlin.jvm.functions.Function1)
     public static final java.lang.Short lastOrNull(short[])
     public static final java.lang.Short lastOrNull(short[],kotlin.jvm.functions.Function1)
@@ -26646,6 +26649,7 @@ kotlin.collections.CollectionsKt___CollectionsKt:
     public static final int lastIndexOf(java.util.List,java.lang.Object)
     public static final java.lang.Object lastOrNull(java.lang.Iterable)
     public static final java.lang.Object lastOrNull(java.lang.Iterable,kotlin.jvm.functions.Function1)
+    public static final java.lang.Object lastOrNull(java.util.List)
     public static final java.lang.Object lastOrNull(java.util.List,kotlin.jvm.functions.Function1)
     public static final java.util.List map(java.lang.Iterable,kotlin.jvm.functions.Function1)
     public static final java.util.List mapIndexed(java.lang.Iterable,kotlin.jvm.functions.Function2)
@@ -28906,8 +28910,6 @@ kotlin.text.StringsKt__StringsKt:
     public static synthetic java.lang.String substringAfter$default(java.lang.String,char,java.lang.String,int,java.lang.Object)
     public static final java.lang.String substringAfterLast(java.lang.String,java.lang.String,java.lang.String)
     public static synthetic java.lang.String substringAfterLast$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
-    public static final java.lang.String substringBeforeLast(java.lang.String,char,java.lang.String)
-    public static synthetic java.lang.String substringBeforeLast$default(java.lang.String,char,java.lang.String,int,java.lang.Object)
     public static final boolean toBooleanStrict(java.lang.String)
     public static final java.lang.Boolean toBooleanStrictOrNull(java.lang.String)
     public static final java.lang.CharSequence trim(java.lang.CharSequence,kotlin.jvm.functions.Function1)
@@ -42799,24 +42801,22 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.lang.String getMainActivity()
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
-    public static java.lang.String getRuntimeExecMethod()
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
 dev.saned.assistant.PackageCloaker$hook$5
 dev.saned.assistant.PackageCloaker$hook$6
-dev.saned.assistant.PackageCloaker$hookEarly$1
-dev.saned.assistant.PackageCloaker$hookEarly$2
-dev.saned.assistant.PackageCloaker$hookEarly$3
+dev.saned.assistant.PackageCloaker$hook$8
 dev.saned.assistant.PackageCloaker$hookEarly$4
+dev.saned.assistant.PackageCloaker$hookEarly$5
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
+dev.saned.assistant.PackageCloaker$scanAndStubPromonPackage$1
 dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
     public static java.lang.Object defaultReturnValueForType()
-    public static long getLastCheckedVersionCode()
     public static boolean isProfilePresent(java.lang.ClassLoader,dev.saned.assistant.PackageCloaker$VersionProfile)
     public static dev.saned.assistant.PackageCloaker$VersionProfile resolveProfile()
 dev.saned.assistant.R$drawable
@@ -43412,6 +43412,7 @@ kotlin.text.StringsKt__StringsKt:
     public static synthetic int indexOf$StringsKt__StringsKt$default(java.lang.CharSequence,java.lang.CharSequence,int,int,boolean)
     public static synthetic boolean startsWith$default(java.lang.String,java.lang.String,int)
     public static java.lang.String substringAfter$default(java.lang.String,java.lang.String)
+    public static synthetic java.lang.String substringBeforeLast$default(java.lang.String)
 kotlin.text.StringsKt___StringsJvmKt
 kotlinx.coroutines.AbstractCoroutine:
     public abstract void afterResume()
