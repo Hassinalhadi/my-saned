@@ -5849,10 +5849,12 @@ class MainActivity : AppCompatActivity() {
         val gMapsKey = SettingsStore.getGoogleMapsApiKey(this).replace("'", "")
         val mapLang = if (isAr) "ar" else "en"
         val mapDir = if (isAr) "rtl" else "ltr"
-        val hudDefault = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
-        val hudPoint1 = tr("خريطة التوصيل • اضغط لتحديد موقع الاستلام 1️⃣", "Delivery Map • Tap to set pickup location 1️⃣")
-        val hudPoint2 = tr("خريطة التوصيل • اضغط لتحديد موقع التسليم 2️⃣", "Delivery Map • Tap to set drop-off location 2️⃣")
-        val hudTeleport = tr("خريطة المسار • اضغط لتثبيت الموقع الفوري 📍", "Route Map • Tap for instant location pin 📍")
+        val hudDefault = tr("خريطة المسار • اضغط 3 مرات لتثبيت الموقع 📍", "Route Map • Tap 3 times to pin location 📍")
+        val hudPoint1 = tr("خريطة التوصيل • اضغط 3 مرات لتحديد موقع الاستلام 1️⃣", "Delivery Map • Tap 3 times to set pickup location 1️⃣")
+        val hudPoint2 = tr("خريطة التوصيل • اضغط 3 مرات لتحديد موقع التسليم 2️⃣", "Delivery Map • Tap 3 times to set drop-off location 2️⃣")
+        val hudTeleport = tr("خريطة المسار • اضغط 3 مرات لتثبيت الموقع 📍", "Route Map • Tap 3 times to pin location 📍")
+        val hudTapProgressPrefix = tr("📍 اضغط 3 مرات لتثبيت الموقع ", "📍 Tap 3 times to pin location ")
+        val hudTapPinnedMsg = tr("✅ تم تثبيت الموقع بنجاح!", "✅ Location Pinned!")
         val hudMovingPrefix = tr("🚗 جاري توصيل الطلب (", "🚗 Delivering Order (")
 
         val html = """
@@ -5904,7 +5906,7 @@ class MainActivity : AppCompatActivity() {
                     var clickMode = 'teleport';
                     var googleApiKey = '$gMapsKey';
 
-                    var map = L.map('map', { zoomControl: true }).setView([pt1Lat, pt1Lng], 14);
+                    var map = L.map('map', { zoomControl: true, doubleClickZoom: false }).setView([pt1Lat, pt1Lng], 14);
 
                     var googleRoadmap = L.tileLayer('https://mt1.google.com/vt/lyrs=m&hl=$mapLang&x={x}&y={y}&z={z}', {
                         maxZoom: 21,
@@ -6009,7 +6011,54 @@ class MainActivity : AppCompatActivity() {
                         }
                     });
 
+                    var mapTapCount = 0;
+                    var lastMapTapTime = 0;
+                    var mapTapResetTimer = null;
+
+                    function restoreDefaultHudBadge() {
+                        var badge = document.getElementById('hudBadge');
+                        if (!badge) return;
+                        if (clickMode === 'point1') badge.innerText = '$hudPoint1';
+                        else if (clickMode === 'point2') badge.innerText = '$hudPoint2';
+                        else badge.innerText = '$hudTeleport';
+                    }
+
                     map.on('click', function(e) {
+                        var now = Date.now();
+                        if (now - lastMapTapTime <= 900) {
+                            mapTapCount += 1;
+                        } else {
+                            mapTapCount = 1;
+                        }
+                        lastMapTapTime = now;
+
+                        if (mapTapResetTimer) {
+                            clearTimeout(mapTapResetTimer);
+                            mapTapResetTimer = null;
+                        }
+
+                        var badge = document.getElementById('hudBadge');
+                        if (mapTapCount < 3) {
+                            if (badge) {
+                                badge.innerText = '$hudTapProgressPrefix(' + mapTapCount + '/3)';
+                            }
+                            mapTapResetTimer = setTimeout(function() {
+                                mapTapCount = 0;
+                                restoreDefaultHudBadge();
+                            }, 950);
+                            return;
+                        }
+
+                        // 3rd rapid tap reached -> Pin location!
+                        mapTapCount = 0;
+                        lastMapTapTime = 0;
+                        if (badge) {
+                            badge.innerText = '$hudTapPinnedMsg';
+                            mapTapResetTimer = setTimeout(function() {
+                                restoreDefaultHudBadge();
+                            }, 1400);
+                        }
+
                         var targetLat = e.latlng.lat;
                         var targetLng = e.latlng.lng;
                         if (clickMode === 'teleport') {

@@ -24116,6 +24116,7 @@ dev.saned.assistant.OrderInterceptor:
     public final void setLastOrdersListUrl(java.lang.String)
     public final void setLicenseBoundId(java.lang.String)
     public final void setLicenseToken(java.lang.String)
+    public final void setMasterRunning(boolean)
     public final void setMaxDistCustomer(double)
     public final void setMaxDistToRestaurant(double)
     public final void setMinOrderPrice(double)
@@ -42663,9 +42664,6 @@ dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$15
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$16
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$17
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$18
-dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$19
-dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$20
-dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$21
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$4
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$5
 dev.saned.assistant.OrderInterceptor$showFloatingQuickControlDialog$6
@@ -42771,7 +42769,6 @@ dev.saned.assistant.OrderInterceptor:
     public static void setJdrvRemoteMsgAr()
     public static void setJdrvRemoteMsgEn()
     public static void setLastOrderEvent()
-    public static void setMasterRunning()
     public static void setMaxOrdersLimit()
     public static void showToast()
     public static void simulateSwipe()

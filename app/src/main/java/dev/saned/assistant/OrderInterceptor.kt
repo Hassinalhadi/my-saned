@@ -6019,24 +6019,7 @@ object OrderInterceptor {
                 }
             }
 
-            // 1. Master Switch
-            card.addView(makeToggleBtn(
-                labelProvider = {
-                    if (isAr) {
-                        "⚡ المفتاح الرئيسي : " + (if (isMasterRunning) "مفعل ✅" else "متوقف ❌")
-                    } else {
-                        "⚡ Master Switch : " + (if (isMasterRunning) "ON ✅" else "OFF ❌")
-                    }
-                },
-                stateProvider = { isMasterRunning },
-                activeColor = "#059669"
-            ) {
-                isMasterRunning = !isMasterRunning
-                SettingsStore.setMasterRunning(activity, isMasterRunning)
-                pushQuickSettingsUpdateToProvider(activity)
-            })
-
-            // 2. Auto-Accept (0.0ms)
+            // 1. Auto-Accept (0.0ms) — Master Switch is controlled exclusively from inside the J-Driver app
             card.addView(makeToggleBtn(
                 labelProvider = {
                     if (isAr) {
