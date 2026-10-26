@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDiagLogConsole: TextView
     private lateinit var tvDiagLogSummary: TextView
     private var filterErrorsOnly: Boolean = false
+    private var logFilterMode: Int = 0 // 0 = All, 1 = Order Catch & Accept Only, 2 = Errors Only
     private lateinit var chkHookEarlyCloaker: CheckBox
     private lateinit var chkHookSecCloaker: CheckBox
     private lateinit var chkHookLocation: CheckBox
@@ -409,7 +410,7 @@ class MainActivity : AppCompatActivity() {
         bottomNav.addView(navOrdersBtn)
         bottomNav.addView(navMapBtn)
         bottomNav.addView(navSettingsBtn)
-        navLogsBtn.visibility = View.GONE
+        navLogsBtn.visibility = View.VISIBLE
         bottomNav.addView(navLogsBtn)
         rootContainer.addView(bottomNav)
 
@@ -451,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         currentTab = tabIndex
         tabOrdersView.visibility = if (tabIndex == 0) View.VISIBLE else View.GONE
         tabSettingsView.visibility = if (tabIndex == 1) View.VISIBLE else View.GONE
-        tabLogsView.visibility = View.GONE
+        tabLogsView.visibility = if (tabIndex == 2) View.VISIBLE else View.GONE
         tabMapView.visibility = if (tabIndex == 3) View.VISIBLE else View.GONE
 
         navOrdersIconBg.background = if (tabIndex == 0) roundedBg("#EDE9FE", 20f) else null
@@ -521,19 +522,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnFilterToggle = Button(this).apply {
-            text = tr("🔎 الكل / الأخطاء فقط", "🔎 All / Errors Only")
+            text = tr("🔎 كل السجلات (اضغط للفلترة)", "🔎 All Logs (Tap to Filter)")
             textSize = 11.5f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.25f).apply {
                 setMargins(0, 0, 8, 0)
             }
             setBackgroundColor(Color.parseColor("#4F46E5"))
             setTextColor(Color.WHITE)
             setOnClickListener {
-                filterErrorsOnly = !filterErrorsOnly
-                text = if (filterErrorsOnly) {
-                    tr("🚨 الأخطاء والأعطال فقط", "🚨 Errors & Crashes Only")
-                } else {
-                    tr("🔎 عرض كل السجلات", "🔎 Show All Logs")
+                logFilterMode = (logFilterMode + 1) % 3
+                filterErrorsOnly = (logFilterMode == 2)
+                text = when (logFilterMode) {
+                    1 -> tr("🎯 صيد وقبول الطلبات فقط", "🎯 Order Catch & Accept Only")
+                    2 -> tr("🚨 الأخطاء والتنبيهات فقط", "🚨 Errors & Warnings Only")
+                    else -> tr("🔎 عرض كل السجلات", "🔎 Show All Logs")
                 }
                 refreshDiagLogsUI(force = true)
             }
@@ -703,18 +705,18 @@ class MainActivity : AppCompatActivity() {
         if (!::tvDiagLogConsole.isInitialized) return
         if (!force && currentTab != 2) return
         val rawLogs = SettingsStore.getDiagLogs(this)
-        val logSig = "${rawLogs.hashCode()}:${rawLogs.length}:$filterErrorsOnly:$isAr"
+        val logSig = "${rawLogs.hashCode()}:${rawLogs.length}:$logFilterMode:$isAr"
         if (!force && logSig == lastRenderedLogsSignature) return
         lastRenderedLogsSignature = logSig
         if (rawLogs.isBlank()) {
             tvDiagLogSummary.text = tr(
-                "🟢 لا توجد أخطاء مسجلة — افتح تطبيق ساند لبدء التسجيل المباشر",
-                "🟢 No errors recorded — Open the target app to start live logging"
+                "🟢 جاهز لالتقاط سجل صيد وقبول الطلبات — افتح تطبيق ساند الآن",
+                "🟢 Ready to capture order catching & acceptance logs — Open Saned now"
             )
             tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
             tvDiagLogConsole.text = tr(
-                "لا توجد سجلات بعد.\nافتح تطبيق ساند الآن وسيظهر هنا كل حدث يتم تفعيله مع تفاصيل الطلبات والأخطاء بالكامل.",
-                "No logs recorded yet.\nOpen the target app now and every active hook, version detail, and stacktrace will appear here."
+                "لا توجد سجلات بعد.\nافتح تطبيق ساند الآن وسيظهر هنا فوراً كيف يتم صيد الطلبات (FCM / شاشة الطلب / السيرفر) وكيف يعمل نظام القبول خطوة بخطوة.",
+                "No logs recorded yet.\nOpen the target app now and every order catch, decision gate, and API response will appear here."
             )
             tvDiagLogConsole.setTextColor(Color.parseColor("#94A3B8"))
             return
@@ -724,37 +726,64 @@ class MainActivity : AppCompatActivity() {
         val crashCount = lines.count { it.contains("[CRASH]") }
         val errCount = lines.count { it.contains("[ERR]") }
         val warnCount = lines.count { it.contains("[WARN]") }
+        val orderEventCount = lines.count {
+            it.contains("[OrderCatch]") || it.contains("[OrderDecision]") || it.contains("[DirectApi]") || it.contains("[FCM]") || it.contains("[IncomingDispatchActivity]")
+        }
 
         if (crashCount > 0 || errCount > 0) {
             tvDiagLogSummary.text = tr(
-                "🚨 تم رصد $crashCount انهيار و $errCount خطأ و $warnCount تنبيه (إجمالي ${lines.size} سطر)",
-                "🚨 Detected $crashCount crashes, $errCount errors, and $warnCount warnings (Total ${lines.size} lines)"
+                "📊 أحداث الطلبات: $orderEventCount | ⚠️ تنبيهات: $warnCount | 🚨 أخطاء: ${errCount + crashCount} (إجمالي ${lines.size} سطر)",
+                "📊 Order events: $orderEventCount | ⚠️ Warnings: $warnCount | 🚨 Errors: ${errCount + crashCount} (Total ${lines.size} lines)"
             )
             tvDiagLogSummary.setTextColor(Color.parseColor("#DC2626"))
         } else {
             tvDiagLogSummary.text = tr(
-                "✅ السجل يعمل بنجاح (${lines.size} سطر | $warnCount تنبيه | 0 أعطال)",
-                "✅ Logger running cleanly (${lines.size} lines | $warnCount warnings | 0 crashes)"
+                "✅ السجل نشط (أحداث الطلبات: $orderEventCount | تنبيهات: $warnCount | إجمالي ${lines.size} سطر)",
+                "✅ Logger active (Order events: $orderEventCount | Warnings: $warnCount | Total ${lines.size} lines)"
             )
             tvDiagLogSummary.setTextColor(Color.parseColor("#059669"))
         }
 
-        val displayText = if (filterErrorsOnly) {
-            val filtered = mutableListOf<String>()
-            var includeContinuation = false
-            for (line in lines) {
-                if (line.startsWith("[")) {
-                    includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
+        val displayText = when (logFilterMode) {
+            1 -> {
+                val filtered = mutableListOf<String>()
+                var includeContinuation = false
+                for (line in lines) {
+                    if (line.startsWith("[")) {
+                        includeContinuation = line.contains("[OrderCatch]") ||
+                            line.contains("[OrderDecision]") ||
+                            line.contains("[DirectApi]") ||
+                            line.contains("[FCM]") ||
+                            line.contains("[IncomingDispatchActivity]") ||
+                            line.contains("[NavLog]") ||
+                            line.contains("[CipherHook]") ||
+                            line.contains("[EncryptedPrefs]") ||
+                            line.contains("[ContactFetch]")
+                    }
+                    if (includeContinuation) filtered.add(line)
                 }
-                if (includeContinuation) filtered.add(line)
+                if (filtered.isEmpty()) {
+                    tr("لا توجد أحداث صيد أو قبول طلبات مسجلة بعد — انتظر وصول طلب في ساند أو اضغط (محاكاة طلب)", "No order catching or acceptance events recorded yet.")
+                } else {
+                    filtered.joinToString("\n")
+                }
             }
-            if (filtered.isEmpty()) {
-                tr("لا توجد أخطاء أو أعطال في السجل الحالي ✅", "No errors or crashes in current log ✅")
-            } else {
-                filtered.joinToString("\n")
+            2 -> {
+                val filtered = mutableListOf<String>()
+                var includeContinuation = false
+                for (line in lines) {
+                    if (line.startsWith("[")) {
+                        includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]")
+                    }
+                    if (includeContinuation) filtered.add(line)
+                }
+                if (filtered.isEmpty()) {
+                    tr("لا توجد أخطاء أو تنبيهات في السجل الحالي ✅", "No errors or warnings in current log ✅")
+                } else {
+                    filtered.joinToString("\n")
+                }
             }
-        } else {
-            rawLogs
+            else -> rawLogs
         }
 
         tvDiagLogConsole.text = displayText
@@ -794,15 +823,11 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {
                 val nextRun = !SettingsStore.isMasterRunning(this@MainActivity)
                 SettingsStore.setMasterRunning(this@MainActivity, nextRun)
-                if (nextRun) {
-                    SettingsStore.setAutoAccept(this@MainActivity, true)
-                    if (::chkAutoAccept.isInitialized) chkAutoAccept.isChecked = true
-                }
                 if (::swMaster.isInitialized) swMaster.isChecked = nextRun
                 refreshOrdersLogUI()
                 Toast.makeText(
                     this@MainActivity,
-                    if (nextRun) tr("🟢 تم تشغيل J-Driver والقبول التلقائي", "🟢 J-Driver & Auto-Accept Enabled") else tr("🔴 تم إيقاف J-Driver مؤقتاً", "🔴 J-Driver Paused"),
+                    if (nextRun) tr("🟢 تم تشغيل J-Driver", "🟢 J-Driver Enabled") else tr("🔴 تم إيقاف J-Driver مؤقتاً", "🔴 J-Driver Paused"),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -2862,9 +2887,6 @@ class MainActivity : AppCompatActivity() {
 
         if (::tvOrdersSubStatus.isInitialized) {
             val isRun = SettingsStore.isMasterRunning(this)
-            if (isRun && !SettingsStore.isAutoAccept(this)) {
-                SettingsStore.setAutoAccept(this, true)
-            }
             val isAcc = SettingsStore.isAutoAccept(this)
             val isRej = SettingsStore.isAutoReject(this)
             val maxRest = SettingsStore.getMaxDistRest(this)
@@ -3642,35 +3664,6 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(priceRightTv)
 
-        val btnAcceptMissedInApp = TextView(this).apply {
-            text = tr("⚡ قبول", "⚡ Accept")
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = roundedBg("#059669", 12f)
-            setPadding(20, 12, 20, 12)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(12, 0, 0, 0)
-            }
-            setOnClickListener {
-                Toast.makeText(
-                    this@MainActivity,
-                    tr("⚡ جاري قبول الطلب من داخل J-Driver...", "⚡ Accepting order from J-Driver..."),
-                    Toast.LENGTH_SHORT
-                ).show()
-                io.github.libxposed.service.XposedProvider.acceptOrderDirectlyFromJDriver(
-                    this@MainActivity,
-                    order,
-                    forceManual = true
-                )
-            }
-        }
-        row.addView(btnAcceptMissedInApp)
-
         val btnDeleteMissed = TextView(this).apply {
             text = "🗑️"
             textSize = 14.5f
@@ -4035,10 +4028,6 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, isChecked ->
                 updateMasterStatusUI(isChecked)
                 SettingsStore.setMasterRunning(this@MainActivity, isChecked)
-                if (isChecked) {
-                    SettingsStore.setAutoAccept(this@MainActivity, true)
-                    if (::chkAutoAccept.isInitialized) chkAutoAccept.isChecked = true
-                }
             }
         }
         layout.addView(swMaster)

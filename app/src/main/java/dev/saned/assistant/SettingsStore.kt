@@ -26,13 +26,10 @@ object SettingsStore {
         getPrefs(context).getBoolean("master_running", getPrefs(context).getBoolean("enabled", true))
 
     fun setMasterRunning(context: Context, value: Boolean) {
-        val ed = getPrefs(context).edit()
+        getPrefs(context).edit()
             .putBoolean("master_running", value)
             .putBoolean("enabled", value)
-        if (value) {
-            ed.putBoolean("auto_accept", true)
-        }
-        ed.apply()
+            .apply()
         broadcastSettings(context)
     }
 
