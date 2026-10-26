@@ -162,16 +162,28 @@ object PackageCloaker {
     fun getMainActivityClassName(): String =
         (activeProfile ?: getAllVersionProfiles().firstOrNull())?.mainActivity?.takeIf { it.isNotEmpty() } ?: "net.jahez.fleets.MainActivity"
 
+    private val jniCallLogCounter = java.util.concurrent.atomic.AtomicInteger(0)
+    private val isProcessKillHooked = AtomicBoolean(false)
+
     private fun defaultReturnValueForType(type: Class<*>): Any? = when (type) {
-        Boolean::class.javaPrimitiveType -> java.lang.Boolean.TRUE
-        Int::class.javaPrimitiveType -> 0
-        Long::class.javaPrimitiveType -> 0L
-        Short::class.javaPrimitiveType -> 0.toShort()
-        Byte::class.javaPrimitiveType -> 0.toByte()
-        Char::class.javaPrimitiveType -> ' '
-        Float::class.javaPrimitiveType -> 0f
-        Double::class.javaPrimitiveType -> 0.0
-        else -> null
+        Boolean::class.javaPrimitiveType, java.lang.Boolean::class.java -> java.lang.Boolean.TRUE
+        Int::class.javaPrimitiveType, java.lang.Integer::class.java -> 0
+        Long::class.javaPrimitiveType, java.lang.Long::class.java -> 0L
+        Short::class.javaPrimitiveType, java.lang.Short::class.java -> 0.toShort()
+        Byte::class.javaPrimitiveType, java.lang.Byte::class.java -> 0.toByte()
+        Char::class.javaPrimitiveType, java.lang.Character::class.java -> ' '
+        Float::class.javaPrimitiveType, java.lang.Float::class.java -> 0f
+        Double::class.javaPrimitiveType, java.lang.Double::class.java -> 0.0
+        String::class.java, CharSequence::class.java -> ""
+        ByteArray::class.java -> ByteArray(0)
+        IntArray::class.java -> IntArray(0)
+        LongArray::class.java -> LongArray(0)
+        BooleanArray::class.java -> BooleanArray(0)
+        else -> if (type.isArray) {
+            try { java.lang.reflect.Array.newInstance(type.componentType ?: Any::class.java, 0) } catch (_: Throwable) { null }
+        } else {
+            null
+        }
     }
 
     /**
@@ -278,15 +290,32 @@ object PackageCloaker {
                 }
                 if (!stubbedNativeClasses.contains(clsName)) {
                     var clsHooked = 0
-                    for (m in cls.declaredMethods) {
-                        if (Modifier.isNative(m.modifiers)) {
-                            val retType = m.returnType
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? = defaultReturnValueForType(retType)
-                            })
-                            clsHooked++
-                            newlyHookedMethods++
-                        }
+                    val allMethods = cls.declaredMethods
+                    val nativeMethods = allMethods.filter { Modifier.isNative(it.modifiers) }
+                    for (m in nativeMethods) {
+                        val retType = m.returnType
+                        val mName = m.name
+                        val pSig = m.parameterTypes.joinToString(",") { it.simpleName }
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val retVal = defaultReturnValueForType(retType)
+                                val count = jniCallLogCounter.incrementAndGet()
+                                if (count <= 40) {
+                                    val caller = try {
+                                        Throwable().stackTrace.firstOrNull {
+                                            !it.className.startsWith("dev.saned.") &&
+                                            !it.className.startsWith("org.matrix.") &&
+                                            !it.className.startsWith("LSPHooker") &&
+                                            !it.className.startsWith("java.lang.reflect")
+                                        }?.let { "${it.className}.${it.methodName}:${it.lineNumber}" } ?: ""
+                                    } catch (_: Throwable) { "" }
+                                    DiagnosticLogger.logStep("JNI-Call", "$clsName.$mName($pSig):${retType.simpleName} -> $retVal (from $caller)")
+                                }
+                                return retVal
+                            }
+                        })
+                        clsHooked++
+                        newlyHookedMethods++
                     }
                     if (clsHooked > 0) {
                         stubbedNativeClasses.add(clsName)
@@ -433,19 +462,77 @@ object PackageCloaker {
             DiagnosticLogger.logError("PackageCloaker:NativeStub", "Error stubbing native classes", t)
         }
 
-        // 2. Lvh1.j: Hook loaderClass.loaderMethod(String)
+        // 2. Lvh1.j: Hook loaderClass.loaderMethod(String) safely without throwing NoSuchMethodException
         if (!isLoaderHooked.get() && resolved != null && resolved.loaderClass.isNotEmpty() && resolved.loaderMethod.isNotEmpty()) {
             try {
                 val cls = Class.forName(resolved.loaderClass, false, classLoader)
-                val m = cls.getDeclaredMethod(resolved.loaderMethod, String::class.java)
-                module.hook(m).intercept(object : XposedInterface.Hooker {
-                    override fun intercept(chain: XposedInterface.Chain): Any? = null
-                })
-                isLoaderHooked.set(true)
-                DiagnosticLogger.logStep("PackageCloaker", "Hooked loader ${resolved.loaderClass}.${resolved.loaderMethod}(String)")
+                val mExact = cls.declaredMethods.firstOrNull {
+                    it.name == resolved.loaderMethod &&
+                    !Modifier.isNative(it.modifiers) &&
+                    it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0] == String::class.java
+                } ?: cls.declaredMethods.firstOrNull {
+                    !Modifier.isNative(it.modifiers) &&
+                    Modifier.isStatic(it.modifiers) &&
+                    it.returnType == Void.TYPE &&
+                    it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0] == String::class.java
+                }
+                if (mExact != null) {
+                    module.hook(mExact).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? = null
+                    })
+                    isLoaderHooked.set(true)
+                    DiagnosticLogger.logStep("PackageCloaker", "Hooked loader ${resolved.loaderClass}.${mExact.name}(String)")
+                } else {
+                    isLoaderHooked.set(true)
+                    val sigs = cls.declaredMethods.joinToString(", ") { "${it.name}(${it.parameterTypes.joinToString { p -> p.simpleName }}):${it.returnType.simpleName}" }
+                    DiagnosticLogger.logStep("PackageCloaker", "Loader ${resolved.loaderClass} methods=[$sigs]")
+                }
             } catch (t: Throwable) {
-                DiagnosticLogger.logError("PackageCloaker:Loader", "Error hooking loader ${resolved.loaderClass}.${resolved.loaderMethod}", t)
+                DiagnosticLogger.logError("PackageCloaker:Loader", "Error inspecting loader ${resolved.loaderClass}", t)
             }
+        }
+
+        // 2b. Guard Process.killProcess & Runtime.exit against Promon delayed self-termination
+        if (isProcessKillHooked.compareAndSet(false, true)) {
+            try {
+                val mKill = android.os.Process::class.java.getDeclaredMethod("killProcess", Int::class.javaPrimitiveType)
+                module.hook(mKill).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val trace = Throwable().stackTrace
+                        val promonFrame = trace.firstOrNull { f ->
+                            val cn = f.className ?: ""
+                            val pkg = cn.substringBeforeLast('.', "")
+                            scannedPromonPackages.contains(pkg) || cn.startsWith("fvfeiucoi.") || cn.contains("guardzilla", ignoreCase = true)
+                        }
+                        if (promonFrame != null) {
+                            DiagnosticLogger.logWarn("PackageCloaker", "Blocked Process.killProcess triggered by ${promonFrame.className}.${promonFrame.methodName}:${promonFrame.lineNumber}")
+                            return null
+                        }
+                        return chain.proceed()
+                    }
+                })
+                for (mExit in Runtime::class.java.declaredMethods) {
+                    if ((mExit.name == "exit" || mExit.name == "halt") && mExit.parameterTypes.size == 1 && mExit.parameterTypes[0] == Int::class.javaPrimitiveType) {
+                        module.hook(mExit).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val trace = Throwable().stackTrace
+                                val promonFrame = trace.firstOrNull { f ->
+                                    val cn = f.className ?: ""
+                                    val pkg = cn.substringBeforeLast('.', "")
+                                    scannedPromonPackages.contains(pkg) || cn.startsWith("fvfeiucoi.") || cn.contains("guardzilla", ignoreCase = true)
+                                }
+                                if (promonFrame != null) {
+                                    DiagnosticLogger.logWarn("PackageCloaker", "Blocked Runtime.${mExit.name} triggered by ${promonFrame.className}.${promonFrame.methodName}:${promonFrame.lineNumber}")
+                                    return null
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                    }
+                }
+            } catch (_: Throwable) {}
         }
 
         // 3. Lvh1.o: Hook Runtime.loadLibrary0 (auto-discovers & stubs any future version's JNI classes before blocking jahez_fleets!)
@@ -500,7 +587,10 @@ object PackageCloaker {
                                     try {
                                         DiagnosticLogger.logWarn("BlockedActivity", "Intercepted blocked activity $actClsName -> redirecting to $mainActName")
                                         val mainCls = classLoader.loadClass(mainActName)
-                                        act.startActivity(android.content.Intent(act, mainCls))
+                                        val redirIntent = android.content.Intent(act, mainCls).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                        }
+                                        act.startActivity(redirIntent)
                                         act.finish()
                                     } catch (t: Throwable) {
                                         DiagnosticLogger.logError("BlockedActivity", "Failed redirecting $actClsName", t)
@@ -556,26 +646,63 @@ object PackageCloaker {
             DiagnosticLogger.logError("PackageCloaker:Installer", "Error hooking ApplicationPackageManager", t)
         }
 
-        // 2. Lu80.y: SecurityCallBacksState
+        // 2. Lu80.y: SecurityCallBacksState (Universal Constructor + Getter + Static hooks for all versions)
         val secClasses = Native.safeN()
         val secStateClsName = secClasses.getOrNull(0) ?: ""
         if (secStateClsName.isNotEmpty()) {
             try {
                 val secCls = classLoader.loadClass(secStateClsName)
                 var secHooked = 0
+                fun clearSecurityStateBooleans(obj: Any?) {
+                    if (obj == null) return
+                    for (f in obj.javaClass.declaredFields) {
+                        if (f.type == Boolean::class.javaPrimitiveType || f.type == java.lang.Boolean::class.java) {
+                            try {
+                                f.isAccessible = true
+                                f.setBoolean(obj, false)
+                            } catch (_: Throwable) {
+                                try { f.set(obj, java.lang.Boolean.FALSE) } catch (_: Throwable) {}
+                            }
+                        }
+                    }
+                }
+                for (c in secCls.declaredConstructors) {
+                    module.hook(c).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            val res = chain.proceed()
+                            if (OrderInterceptor.isMasterRunning) {
+                                clearSecurityStateBooleans(chain.thisObject)
+                            }
+                            return res
+                        }
+                    })
+                    secHooked++
+                }
                 for (m in secCls.declaredMethods) {
                     if (Modifier.isStatic(m.modifiers) && m.parameterTypes.firstOrNull() == secCls) {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
                                 if (OrderInterceptor.isMasterRunning) {
-                                    val stateObj = chain.args.getOrNull(0)
-                                    if (stateObj != null) {
-                                        for (f in stateObj.javaClass.declaredFields) {
-                                            if (f.type == Boolean::class.javaPrimitiveType || f.type == java.lang.Boolean::class.java) {
-                                                try { f.isAccessible = true; f.setBoolean(stateObj, false) } catch (_: Throwable) {}
-                                            }
-                                        }
-                                    }
+                                    clearSecurityStateBooleans(chain.args.getOrNull(0))
+                                }
+                                val res = chain.proceed()
+                                if (OrderInterceptor.isMasterRunning) {
+                                    clearSecurityStateBooleans(res)
+                                }
+                                return res
+                            }
+                        })
+                        secHooked++
+                    } else if (!Modifier.isStatic(m.modifiers) &&
+                        m.name != "equals" &&
+                        m.parameterCount == 0 &&
+                        (m.returnType == Boolean::class.javaPrimitiveType || m.returnType == java.lang.Boolean::class.java)
+                    ) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                if (OrderInterceptor.isMasterRunning) {
+                                    clearSecurityStateBooleans(chain.thisObject)
+                                    return java.lang.Boolean.FALSE
                                 }
                                 return chain.proceed()
                             }
@@ -583,7 +710,7 @@ object PackageCloaker {
                         secHooked++
                     }
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState hooked ($secHooked methods)")
+                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState hooked ($secHooked constructors/getters/methods)")
             } catch (_: Throwable) {}
         }
 
@@ -610,12 +737,12 @@ object PackageCloaker {
         }
         DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
-        // 4. Lu80.L: ShadowArmor profiles (only for detectedVersionIndex if >= 0, matching Lu80.L!)
+        // 4. Lu80.L: ShadowArmor profiles (try preferred index first, then scan all known profiles)
         try {
             val saProfiles = getAllShadowArmorProfiles()
-            val sa = saProfiles.getOrNull(detectedVersionIndex)
             val featureFlags = Native.safeU().toList()
-            if (sa != null) {
+            var totalSaCount = 0
+            for ((saIdx, sa) in saProfiles.withIndex()) {
                 var saCount = 0
                 try {
                     val rootCls = classLoader.loadClass(sa.rootCheckClass)
@@ -659,7 +786,10 @@ object PackageCloaker {
                         }
                     } catch (_: Throwable) {}
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods)")
+                if (saCount > 0) {
+                    totalSaCount += saCount
+                    DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$saIdx] hooked ($saCount methods)")
+                }
             }
         } catch (t: Throwable) {
             DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)

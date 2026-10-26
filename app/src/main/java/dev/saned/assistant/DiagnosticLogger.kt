@@ -14,6 +14,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 object DiagnosticLogger {
 
@@ -28,6 +29,7 @@ object DiagnosticLogger {
     @Volatile var hookOrders: Boolean = true
     @Volatile var hookBootstrapLoop: Boolean = true
 
+    private val crashHandlerInstalled = AtomicBoolean(false)
     private val providerUri: Uri = Uri.parse("content://dev.jing.sanedhook.XposedService")
     private val logExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "Saned-DiagLogger").apply {
@@ -67,49 +69,63 @@ object DiagnosticLogger {
 
     fun installCrashHandler(module: XposedModule? = null, phase: String = "init") {
         if (module != null) xposedModule = module
+        if (!crashHandlerInstalled.compareAndSet(false, true)) return
+        try {
+            val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                try {
+                    deliverLogLineSync("CRASH", "Thread:${thread.name}", "Uncaught exception ($phase)", throwable, maxTraceLines = 20)
+                } catch (_: Throwable) {}
+                prevHandler?.uncaughtException(thread, throwable)
+            }
+            logStep("CRASH-GUARD", "UncaughtExceptionHandler active ($phase) pid=${android.os.Process.myPid()}")
+        } catch (_: Throwable) {}
+    }
+
+    private fun deliverLogLineSync(level: String, section: String, message: String, t: Throwable? = null, maxTraceLines: Int = 8) {
+        try {
+            val timeStr = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            val errSuffix = if (t != null) {
+                val sw = StringWriter()
+                t.printStackTrace(PrintWriter(sw))
+                val trace = sw.toString().lines().take(maxTraceLines).joinToString("\n  ")
+                "\n  ↳ ${t.javaClass.name}: ${t.message ?: ""}\n  $trace"
+            } else {
+                ""
+            }
+            val line = "[$timeStr] [$level] [$section] $message$errSuffix"
+            try {
+                Log.d("SanedDiag", line)
+            } catch (_: Throwable) {}
+
+            val ctx = resolveAnyContext() ?: return
+            var delivered = false
+            try {
+                val extras = Bundle().apply {
+                    putString("log_line", line)
+                }
+                val res = ctx.contentResolver.call(providerUri, "appendDiagLog", line, extras)
+                if (res != null && res.getBoolean("ok", false)) {
+                    delivered = true
+                }
+            } catch (_: Throwable) {}
+
+            if (!delivered) {
+                try {
+                    val intent = Intent("dev.saned.assistant.ACTION_DIAG_LOG").apply {
+                        component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
+                        addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
+                        putExtra("log_line", line)
+                    }
+                    ctx.sendBroadcast(intent)
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
     }
 
     private fun dispatchLogAsync(level: String, section: String, message: String, t: Throwable? = null) {
-        val nowMs = System.currentTimeMillis()
         logExecutor.execute {
-            try {
-                val timeStr = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(nowMs))
-                val errSuffix = if (t != null) {
-                    val sw = StringWriter()
-                    t.printStackTrace(PrintWriter(sw))
-                    val trace = sw.toString().lines().take(6).joinToString("\n  ")
-                    "\n  ↳ ${t.javaClass.simpleName}: ${t.message ?: ""}\n  $trace"
-                } else {
-                    ""
-                }
-                val line = "[$timeStr] [$level] [$section] $message$errSuffix"
-                try {
-                    Log.d("SanedDiag", line)
-                } catch (_: Throwable) {}
-
-                val ctx = resolveAnyContext() ?: return@execute
-                var delivered = false
-                try {
-                    val extras = Bundle().apply {
-                        putString("log_line", line)
-                    }
-                    val res = ctx.contentResolver.call(providerUri, "appendDiagLog", line, extras)
-                    if (res != null && res.getBoolean("ok", false)) {
-                        delivered = true
-                    }
-                } catch (_: Throwable) {}
-
-                if (!delivered) {
-                    try {
-                        val intent = Intent("dev.saned.assistant.ACTION_DIAG_LOG").apply {
-                            component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
-                            addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
-                            putExtra("log_line", line)
-                        }
-                        ctx.sendBroadcast(intent)
-                    } catch (_: Throwable) {}
-                }
-            } catch (_: Throwable) {}
+            deliverLogLineSync(level, section, message, t, maxTraceLines = 8)
         }
     }
 
@@ -126,6 +142,6 @@ object DiagnosticLogger {
     }
 
     fun logCrash(threadName: String, t: Throwable) {
-        dispatchLogAsync("CRASH", "Thread:$threadName", "Uncaught exception", t)
+        deliverLogLineSync("CRASH", "Thread:$threadName", "Uncaught exception", t, maxTraceLines = 20)
     }
 }
