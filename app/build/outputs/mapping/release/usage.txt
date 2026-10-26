@@ -28907,8 +28907,6 @@ kotlin.text.StringsKt__StringsKt:
     public static synthetic java.lang.String substringAfter$default(java.lang.String,char,java.lang.String,int,java.lang.Object)
     public static final java.lang.String substringAfterLast(java.lang.String,java.lang.String,java.lang.String)
     public static synthetic java.lang.String substringAfterLast$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
-    public static final java.lang.String substringBeforeLast(java.lang.String,char,java.lang.String)
-    public static synthetic java.lang.String substringBeforeLast$default(java.lang.String,char,java.lang.String,int,java.lang.Object)
     public static final boolean toBooleanStrict(java.lang.String)
     public static final java.lang.Boolean toBooleanStrictOrNull(java.lang.String)
     public static final java.lang.CharSequence trim(java.lang.CharSequence,kotlin.jvm.functions.Function1)
@@ -42790,22 +42788,24 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
     public static java.lang.String getRuntimeExecMethod()
+dev.saned.assistant.PackageCloaker$discoverAndStubCallerPromonPackage$1
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
 dev.saned.assistant.PackageCloaker$hook$5
 dev.saned.assistant.PackageCloaker$hook$6
-dev.saned.assistant.PackageCloaker$hookEarly$1
+dev.saned.assistant.PackageCloaker$hook$8
 dev.saned.assistant.PackageCloaker$hookEarly$2
-dev.saned.assistant.PackageCloaker$hookEarly$3
 dev.saned.assistant.PackageCloaker$hookEarly$4
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
 dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
+dev.saned.assistant.PackageCloaker$stubPromonPackage$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
     public static java.lang.Object defaultReturnValueForType()
+    public static boolean discoverAndStubCallerPromonPackage()
     public static long getLastCheckedVersionCode()
     public static boolean isProfilePresent(java.lang.ClassLoader,dev.saned.assistant.PackageCloaker$VersionProfile)
     public static dev.saned.assistant.PackageCloaker$VersionProfile resolveProfile()
