@@ -118,6 +118,19 @@ object PackageCloaker {
         } catch (_: Throwable) { "" }
     }
 
+    private fun safeNoOpReturnValue(type: Class<*>): Any? = when (type) {
+        Void.TYPE -> null
+        Boolean::class.javaPrimitiveType, java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
+        Int::class.javaPrimitiveType, java.lang.Integer::class.java -> 0
+        Long::class.javaPrimitiveType, java.lang.Long::class.java -> 0L
+        Short::class.javaPrimitiveType, java.lang.Short::class.java -> 0.toShort()
+        Byte::class.javaPrimitiveType, java.lang.Byte::class.java -> 0.toByte()
+        Float::class.javaPrimitiveType, java.lang.Float::class.java -> 0f
+        Double::class.javaPrimitiveType, java.lang.Double::class.java -> 0.0
+        String::class.java, CharSequence::class.java -> ""
+        else -> if (type == Any::class.java || type.name == "kotlin.Unit") Unit else null
+    }
+
     fun isPromonClassName(clsName: String?): Boolean {
         if (clsName.isNullOrEmpty()) return false
         val pkg = clsName.substringBeforeLast('.', "")
@@ -284,11 +297,39 @@ object PackageCloaker {
         }
     }
 
-    private fun autoHookCallerInstallSourceCheck(module: XposedModule) {
+    /**
+     * Dynamically hooks the MainActivity security gate caller (e.g. Evb.a called by net.jahez.fleets.MainActivity.s0)
+     * on vCode=40104 and any future version (40105+) whenever an install-source check is invoked from MainActivity.
+     */
+    private fun autoHookMainActivitySecurityGate(module: XposedModule) {
+        val cl = cachedAppClassLoader ?: return
         try {
-            val stackStr = formatAppCallStack(10)
-            if (stackStr.isNotEmpty() && installSourceLogCount.get() <= 12) {
-                DiagnosticLogger.logStep("PackageCloaker", "InstallSource app stack: $stackStr")
+            val frames = Throwable().stackTrace.filter { !isInternalHookFrame(it.className) }
+            val mainActName = getMainActivityClassName()
+            for (i in 1 until frames.size) {
+                if (frames[i].className == mainActName) {
+                    val gateFrame = frames[i - 1]
+                    val gateClsName = gateFrame.className ?: continue
+                    val gateMethodName = gateFrame.methodName ?: continue
+                    if (gateClsName != mainActName && dynamicHookedInstallSourceClasses.add("$gateClsName.$gateMethodName")) {
+                        try {
+                            val gateCls = Class.forName(gateClsName, false, cl)
+                            for (m in gateCls.declaredMethods) {
+                                if (m.name == gateMethodName) {
+                                    val retType = m.returnType
+                                    module.hook(m).intercept(object : XposedInterface.Hooker {
+                                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                                            if (!OrderInterceptor.isMasterRunning) return chain.proceed()
+                                            DiagnosticLogger.logStep("PackageCloaker", "Bypassed security gate $gateClsName.$gateMethodName")
+                                            return safeNoOpReturnValue(retType)
+                                        }
+                                    })
+                                    DiagnosticLogger.logStep("PackageCloaker", "Auto-hooked security gate $gateClsName.$gateMethodName")
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
             }
         } catch (_: Throwable) {}
     }
@@ -326,8 +367,9 @@ object PackageCloaker {
                             module.hook(m).intercept(object : XposedInterface.Hooker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     if (OrderInterceptor.isMasterRunning) {
+                                        autoHookMainActivitySecurityGate(module)
                                         if (installSourceLogCount.incrementAndGet() <= 12) {
-                                            DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG (stack=${formatAppCallStack(8)})")
+                                            DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG")
                                         }
                                         return PLAY_STORE_PKG
                                     }
@@ -340,9 +382,10 @@ object PackageCloaker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     val orig = try { chain.proceed() } catch (_: Throwable) { null }
                                     if (!OrderInterceptor.isMasterRunning) return orig
+                                    autoHookMainActivitySecurityGate(module)
                                     val spoofed = createPlayStoreInstallSourceInfo(orig)
                                     if (installSourceLogCount.incrementAndGet() <= 12) {
-                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> PlayStore InstallSourceInfo (stack=${formatAppCallStack(8)})")
+                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> PlayStore InstallSourceInfo")
                                     }
                                     return spoofed
                                 }
@@ -371,7 +414,7 @@ object PackageCloaker {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
                                 if (OrderInterceptor.isMasterRunning) {
-                                    autoHookCallerInstallSourceCheck(module)
+                                    autoHookMainActivitySecurityGate(module)
                                     return PLAY_STORE_PKG
                                 }
                                 return chain.proceed()
@@ -473,7 +516,7 @@ object PackageCloaker {
             } catch (_: Throwable) {}
         }
 
-        // Trace Dialog.show() if security alert text is present AND block MainActivity.finish() from security dialog OK click
+        // Guard Dialog.show() & MainActivity.finish() for any future version
         if (isDialogTraceHooked.compareAndSet(false, true)) {
             try {
                 val mShow = Dialog::class.java.getDeclaredMethod("show")
@@ -485,9 +528,10 @@ object PackageCloaker {
                             try {
                                 val decor = dlg.window?.decorView
                                 if (decor != null && containsSecurityAlertText(decor)) {
+                                    autoHookMainActivitySecurityGate(module)
                                     DiagnosticLogger.logWarn(
                                         "PackageCloaker",
-                                        "Security dialog shown! App stack: ${formatAppCallStack(12)}"
+                                        "Security dialog intercepted! App stack: ${formatAppCallStack(12)}"
                                     )
                                 }
                             } catch (_: Throwable) {}
@@ -509,6 +553,7 @@ object PackageCloaker {
                                         cn.contains("AlertController", ignoreCase = true) ||
                                         cn.contains("guardzilla", ignoreCase = true) ||
                                         cn.contains("Security", ignoreCase = true) ||
+                                        cn == "Evb" || cn == "kg3" ||
                                         isPromonClassName(cn)
                                     }
                                     if (fromDialogOrGuard) {
@@ -908,8 +953,6 @@ object PackageCloaker {
         if (secStateClsName.isNotEmpty()) {
             try {
                 val secCls = classLoader.loadClass(secStateClsName)
-                val fieldNames = secCls.declaredFields.joinToString(",") { "${it.name}:${it.type.simpleName}" }
-                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState fields=[$fieldNames]")
                 var secHooked = 0
                 fun clearSecurityStateBooleans(obj: Any?) {
                     if (obj == null) return
@@ -981,8 +1024,6 @@ object PackageCloaker {
         DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
         // 3. Lu80.L: ShadowArmor profile for current detectedVersionIndex
-        //    Note: On vCode=40104 (index=3), d06.a(Context) returning true triggered '- Not installed from Play Store'
-        //    in 21.txt, 22.txt, 24.txt, and 25.txt — so we return FALSE for d06.a(Context) and log the full app call stack!
         try {
             val saProfiles = getAllShadowArmorProfiles()
             val sa = saProfiles.getOrNull(detectedVersionIndex)
@@ -1002,20 +1043,15 @@ object PackageCloaker {
                         }
                     } catch (_: Throwable) {}
                 }
-                val installSourceRetVal = if (detectedVersionIndex >= 3) false else true
-                for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to installSourceRetVal, sa.certPinClass to true)) {
+                for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to true, sa.certPinClass to true)) {
                     if (clsName.isEmpty()) continue
                     try {
                         val c = classLoader.loadClass(clsName)
                         for (m in c.declaredMethods) {
                             if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterTypes.contentEquals(arrayOf(Context::class.java))) {
                                 module.hook(m).intercept(object : XposedInterface.Hooker {
-                                    override fun intercept(chain: XposedInterface.Chain): Any? {
-                                        if (!OrderInterceptor.isMasterRunning) return chain.proceed()
-                                        val appStack = formatAppCallStack(10)
-                                        DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor $clsName.${m.name}(Context) -> forcing $retVal (stack=$appStack)")
-                                        return retVal
-                                    }
+                                    override fun intercept(chain: XposedInterface.Chain): Any? =
+                                        if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
                                 })
                                 dynamicHookedInstallSourceClasses.add(clsName)
                                 saCount++
@@ -1041,44 +1077,80 @@ object PackageCloaker {
                         }
                     } catch (_: Throwable) {}
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods, installSourceRet=$installSourceRetVal)")
+                DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods)")
             }
 
-            // Also inspect g06 / rI5 / vS and *06 sibling classes on 40104+ to auto-hook any FeatureFlags (String)->boolean class
-            val siblingCandidates = ArrayList<String>(60)
-            for (ch in 'a'..'z') siblingCandidates.add("${ch}06")
-            for (ch in 'A'..'Z') siblingCandidates.add("${ch}06")
-            siblingCandidates.addAll(listOf("rI5", "vS"))
-            val discoveredSiblings = mutableListOf<String>()
-            for (cand in siblingCandidates) {
-                try {
-                    val cls = Class.forName(cand, false, classLoader)
-                    val mSigs = cls.declaredMethods.joinToString(",") { "${it.name}(${it.parameterTypes.joinToString { p -> p.simpleName }}):${it.returnType.simpleName}" }
-                    discoveredSiblings.add("$cand[$mSigs]")
-                    for (m in cls.declaredMethods) {
-                        val pTypes = m.parameterTypes
-                        if (m.returnType == Boolean::class.javaPrimitiveType &&
-                            pTypes.isNotEmpty() &&
-                            pTypes[0] == String::class.java &&
-                            (pTypes.size == 1 || (pTypes.size == 2 && pTypes[1] == Boolean::class.javaPrimitiveType))
-                        ) {
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? {
-                                    val key = chain.args.getOrNull(0) as? String
-                                    if (OrderInterceptor.isMasterRunning && key != null && BLOCKED_FEATURE_FLAG_KEYS.contains(key)) {
-                                        DiagnosticLogger.logStep("PackageCloaker", "Blocked FeatureFlag '$key' in $cand.${m.name} -> false")
-                                        return false
-                                    }
-                                    return chain.proceed()
-                                }
-                            })
-                        }
+            // 4. Hook vCode=40104 discovered security gate & dialog classes (Evb, kg3, t06) discovered from 26.txt:
+            //    Stack in 26.txt: kg3.c:106 <- Evb.a:132 <- net.jahez.fleets.MainActivity.s0:39
+            //                     d06.a(Context) <- Evb.c:4 <- Evb.a:35 <- net.jahez.fleets.MainActivity.s0:39
+            try {
+                val evbCls = classLoader.loadClass("Evb")
+                var evbHooked = 0
+                for (m in evbCls.declaredMethods) {
+                    val mName = m.name
+                    val retType = m.returnType
+                    if (mName == "a") {
+                        // Main security gate entry point called by MainActivity.s0:39 -> bypass completely so kg3.c:106 is never called!
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                if (!OrderInterceptor.isMasterRunning) return chain.proceed()
+                                DiagnosticLogger.logStep("PackageCloaker", "Bypassed Evb.a security gate (called from MainActivity.s0)")
+                                return safeNoOpReturnValue(retType)
+                            }
+                        })
+                        evbHooked++
+                    } else if (mName == "c" && retType == Boolean::class.javaPrimitiveType) {
+                        // Evb.c:4 is the Play Store + CertPin check in Evb
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? =
+                                if (OrderInterceptor.isMasterRunning) true else chain.proceed()
+                        })
+                        evbHooked++
+                    } else if (retType == Boolean::class.javaPrimitiveType) {
+                        // Other boolean checks in Evb (Root / AutoClicker)
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? =
+                                if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                        })
+                        evbHooked++
                     }
-                } catch (_: Throwable) {}
-            }
-            if (discoveredSiblings.isNotEmpty()) {
-                DiagnosticLogger.logStep("PackageCloaker", "Scanned *06 security cluster: ${discoveredSiblings.take(20).joinToString("; ")}")
-            }
+                }
+                dynamicHookedInstallSourceClasses.add("Evb.a")
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked Evb security coordinator ($evbHooked methods)")
+            } catch (_: Throwable) {}
+
+            try {
+                val kg3Cls = classLoader.loadClass("kg3")
+                var kg3Hooked = 0
+                for (m in kg3Cls.declaredMethods) {
+                    if (m.name == "c") {
+                        val retType = m.returnType
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                if (!OrderInterceptor.isMasterRunning) return chain.proceed()
+                                DiagnosticLogger.logStep("PackageCloaker", "Blocked kg3.c security dialog builder")
+                                return safeNoOpReturnValue(retType)
+                            }
+                        })
+                        kg3Hooked++
+                    }
+                }
+                if (kg3Hooked > 0) {
+                    DiagnosticLogger.logStep("PackageCloaker", "Hooked kg3.c security dialog ($kg3Hooked methods)")
+                }
+            } catch (_: Throwable) {}
+
+            try {
+                val t06Cls = classLoader.loadClass("t06")
+                for (m in t06Cls.declaredMethods) {
+                    if (m.returnType == Boolean::class.javaPrimitiveType) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? =
+                                if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                        })
+                    }
+                }
+            } catch (_: Throwable) {}
         } catch (t: Throwable) {
             DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)
         }
