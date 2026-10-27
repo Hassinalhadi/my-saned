@@ -76,7 +76,7 @@ object Native {
         "jahez_fleets", "ggk.am", "ggk.P", "ggk.ar", "net.jahez.fleets.MainActivity", "ggk.z", "b", "loadLibrary0",
         "jahez_fleets", "oxxqbaxw.an", "oxxqbaxw.e", "oxxqbaxw.ao", "net.jahez.fleets.MainActivity", "oxxqbaxw.b", "a", "loadLibrary0",
         "jahez_fleets", "lrbppeks.U", "lrbppeks.b", "lrbppeks.ak", "net.jahez.fleets.MainActivity", "lrbppeks.am", "a", "loadLibrary0",
-        "jahez_fleets", "", "", "", "net.jahez.fleets.MainActivity", "fvfeiucoi.ag", "b", "loadLibrary0"
+        "jahez_fleets", "fvfeiucoi.ag", "fvfeiucoi.c", "fvfeiucoi.y", "net.jahez.fleets.MainActivity", "fvfeiucoi.I", "a", "loadLibrary0"
     )
     private val FALLBACK_GUARD_CLASSES = arrayOf(
         "S86", "yM", "ta3", "xD", "cj6", "tEa", "Ke0", "MV5", "XS", "wRa", "A76", "gM", "B93", "fD", "Jh6"

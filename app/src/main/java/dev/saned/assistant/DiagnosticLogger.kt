@@ -74,6 +74,14 @@ object DiagnosticLogger {
             val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 try {
+                    if (PackageCloaker.isPromonThrowable(throwable) && thread.name != "main") {
+                        deliverLogLineSync(
+                            "WARN",
+                            "CRASH-GUARD",
+                            "Suppressed Promon background exception on ${thread.name}: ${throwable.javaClass.name}: ${throwable.message}"
+                        )
+                        return@setDefaultUncaughtExceptionHandler
+                    }
                     deliverLogLineSync("CRASH", "Thread:${thread.name}", "Uncaught exception ($phase)", throwable, maxTraceLines = 20)
                 } catch (_: Throwable) {}
                 prevHandler?.uncaughtException(thread, throwable)
