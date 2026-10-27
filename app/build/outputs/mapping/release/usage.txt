@@ -42792,9 +42792,15 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
     public static java.lang.String getRuntimeExecMethod()
+dev.saned.assistant.PackageCloaker$describeBooleanFields$2$$InternalSyntheticThrowCCEIfNotNull$24$b83929ce074aa60f2562f2a567877c97527c90de741bd3133d444e1187dd0cb1$0
+dev.saned.assistant.PackageCloaker$describeBooleanFields$2:
+    public final java.lang.Throwable invoke(java.lang.Throwable)
+    public static java.lang.CharSequence invoke$1()
+    public final java.lang.String invoke$1()
+    public static void invoke$1()
+    public static java.lang.CharSequence invoke$2()
+    public static java.lang.String invoke$2()
 dev.saned.assistant.PackageCloaker$formatAppCallStack$2
-dev.saned.assistant.PackageCloaker$hook$10
-dev.saned.assistant.PackageCloaker$hook$12
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
@@ -42804,11 +42810,11 @@ dev.saned.assistant.PackageCloaker$hook$8
 dev.saned.assistant.PackageCloaker$hook$9
 dev.saned.assistant.PackageCloaker$hookEarly$2
 dev.saned.assistant.PackageCloaker$hookEarly$3
-dev.saned.assistant.PackageCloaker$hookEarly$4
+dev.saned.assistant.PackageCloaker$hookEarly$5
 dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$1
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$11
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4
@@ -42824,13 +42830,15 @@ dev.saned.assistant.PackageCloaker$stubPromonPackage$3
 dev.saned.assistant.PackageCloaker$stubPromonPackage$pSig$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
-    public static void autoHookMainActivitySecurityGate()
+    public static java.lang.Object createFallbackSecurityResult()
     public static java.lang.Object createPlayStoreInstallSourceInfo()
     public static java.lang.Object defaultReturnValueForType()
+    public static java.lang.String describeBooleanFields()
     public static boolean discoverAndStubCallerPromonPackage()
     public static java.lang.String formatAppCallStack()
     public static long getLastCheckedVersionCode()
     public static boolean isProfilePresent(java.lang.ClassLoader,dev.saned.assistant.PackageCloaker$VersionProfile)
+    public static void normalizeFailedSecurityResult()
     public static dev.saned.assistant.PackageCloaker$VersionProfile resolveProfile()
     public static java.lang.Object safeNoOpReturnValue()
 dev.saned.assistant.R$drawable
@@ -43068,13 +43076,7 @@ kotlin.ResultKt
 kotlin.SynchronizedLazyImpl:
     public static boolean isInitialized()
 kotlin.TuplesKt
-kotlin.collections.AbstractCollection$toString$1$$InternalSyntheticThrowCCEIfNotNull$24$8b23b5989d83f217c632451418a9a5ca9637b7c5c6b4e7275fb3cf50257f9175$0
-kotlin.collections.AbstractCollection$toString$1:
-    public final java.lang.Throwable invoke(java.lang.Throwable)
-    public static java.lang.CharSequence invoke$1()
-    public final java.lang.String invoke$1()
-    public static void invoke$1()
-    public static java.lang.String invoke$2()
+kotlin.collections.AbstractCollection$toString$1
 kotlin.collections.AbstractIterator$WhenMappings
 kotlin.collections.AbstractIterator
 kotlin.collections.AbstractList$Companion
@@ -43109,6 +43111,7 @@ kotlin.collections.ArraysKt___ArraysKt:
     public static java.util.List asList(java.lang.Object[])
     public static synthetic void copyInto$default(byte[],byte[],int,int)
     public static void fill$default(java.lang.Object[])
+    public static java.lang.Object firstOrNull(java.lang.Object[])
     public static int getLastIndex(java.lang.Object[])
     public static java.util.ArrayList toMutableList(java.lang.Object[])
 kotlin.collections.ArraysUtilJVM
@@ -43347,7 +43350,7 @@ kotlin.sequences.SequenceBuilderIterator:
 kotlin.sequences.SequenceScope
 kotlin.sequences.SequencesKt:
     public static kotlin.sequences.SequencesKt___SequencesKt$asIterable$$inlined$Iterable$1 asIterable(kotlin.text.DelimitedRangesSequence)
-    public static kotlin.sequences.TransformingSequence map(kotlin.text.DelimitedRangesSequence,kotlin.collections.AbstractCollection$toString$1)
+    public static kotlin.sequences.TransformingSequence map(kotlin.text.DelimitedRangesSequence,dev.saned.assistant.PackageCloaker$describeBooleanFields$2)
 kotlin.sequences.SequencesKt__SequenceBuilderKt
 kotlin.sequences.SequencesKt__SequencesJVMKt
 kotlin.sequences.SequencesKt__SequencesKt$asSequence$$inlined$Sequence$1

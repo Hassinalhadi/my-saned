@@ -131,6 +131,55 @@ object PackageCloaker {
         else -> if (type == Any::class.java || type.name == "kotlin.Unit") Unit else null
     }
 
+    private fun describeBooleanFields(obj: Any): String {
+        return try {
+            obj.javaClass.declaredFields
+                .filter { !Modifier.isStatic(it.modifiers) && (it.type == Boolean::class.javaPrimitiveType || it.type == java.lang.Boolean::class.java) }
+                .joinToString(",") { f ->
+                    f.isAccessible = true
+                    "${f.name}=${f.getBoolean(obj)}"
+                }
+        } catch (_: Throwable) { "" }
+    }
+
+    private fun normalizeFailedSecurityResult(obj: Any) {
+        try {
+            val boolFields = obj.javaClass.declaredFields.filter {
+                !Modifier.isStatic(it.modifiers) &&
+                    (it.type == Boolean::class.javaPrimitiveType || it.type == java.lang.Boolean::class.java)
+            }
+            if (boolFields.isEmpty()) return
+            for (f in boolFields) f.isAccessible = true
+            val dField = boolFields.firstOrNull { it.name == "d" } ?: boolFields.last()
+            val failedDVal = dField.getBoolean(obj)
+            val cleanVal = !failedDVal
+            for (f in boolFields) {
+                try {
+                    f.setBoolean(obj, cleanVal)
+                } catch (_: Throwable) {
+                    try { f.set(obj, java.lang.Boolean.valueOf(cleanVal)) } catch (_: Throwable) {}
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun createFallbackSecurityResult(retType: Class<*>): Any? {
+        return try {
+            val ctor = retType.declaredConstructors.firstOrNull() ?: return null
+            ctor.isAccessible = true
+            val args = ctor.parameterTypes.map { pType ->
+                when (pType) {
+                    Boolean::class.javaPrimitiveType, java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
+                    Int::class.javaPrimitiveType, java.lang.Integer::class.java -> 0
+                    Long::class.javaPrimitiveType, java.lang.Long::class.java -> 0L
+                    String::class.java -> ""
+                    else -> null
+                }
+            }.toTypedArray()
+            ctor.newInstance(*args)
+        } catch (_: Throwable) { null }
+    }
+
     fun isPromonClassName(clsName: String?): Boolean {
         if (clsName.isNullOrEmpty()) return false
         val pkg = clsName.substringBeforeLast('.', "")
@@ -297,43 +346,6 @@ object PackageCloaker {
         }
     }
 
-    /**
-     * Dynamically hooks the MainActivity security gate caller (e.g. Evb.a called by net.jahez.fleets.MainActivity.s0)
-     * on vCode=40104 and any future version (40105+) whenever an install-source check is invoked from MainActivity.
-     */
-    private fun autoHookMainActivitySecurityGate(module: XposedModule) {
-        val cl = cachedAppClassLoader ?: return
-        try {
-            val frames = Throwable().stackTrace.filter { !isInternalHookFrame(it.className) }
-            val mainActName = getMainActivityClassName()
-            for (i in 1 until frames.size) {
-                if (frames[i].className == mainActName) {
-                    val gateFrame = frames[i - 1]
-                    val gateClsName = gateFrame.className ?: continue
-                    val gateMethodName = gateFrame.methodName ?: continue
-                    if (gateClsName != mainActName && dynamicHookedInstallSourceClasses.add("$gateClsName.$gateMethodName")) {
-                        try {
-                            val gateCls = Class.forName(gateClsName, false, cl)
-                            for (m in gateCls.declaredMethods) {
-                                if (m.name == gateMethodName) {
-                                    val retType = m.returnType
-                                    module.hook(m).intercept(object : XposedInterface.Hooker {
-                                        override fun intercept(chain: XposedInterface.Chain): Any? {
-                                            if (!OrderInterceptor.isMasterRunning) return chain.proceed()
-                                            DiagnosticLogger.logStep("PackageCloaker", "Bypassed security gate $gateClsName.$gateMethodName")
-                                            return safeNoOpReturnValue(retType)
-                                        }
-                                    })
-                                    DiagnosticLogger.logStep("PackageCloaker", "Auto-hooked security gate $gateClsName.$gateMethodName")
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                }
-            }
-        } catch (_: Throwable) {}
-    }
-
     private fun installMapsAndPackageCloakerHooks(module: XposedModule) {
         if (isMapsAndPkgHooked.compareAndSet(false, true)) {
             try {
@@ -367,7 +379,6 @@ object PackageCloaker {
                             module.hook(m).intercept(object : XposedInterface.Hooker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     if (OrderInterceptor.isMasterRunning) {
-                                        autoHookMainActivitySecurityGate(module)
                                         if (installSourceLogCount.incrementAndGet() <= 12) {
                                             DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG")
                                         }
@@ -382,7 +393,6 @@ object PackageCloaker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     val orig = try { chain.proceed() } catch (_: Throwable) { null }
                                     if (!OrderInterceptor.isMasterRunning) return orig
-                                    autoHookMainActivitySecurityGate(module)
                                     val spoofed = createPlayStoreInstallSourceInfo(orig)
                                     if (installSourceLogCount.incrementAndGet() <= 12) {
                                         DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> PlayStore InstallSourceInfo")
@@ -414,7 +424,6 @@ object PackageCloaker {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
                                 if (OrderInterceptor.isMasterRunning) {
-                                    autoHookMainActivitySecurityGate(module)
                                     return PLAY_STORE_PKG
                                 }
                                 return chain.proceed()
@@ -522,21 +531,20 @@ object PackageCloaker {
                 val mShow = Dialog::class.java.getDeclaredMethod("show")
                 module.hook(mShow).intercept(object : XposedInterface.Hooker {
                     override fun intercept(chain: XposedInterface.Chain): Any? {
-                        val res = chain.proceed()
                         val dlg = chain.thisObject as? Dialog
-                        if (dlg != null) {
+                        if (OrderInterceptor.isMasterRunning && dlg != null) {
                             try {
                                 val decor = dlg.window?.decorView
                                 if (decor != null && containsSecurityAlertText(decor)) {
-                                    autoHookMainActivitySecurityGate(module)
                                     DiagnosticLogger.logWarn(
                                         "PackageCloaker",
-                                        "Security dialog intercepted! App stack: ${formatAppCallStack(12)}"
+                                        "Blocked security Dialog.show()! App stack: ${formatAppCallStack(12)}"
                                     )
+                                    return null
                                 }
                             } catch (_: Throwable) {}
                         }
-                        return res
+                        return chain.proceed()
                     }
                 })
                 for (mFinName in listOf("finish", "finishAffinity", "finishAndRemoveTask")) {
@@ -1080,44 +1088,12 @@ object PackageCloaker {
                 DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods)")
             }
 
-            // 4. Hook vCode=40104 discovered security gate & dialog classes (Evb, kg3, t06) discovered from 26.txt:
-            //    Stack in 26.txt: kg3.c:106 <- Evb.a:132 <- net.jahez.fleets.MainActivity.s0:39
-            //                     d06.a(Context) <- Evb.c:4 <- Evb.a:35 <- net.jahez.fleets.MainActivity.s0:39
-            try {
-                val evbCls = classLoader.loadClass("Evb")
-                var evbHooked = 0
-                for (m in evbCls.declaredMethods) {
-                    val mName = m.name
-                    val retType = m.returnType
-                    if (mName == "a") {
-                        // Main security gate entry point called by MainActivity.s0:39 -> bypass completely so kg3.c:106 is never called!
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                if (!OrderInterceptor.isMasterRunning) return chain.proceed()
-                                DiagnosticLogger.logStep("PackageCloaker", "Bypassed Evb.a security gate (called from MainActivity.s0)")
-                                return safeNoOpReturnValue(retType)
-                            }
-                        })
-                        evbHooked++
-                    } else if (mName == "c" && retType == Boolean::class.javaPrimitiveType) {
-                        // Evb.c:4 is the Play Store + CertPin check in Evb
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? =
-                                if (OrderInterceptor.isMasterRunning) true else chain.proceed()
-                        })
-                        evbHooked++
-                    } else if (retType == Boolean::class.javaPrimitiveType) {
-                        // Other boolean checks in Evb (Root / AutoClicker)
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? =
-                                if (OrderInterceptor.isMasterRunning) false else chain.proceed()
-                        })
-                        evbHooked++
-                    }
-                }
-                dynamicHookedInstallSourceClasses.add("Evb.a")
-                DiagnosticLogger.logStep("PackageCloaker", "Hooked Evb security coordinator ($evbHooked methods)")
-            } catch (_: Throwable) {}
+            // 4. Hook vCode=40104 discovered security coordinator (Evb), dialog builder (kg3), and state model (cx1):
+            //    - Stack in 26.txt: kg3.c:106 <- Evb.a:132 <- net.jahez.fleets.MainActivity.s0:39
+            //                       d06.a(Context) <- Evb.c:4 <- Evb.a:35 <- net.jahez.fleets.MainActivity.s0:39
+            //    - Stack in 29.txt: MainActivity.s0:43 reads 'boolean cx1.d' on the cx1 instance returned by Evb.a!
+            val wasKg3CalledInEvbA = AtomicBoolean(false)
+            val invertEvbC = AtomicBoolean(true)
 
             try {
                 val kg3Cls = classLoader.loadClass("kg3")
@@ -1128,7 +1104,9 @@ object PackageCloaker {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
                                 if (!OrderInterceptor.isMasterRunning) return chain.proceed()
-                                DiagnosticLogger.logStep("PackageCloaker", "Blocked kg3.c security dialog builder")
+                                wasKg3CalledInEvbA.set(true)
+                                invertEvbC.set(!invertEvbC.get())
+                                DiagnosticLogger.logStep("PackageCloaker", "Blocked kg3.c security dialog builder at Evb.a:132")
                                 return safeNoOpReturnValue(retType)
                             }
                         })
@@ -1141,15 +1119,53 @@ object PackageCloaker {
             } catch (_: Throwable) {}
 
             try {
-                val t06Cls = classLoader.loadClass("t06")
-                for (m in t06Cls.declaredMethods) {
-                    if (m.returnType == Boolean::class.javaPrimitiveType) {
+                val evbCls = classLoader.loadClass("Evb")
+                var evbHooked = 0
+                for (m in evbCls.declaredMethods) {
+                    val mName = m.name
+                    val retType = m.returnType
+                    if (mName == "c" && retType == Boolean::class.javaPrimitiveType) {
+                        // Evb.c:4 is the Play Store (d06.a) + CertPin check called at Evb.a:35.
+                        // On NPatch APK, chain.proceed() returns the failed boolean (due to NPatch cert), so !realRes is the passing boolean.
                         module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? =
-                                if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val realRes = (chain.proceed() as? Boolean) ?: false
+                                if (!OrderInterceptor.isMasterRunning) return realRes
+                                val out = if (invertEvbC.get()) !realRes else realRes
+                                DiagnosticLogger.logStep("PackageCloaker", "Evb.c realRes=$realRes -> returning $out")
+                                return out
+                            }
                         })
+                        evbHooked++
+                    } else if (mName == "a") {
+                        // Evb.a is called by MainActivity.s0:39 and MUST execute chain.proceed() so it returns a non-null cx1 instance for MainActivity.s0:43!
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                wasKg3CalledInEvbA.set(false)
+                                var res = chain.proceed()
+                                if (!OrderInterceptor.isMasterRunning) return res
+                                val dialogTriggered = wasKg3CalledInEvbA.getAndSet(false)
+                                if (res == null && retType != Void.TYPE && retType.name != "kotlin.Unit") {
+                                    res = createFallbackSecurityResult(retType)
+                                }
+                                if (res != null) {
+                                    val beforeFields = describeBooleanFields(res)
+                                    if (dialogTriggered) {
+                                        normalizeFailedSecurityResult(res)
+                                    }
+                                    val afterFields = describeBooleanFields(res)
+                                    DiagnosticLogger.logStep(
+                                        "PackageCloaker",
+                                        "Evb.a completed (dialogTriggered=$dialogTriggered, ret=${res.javaClass.name}, before=[$beforeFields], after=[$afterFields])"
+                                    )
+                                }
+                                return res
+                            }
+                        })
+                        evbHooked++
                     }
                 }
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked Evb security coordinator ($evbHooked methods)")
             } catch (_: Throwable) {}
         } catch (t: Throwable) {
             DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)
