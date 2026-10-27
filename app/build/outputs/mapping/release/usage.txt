@@ -24183,6 +24183,7 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public final dev.saned.assistant.PackageCloaker$VersionProfile copy(int,java.lang.String,java.util.List,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)
     public static synthetic dev.saned.assistant.PackageCloaker$VersionProfile copy$default(dev.saned.assistant.PackageCloaker$VersionProfile,int,java.lang.String,java.util.List,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
 dev.saned.assistant.PackageCloaker:
+    private static final java.lang.String PLAY_STORE_PKG
     public final dev.saned.assistant.PackageCloaker$VersionProfile getActiveProfile()
     public final int getDetectedVersionIndex()
     public final boolean isNativeStubbedFlag()
@@ -42789,20 +42790,27 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
     public static java.lang.String getRuntimeExecMethod()
+dev.saned.assistant.PackageCloaker$autoHookCallerInstallSourceCheck$1
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
 dev.saned.assistant.PackageCloaker$hook$5
 dev.saned.assistant.PackageCloaker$hook$6
-dev.saned.assistant.PackageCloaker$hook$7
-dev.saned.assistant.PackageCloaker$hook$8
 dev.saned.assistant.PackageCloaker$hookEarly$2
 dev.saned.assistant.PackageCloaker$hookEarly$3
 dev.saned.assistant.PackageCloaker$hookEarly$4
 dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$5
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$6
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$7
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$8
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$9
 dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
 dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
 dev.saned.assistant.PackageCloaker$stubPromonPackage$1
@@ -42811,6 +42819,8 @@ dev.saned.assistant.PackageCloaker$stubPromonPackage$3
 dev.saned.assistant.PackageCloaker$stubPromonPackage$pSig$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
+    public static void autoHookCallerInstallSourceCheck()
+    public static java.lang.Object createPlayStoreInstallSourceInfo()
     public static java.lang.Object defaultReturnValueForType()
     public static boolean discoverAndStubCallerPromonPackage()
     public static long getLastCheckedVersionCode()

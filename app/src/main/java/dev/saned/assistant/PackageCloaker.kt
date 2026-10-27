@@ -1,19 +1,29 @@
 package dev.saned.assistant
 
 import android.app.Activity
+import android.app.Dialog
+import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.BaseBundle
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcel
+import android.os.Parcelable
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
 import dev.jing.sanedhook.util.Native
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import org.json.JSONObject
 import java.lang.reflect.Modifier
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 object PackageCloaker {
 
@@ -48,10 +58,19 @@ object PackageCloaker {
         "dev.jing.sanedhook"
     )
 
+    private val BLOCKED_FEATURE_FLAG_KEYS = setOf(
+        "rooted_device_check",
+        "auto_clicker_check",
+        "installation_source_check"
+    )
+
+    private const val PLAY_STORE_PKG = "com.android.vending"
+
     private val isRuntimeHooked = AtomicBoolean(false)
     private val isNativeStubbed = AtomicBoolean(false)
     private val stubbedNativeClasses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val hookedPromonGuardClasses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val dynamicHookedInstallSourceClasses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val dynamicBlockedActivities = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val scannedPromonPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply {
         add("ggk")
@@ -65,6 +84,10 @@ object PackageCloaker {
     private val isSecurityHooked = AtomicBoolean(false)
     private val isMapsAndPkgHooked = AtomicBoolean(false)
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
+    private val isInstallSourceInfoHooked = AtomicBoolean(false)
+    private val isFeatureFlagsSourceHooked = AtomicBoolean(false)
+    private val isDialogGuardHooked = AtomicBoolean(false)
+    private val installSourceLogCount = AtomicInteger(0)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
 
@@ -189,7 +212,7 @@ object PackageCloaker {
     fun getMainActivityClassName(): String =
         (activeProfile ?: getAllVersionProfiles().firstOrNull())?.mainActivity?.takeIf { it.isNotEmpty() } ?: "net.jahez.fleets.MainActivity"
 
-    private val jniCallLogCounter = java.util.concurrent.atomic.AtomicInteger(0)
+    private val jniCallLogCounter = AtomicInteger(0)
     private val isProcessKillHooked = AtomicBoolean(false)
 
     private fun defaultReturnValueForType(type: Class<*>): Any? = when (type) {
@@ -213,34 +236,181 @@ object PackageCloaker {
         }
     }
 
+    /**
+     * Constructs a genuine android.content.pm.InstallSourceInfo via public Parcelable.Creator
+     * without using HiddenAPI-blocked field reflection (which throws NoSuchFieldException on Android 11-16!).
+     * Even if InstallSourceInfo.getInstallingPackageName() is AOT-inlined into a direct field read in boot.oat,
+     * the underlying mInstallingPackageName / mInitiatingPackageName / mOriginatingPackageName fields are
+     * genuinely set to "com.android.vending" and mPackageSource is set to 2 (PACKAGE_SOURCE_STORE).
+     */
+    private fun createPlayStoreInstallSourceInfo(orig: Any?): Any? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return orig
+        return try {
+            val signingInfo = try {
+                if (orig is InstallSourceInfo) orig.initiatingPackageSigningInfo as? Parcelable else null
+            } catch (_: Throwable) { null }
+            val parcel = Parcel.obtain()
+            try {
+                parcel.writeString(PLAY_STORE_PKG) // mInitiatingPackageName
+                parcel.writeParcelable(signingInfo, 0) // mInitiatingPackageSigningInfo
+                parcel.writeString(PLAY_STORE_PKG) // mOriginatingPackageName
+                parcel.writeString(PLAY_STORE_PKG) // mInstallingPackageName
+                parcel.writeInt(2) // mPackageSource = PackageInstaller.PACKAGE_SOURCE_STORE (API 33+)
+                parcel.writeString(PLAY_STORE_PKG) // mUpdateOwnerPackageName (API 34+)
+                parcel.setDataPosition(0)
+                InstallSourceInfo.CREATOR.createFromParcel(parcel)
+            } finally {
+                parcel.recycle()
+            }
+        } catch (_: Throwable) {
+            orig
+        }
+    }
+
+    /**
+     * Dynamically inspects the call stack when getInstallSourceInfo / getInstallerPackageName is called
+     * and hooks any app-level InstallSourceCheck class with signature (Context) -> boolean to return true.
+     * This automatically covers vCode=40104 and all future versions (40105+) regardless of R8 class renaming.
+     */
+    private fun autoHookCallerInstallSourceCheck(module: XposedModule) {
+        val cl = cachedAppClassLoader ?: return
+        try {
+            val trace = Throwable().stackTrace
+            for (frame in trace) {
+                val cn = frame.className ?: continue
+                if (cn.startsWith("android.") ||
+                    cn.startsWith("java.") ||
+                    cn.startsWith("javax.") ||
+                    cn.startsWith("kotlin.") ||
+                    cn.startsWith("org.matrix.") ||
+                    cn.startsWith("top.nkbe.") ||
+                    cn.startsWith("org.lsposed.") ||
+                    cn.startsWith("io.github.") ||
+                    cn.startsWith("dev.saned.") ||
+                    cn.startsWith("dev.jing.") ||
+                    cn.startsWith("LSPHooker")
+                ) {
+                    continue
+                }
+                if (dynamicHookedInstallSourceClasses.add(cn)) {
+                    try {
+                        val cls = Class.forName(cn, false, cl)
+                        for (m in cls.declaredMethods) {
+                            if (m.returnType == Boolean::class.javaPrimitiveType &&
+                                m.parameterTypes.contentEquals(arrayOf(Context::class.java))
+                            ) {
+                                module.hook(m).intercept(object : XposedInterface.Hooker {
+                                    override fun intercept(chain: XposedInterface.Chain): Any? =
+                                        if (OrderInterceptor.isMasterRunning) java.lang.Boolean.TRUE else chain.proceed()
+                                })
+                                DiagnosticLogger.logStep("PackageCloaker", "Auto-hooked InstallSourceCheck $cn.${m.name}(Context) -> true")
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun installMapsAndPackageCloakerHooks(module: XposedModule) {
         if (isMapsAndPkgHooked.compareAndSet(false, true)) {
             try {
                 val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
-                val targetNames = setOf(
+                val infoTargetNames = setOf(
                     "getApplicationInfo",
                     "getApplicationInfoAsUser",
                     "getPackageInfo",
                     "getPackageInfoAsUser"
                 )
+                val installSourceTargetNames = setOf(
+                    "getInstallSourceInfo",
+                    "getInstallSourceInfoAsUser"
+                )
                 for (m in appPkgMgrClass.declaredMethods) {
-                    if (m.name in targetNames) {
-                        module.hook(m).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                val pkgArg = chain.args.firstOrNull() as? String
-                                if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg)) {
-                                    throw PackageManager.NameNotFoundException(pkgArg)
+                    when (m.name) {
+                        in infoTargetNames -> {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    val pkgArg = chain.args.firstOrNull() as? String
+                                    if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg)) {
+                                        throw PackageManager.NameNotFoundException(pkgArg)
+                                    }
+                                    val res = chain.proceed()
+                                    patchGoogleMapsApiKeyIfNeeded(res, module)
+                                    return res
                                 }
-                                val res = chain.proceed()
-                                patchGoogleMapsApiKeyIfNeeded(res, module)
-                                return res
-                            }
-                        })
+                            })
+                        }
+                        "getInstallerPackageName" -> {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    if (OrderInterceptor.isMasterRunning) {
+                                        autoHookCallerInstallSourceCheck(module)
+                                        if (installSourceLogCount.incrementAndGet() <= 6) {
+                                            DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG")
+                                        }
+                                        return PLAY_STORE_PKG
+                                    }
+                                    return chain.proceed()
+                                }
+                            })
+                        }
+                        in installSourceTargetNames -> {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    val orig = try { chain.proceed() } catch (_: Throwable) { null }
+                                    if (!OrderInterceptor.isMasterRunning) return orig
+                                    autoHookCallerInstallSourceCheck(module)
+                                    val spoofed = createPlayStoreInstallSourceInfo(orig)
+                                    if (installSourceLogCount.incrementAndGet() <= 6) {
+                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> Parcel InstallSourceInfo($PLAY_STORE_PKG)")
+                                    }
+                                    return spoofed
+                                }
+                            })
+                        }
                     }
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "Hooked ApplicationPackageManager (getApplicationInfo/AsUser + getPackageInfo/AsUser)")
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked ApplicationPackageManager (AppInfo/PkgInfo + InstallSourceInfo/InstallerPkg)")
             } catch (t: Throwable) {
                 DiagnosticLogger.logError("PackageCloaker:MapsPkg", "Error hooking ApplicationPackageManager", t)
+            }
+        }
+
+        // Hook public getters on android.content.pm.InstallSourceInfo directly (Android 11+ / API 30+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && isInstallSourceInfoHooked.compareAndSet(false, true)) {
+            try {
+                val isiClass = InstallSourceInfo::class.java
+                val stringGetters = setOf(
+                    "getInstallingPackageName",
+                    "getInitiatingPackageName",
+                    "getOriginatingPackageName",
+                    "getUpdateOwnerPackageName"
+                )
+                var isiHookCount = 0
+                for (m in isiClass.declaredMethods) {
+                    if (m.name in stringGetters && m.parameterCount == 0 && m.returnType == String::class.java) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                if (OrderInterceptor.isMasterRunning) {
+                                    autoHookCallerInstallSourceCheck(module)
+                                    return PLAY_STORE_PKG
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                        isiHookCount++
+                    } else if (m.name == "getPackageSource" && m.parameterCount == 0 && m.returnType == Int::class.javaPrimitiveType) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? =
+                                if (OrderInterceptor.isMasterRunning) 2 else chain.proceed()
+                        })
+                        isiHookCount++
+                    }
+                }
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked InstallSourceInfo getters ($isiHookCount methods -> $PLAY_STORE_PKG)")
+            } catch (t: Throwable) {
+                DiagnosticLogger.logError("PackageCloaker:ISI", "Error hooking InstallSourceInfo", t)
             }
         }
 
@@ -263,21 +433,135 @@ object PackageCloaker {
                                     return chain.proceed()
                                 }
                             })
+                        } else if (m.name == "getBoolean" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    val key = chain.args.firstOrNull() as? String
+                                    if (OrderInterceptor.isMasterRunning && key != null && BLOCKED_FEATURE_FLAG_KEYS.contains(key)) {
+                                        return java.lang.Boolean.FALSE
+                                    }
+                                    return chain.proceed()
+                                }
+                            })
                         }
                     }
                 } catch (_: Throwable) {}
             }
-            DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle.getString for com.google.android.geo.API_KEY")
+            DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle (Maps API_KEY + FeatureFlag booleans)")
+        }
+
+        // Hook SharedPreferencesImpl.getBoolean & JSONObject.optBoolean/getBoolean for feature flags ("installation_source_check", etc.)
+        if (isFeatureFlagsSourceHooked.compareAndSet(false, true)) {
+            try {
+                val spImplCls = Class.forName("android.app.SharedPreferencesImpl")
+                for (m in spImplCls.declaredMethods) {
+                    if (m.name == "getBoolean" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val key = chain.args.firstOrNull() as? String
+                                if (OrderInterceptor.isMasterRunning && key != null && BLOCKED_FEATURE_FLAG_KEYS.contains(key)) {
+                                    DiagnosticLogger.logStep("PackageCloaker", "FeatureFlag '$key' -> false (SharedPreferences)")
+                                    return java.lang.Boolean.FALSE
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                    }
+                }
+            } catch (_: Throwable) {}
+            try {
+                for (m in JSONObject::class.java.declaredMethods) {
+                    if ((m.name == "optBoolean" || m.name == "getBoolean") &&
+                        m.parameterTypes.isNotEmpty() &&
+                        m.parameterTypes[0] == String::class.java
+                    ) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val key = chain.args.firstOrNull() as? String
+                                if (OrderInterceptor.isMasterRunning && key != null && BLOCKED_FEATURE_FLAG_KEYS.contains(key)) {
+                                    DiagnosticLogger.logStep("PackageCloaker", "FeatureFlag '$key' -> false (JSONObject)")
+                                    return java.lang.Boolean.FALSE
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // Safety-net Dialog & MainActivity.finish() guard against "- Not installed from Play Store" dialog
+        if (isDialogGuardHooked.compareAndSet(false, true)) {
+            try {
+                val mShow = Dialog::class.java.getDeclaredMethod("show")
+                module.hook(mShow).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val res = chain.proceed()
+                        if (OrderInterceptor.isMasterRunning) {
+                            val dlg = chain.thisObject as? Dialog
+                            if (dlg != null) {
+                                try {
+                                    val decor = dlg.window?.decorView
+                                    if (decor != null && containsSecurityAlertText(decor)) {
+                                        DiagnosticLogger.logWarn("PackageCloaker", "Dismissed security dialog ('Not installed from Play Store')")
+                                        dlg.setOnDismissListener(null)
+                                        dlg.setOnCancelListener(null)
+                                        dlg.dismiss()
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                        return res
+                    }
+                })
+                for (mFinName in listOf("finish", "finishAffinity")) {
+                    try {
+                        val mFin = Activity::class.java.getDeclaredMethod(mFinName)
+                        module.hook(mFin).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val act = chain.thisObject as? Activity
+                                if (OrderInterceptor.isMasterRunning && act != null && act.javaClass.name == getMainActivityClassName()) {
+                                    val trace = Throwable().stackTrace
+                                    val fromDialogOrGuard = trace.any { f ->
+                                        val cn = f.className ?: ""
+                                        cn.contains("Dialog", ignoreCase = true) ||
+                                        cn.contains("guardzilla", ignoreCase = true) ||
+                                        cn.contains("Security", ignoreCase = true) ||
+                                        isPromonClassName(cn)
+                                    }
+                                    if (fromDialogOrGuard) {
+                                        DiagnosticLogger.logWarn("PackageCloaker", "Blocked $mFinName() on MainActivity triggered by security dialog/callback")
+                                        return null
+                                    }
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
         }
     }
 
-    /**
-     * Scans a Promon Shield obfuscated package (e.g. 'fvfeiucoi' on 40104 or any future version's package):
-     * 1. Stubs all JNI native methods so blocking libjahez_fleets.so never causes UnsatisfiedLinkError.
-     * 2. Neutralizes any Runnable watchdog classes in the package (e.g. fvfeiucoi.D.run on Thread-2).
-     * 3. Wraps non-native helper/tamper methods (e.g. fvfeiucoi.I.a / fvfeiucoi.I.b) so any thrown Promon
-     *    exception (like fvfeiucoi.V: !null) is caught and suppressed before triggering a crash.
-     */
+    private fun containsSecurityAlertText(view: View): Boolean {
+        if (view is TextView) {
+            val txt = view.text?.toString() ?: ""
+            if (txt.contains("Not installed from Play Store", ignoreCase = true) ||
+                txt.contains("Rooted device", ignoreCase = true) ||
+                txt.contains("Auto Clicker", ignoreCase = true)
+            ) {
+                return true
+            }
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val child = view.getChildAt(i) ?: continue
+                if (containsSecurityAlertText(child)) return true
+            }
+        }
+        return false
+    }
+
     private fun stubPromonPackage(module: XposedModule, classLoader: ClassLoader, pkgPrefix: String): Int {
         val cleanPkg = pkgPrefix.trim().removeSuffix(".")
         if (cleanPkg.isEmpty() ||
@@ -340,7 +624,6 @@ object PackageCloaker {
                     stubbedNativeClasses.add(clsName)
                 }
 
-                // Neutralize Promon background Runnable watchdog threads (e.g. fvfeiucoi.D.run) & tamper throwers (e.g. fvfeiucoi.I)
                 if (hookedPromonGuardClasses.add(clsName)) {
                     val isRunnableOrThread = Runnable::class.java.isAssignableFrom(cls) || Thread::class.java.isAssignableFrom(cls)
                     for (m in allMethods) {
@@ -356,8 +639,6 @@ object PackageCloaker {
                             })
                             watchdogHooks++
                         } else if (nativeMethods.isEmpty()) {
-                            // Non-native helper class in Promon package (such as fvfeiucoi.I):
-                            // Catch and suppress any Promon exception (such as fvfeiucoi.V: !null) before it propagates
                             module.hook(m).intercept(object : XposedInterface.Hooker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     return try {
@@ -481,7 +762,6 @@ object PackageCloaker {
                 } catch (_: Throwable) {}
             }
 
-            // Also scan the entire Promon package (e.g. 'fvfeiucoi') to stub any additional native methods and watchdog Runnables (fvfeiucoi.D / fvfeiucoi.I)
             if (resolved != null && resolved.loaderClass.contains('.')) {
                 val pkgPrefix = resolved.loaderClass.substringBeforeLast('.')
                 newlyHookedCount += stubPromonPackage(module, classLoader, pkgPrefix)
@@ -561,7 +841,7 @@ object PackageCloaker {
             } catch (_: Throwable) {}
         }
 
-        // 3. Lvh1.o: Hook Runtime.loadLibrary0 (auto-discovers & stubs any future version's JNI classes before blocking jahez_fleets!)
+        // 3. Lvh1.o: Hook Runtime.loadLibrary0
         if (isRuntimeHooked.compareAndSet(false, true)) {
             try {
                 val targetMethodName = profiles.firstOrNull { it.runtimeExecMethod.isNotEmpty() }?.runtimeExecMethod ?: "loadLibrary0"
@@ -630,41 +910,14 @@ object PackageCloaker {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
+        cachedAppClassLoader = classLoader
         installMapsAndPackageCloakerHooks(module)
         if (DiagnosticLogger.hookEarlyCloaker) {
             hookEarly(module, classLoader)
         }
         if (!isSecurityHooked.compareAndSet(false, true)) return
 
-        // 1. Lu80.C: ApplicationPackageManager.getInstallerPackageName & getInstallSourceInfo
-        try {
-            val appPkgMgrClass = Class.forName("android.app.ApplicationPackageManager")
-            try {
-                val mInstaller = appPkgMgrClass.getDeclaredMethod("getInstallerPackageName", String::class.java)
-                module.hook(mInstaller).intercept(object : XposedInterface.Hooker {
-                    override fun intercept(chain: XposedInterface.Chain): Any? =
-                        if (OrderInterceptor.isMasterRunning) "com.android.vending" else chain.proceed()
-                })
-            } catch (_: Throwable) {}
-            try {
-                val mSourceInfo = appPkgMgrClass.getDeclaredMethod("getInstallSourceInfo", String::class.java)
-                module.hook(mSourceInfo).intercept(object : XposedInterface.Hooker {
-                    override fun intercept(chain: XposedInterface.Chain): Any? {
-                        val res = chain.proceed()
-                        if (res != null && OrderInterceptor.isMasterRunning) {
-                            for (fieldName in listOf("mOriginatingPackageName", "mInstallingPackageName", "mInitiatingPackageName")) {
-                                try { res.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }.set(res, "com.android.vending") } catch (_: Throwable) {}
-                            }
-                        }
-                        return res
-                    }
-                })
-            } catch (_: Throwable) {}
-        } catch (t: Throwable) {
-            DiagnosticLogger.logError("PackageCloaker:Installer", "Error hooking ApplicationPackageManager", t)
-        }
-
-        // 2. Lu80.y: SecurityCallBacksState (Universal Constructor + Getter + Static hooks for all versions)
+        // 1. Lu80.y: SecurityCallBacksState (Universal Constructor + Getter + Static hooks for all versions)
         val secClasses = Native.safeN()
         val secStateClsName = secClasses.getOrNull(0) ?: ""
         if (secStateClsName.isNotEmpty()) {
@@ -732,7 +985,7 @@ object PackageCloaker {
             } catch (_: Throwable) {}
         }
 
-        // 3. Lu80.G: RootBeer & RootBeerNative
+        // 2. Lu80.G: RootBeer & RootBeerNative
         var rbHooked = 0
         for (idx in 1..2) {
             val rbClsName = secClasses.getOrNull(idx) ?: continue
@@ -755,7 +1008,7 @@ object PackageCloaker {
         }
         DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
-        // 4. Lu80.L: ShadowArmor profiles (scan all known profiles)
+        // 3. Lu80.L: ShadowArmor profiles (scan all known profiles)
         try {
             val saProfiles = getAllShadowArmorProfiles()
             val featureFlags = Native.safeU().toList()
@@ -776,7 +1029,7 @@ object PackageCloaker {
                     try {
                         val c = classLoader.loadClass(clsName)
                         for (m in c.declaredMethods) {
-                            if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterTypes.contentEquals(arrayOf(android.content.Context::class.java))) {
+                            if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterTypes.contentEquals(arrayOf(Context::class.java))) {
                                 module.hook(m).intercept(object : XposedInterface.Hooker {
                                     override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
                                 })
