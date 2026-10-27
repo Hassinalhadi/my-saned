@@ -23914,6 +23914,7 @@ com.google.gson.stream.JsonScope
 com.google.gson.stream.JsonToken
 com.google.gson.stream.JsonWriter
 com.google.gson.stream.MalformedJsonException
+dev.jing.sanedhook.util.Native$safeR$1$1$1
 dev.jing.sanedhook.util.Native:
     private static final java.lang.String FALLBACK_DB_NAME
     private static final java.lang.String FALLBACK_ENCRYPTED_PREFS
@@ -23945,6 +23946,8 @@ dev.jing.sanedhook.util.Native:
     public final native int s(long)
     public static synthetic boolean safeA$default(dev.jing.sanedhook.util.Native,java.lang.Object,java.lang.String,int,java.lang.Object)
     public final java.lang.String safeO(java.lang.String)
+    public final java.lang.String safeQ()
+    public final boolean safeR(java.lang.String)
     public final native java.lang.String[] t()
     public final native java.lang.String[] u()
 dev.saned.assistant.DeviceSpoofer:
@@ -23983,8 +23986,6 @@ dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public final dev.saned.assistant.OrderInterceptor$HandledOrderEntry copy(java.lang.String,long,boolean)
     public static synthetic dev.saned.assistant.OrderInterceptor$HandledOrderEntry copy$default(dev.saned.assistant.OrderInterceptor$HandledOrderEntry,java.lang.String,long,boolean,int,java.lang.Object)
 dev.saned.assistant.OrderInterceptor$hookDialogShow$1
-dev.saned.assistant.OrderInterceptor$hookJsonConstructors$1$intercept$1
-dev.saned.assistant.OrderInterceptor$hookJsonConstructors$1
 dev.saned.assistant.OrderInterceptor$hookOkHttp$1
 dev.saned.assistant.OrderInterceptor$hookOkHttp$2
 dev.saned.assistant.OrderInterceptor$hookOkHttp$3
@@ -23992,8 +23993,6 @@ dev.saned.assistant.OrderInterceptor$hookOkHttp$4
 dev.saned.assistant.OrderInterceptor$hookOkHttp$5
 dev.saned.assistant.OrderInterceptor$hookOkHttp$6
 dev.saned.assistant.OrderInterceptor$hookSQLite$1
-dev.saned.assistant.OrderInterceptor$hookSharedPreferences$1
-dev.saned.assistant.OrderInterceptor$hookSharedPreferences$2
 dev.saned.assistant.OrderInterceptor$hookUI$1
 dev.saned.assistant.OrderInterceptor$hookUI$2
 dev.saned.assistant.OrderInterceptor$hookWebSocket$1
@@ -24014,8 +24013,6 @@ dev.saned.assistant.OrderInterceptor:
     public static final synthetic void access$captureRequestMetadata(dev.saned.assistant.OrderInterceptor,java.lang.Object)
     public static final synthetic boolean access$findAndTriggerOrder(dev.saned.assistant.OrderInterceptor,android.view.View,android.app.Activity,long)
     public static final synthetic android.os.Handler access$getMainHandler$p()
-    public static final synthetic java.util.Set access$getRecentMemoryJsonHashes$p()
-    public static final synthetic dev.saned.assistant.OrderInterceptor$isInsideJsonHook$1 access$isInsideJsonHook$p()
     public static final synthetic void access$onTargetActivityActive(dev.saned.assistant.OrderInterceptor,android.app.Activity)
     public static final synthetic void access$processHttpResponse(dev.saned.assistant.OrderInterceptor,java.lang.Object)
     public final void applyJahezHeaders(okhttp3.Request$Builder,java.lang.String)
@@ -24023,8 +24020,9 @@ dev.saned.assistant.OrderInterceptor:
     public static synthetic void cacheOrderPayment$default(dev.saned.assistant.OrderInterceptor,java.lang.String,double,double,java.lang.String,int,java.lang.Object)
     private final void captureRequestMetadata(java.lang.Object)
     public static synthetic void checkAndSetToken$default(dev.saned.assistant.OrderInterceptor,java.lang.String,java.lang.String,int,java.lang.Object)
-    static synthetic okhttp3.Request executeDirectApiCall$lambda$103$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
+    static synthetic okhttp3.Request executeDirectApiCall$lambda$107$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
     public final java.util.List getAllRootViews()
+    public final java.util.concurrent.ConcurrentHashMap$KeySetView getApiInFlightIds()
     public final android.content.Context getAppContext()
     public final java.lang.String getAppUiLanguage()
     private final java.lang.Object getCachedWmgInstance()
@@ -24058,10 +24056,8 @@ dev.saned.assistant.OrderInterceptor:
     public final java.lang.String getVerifiedAcceptMethod()
     public final java.lang.String getVerifiedAcceptUrlTemplate()
     private final void hookDialogShow(io.github.libxposed.api.XposedModule)
-    private final void hookJsonConstructors(io.github.libxposed.api.XposedModule)
     private final int hookOkHttp(io.github.libxposed.api.XposedModule,java.lang.ClassLoader)
     private final void hookSQLite(io.github.libxposed.api.XposedModule)
-    private final void hookSharedPreferences(io.github.libxposed.api.XposedModule,java.lang.ClassLoader)
     private final void hookUI(io.github.libxposed.api.XposedModule,java.lang.ClassLoader)
     private final void hookWebSocket(io.github.libxposed.api.XposedModule,java.lang.ClassLoader)
     private final void invokeNativeInit(android.content.Context)
@@ -24089,13 +24085,12 @@ dev.saned.assistant.OrderInterceptor:
     private final void scanExistingActivitiesInActivityThread()
     private static final void scanExistingActivitiesInActivityThread$lambda$30(android.app.Activity)
     private final boolean scanHomeScreenOrderCards(android.view.View,android.app.Activity)
-    private static final void scanHomeScreenOrderCards$lambda$134(kotlin.jvm.internal.Ref$ObjectRef)
+    private static final void scanHomeScreenOrderCards$lambda$138(kotlin.jvm.internal.Ref$ObjectRef)
     private static final void scanHomeScreenOrderCards$traverseList(kotlin.jvm.internal.Ref$ObjectRef,kotlin.jvm.internal.Ref$ObjectRef,android.view.View)
     public final void setActivePolling(boolean)
     public final void setAppContext(android.content.Context)
     public final void setAppUiLanguage(java.lang.String)
     public final void setCachedAuthToken(java.lang.String)
-    public final void setCachedLanguage(java.lang.String)
     public final void setCapturedAppHttpClient(okhttp3.OkHttpClient)
     public final void setDetectedJahezVersionCode(long)
     public final void setDryRun(boolean)
@@ -24188,11 +24183,13 @@ dev.saned.assistant.PackageCloaker:
     public final dev.saned.assistant.PackageCloaker$VersionProfile getActiveProfile()
     public final int getDetectedVersionIndex()
     public final boolean isNativeStubbedFlag()
+    public final boolean isNonRootFramework(io.github.libxposed.api.XposedModule)
     public static synthetic void patchGoogleMapsApiKeyIfNeeded$default(dev.saned.assistant.PackageCloaker,java.lang.Object,io.github.libxposed.api.XposedModule,int,java.lang.Object)
     public final void setActiveProfile(dev.saned.assistant.PackageCloaker$VersionProfile)
     public final void setDetectedVersionIndex(int)
     public final void setLastCheckedVersionCode(long)
-    public static synthetic boolean shouldReplaceMapsApiKey$default(dev.saned.assistant.PackageCloaker,io.github.libxposed.api.XposedModule,int,java.lang.Object)
+    public final boolean shouldReplaceMapsApiKey(io.github.libxposed.api.XposedModule,java.lang.String)
+    public static synthetic boolean shouldReplaceMapsApiKey$default(dev.saned.assistant.PackageCloaker,io.github.libxposed.api.XposedModule,java.lang.String,int,java.lang.Object)
 dev.saned.assistant.R$array
 dev.saned.assistant.R$drawable:
     public static int ic_badge_original
@@ -27218,7 +27215,6 @@ kotlin.coroutines.intrinsics.IntrinsicsKt__IntrinsicsKt:
 kotlin.coroutines.jvm.internal.BaseContinuationImpl:
     public kotlin.coroutines.Continuation create(kotlin.coroutines.Continuation)
 kotlin.coroutines.jvm.internal.Boxing:
-    public static final java.lang.Boolean boxBoolean(boolean)
     public static final java.lang.Byte boxByte(byte)
     public static final java.lang.Character boxChar(char)
     public static final java.lang.Float boxFloat(float)
@@ -27283,13 +27279,31 @@ kotlin.internal.jdk8.JDK8PlatformImplementations:
     public kotlin.text.MatchGroup getMatchResultNamedGroup(java.util.regex.MatchResult,java.lang.String)
 kotlin.io.AccessDeniedException
 kotlin.io.ByteStreamsKt$iterator$1
-kotlin.io.ByteStreamsKt
+kotlin.io.ByteStreamsKt:
+    private static final java.io.BufferedInputStream buffered(java.io.InputStream,int)
+    private static final java.io.BufferedOutputStream buffered(java.io.OutputStream,int)
+    static synthetic java.io.BufferedInputStream buffered$default(java.io.InputStream,int,int,java.lang.Object)
+    static synthetic java.io.BufferedOutputStream buffered$default(java.io.OutputStream,int,int,java.lang.Object)
+    private static final java.io.BufferedReader bufferedReader(java.io.InputStream,java.nio.charset.Charset)
+    static synthetic java.io.BufferedReader bufferedReader$default(java.io.InputStream,java.nio.charset.Charset,int,java.lang.Object)
+    private static final java.io.BufferedWriter bufferedWriter(java.io.OutputStream,java.nio.charset.Charset)
+    static synthetic java.io.BufferedWriter bufferedWriter$default(java.io.OutputStream,java.nio.charset.Charset,int,java.lang.Object)
+    private static final java.io.ByteArrayInputStream byteInputStream(java.lang.String,java.nio.charset.Charset)
+    static synthetic java.io.ByteArrayInputStream byteInputStream$default(java.lang.String,java.nio.charset.Charset,int,java.lang.Object)
+    private static final java.io.ByteArrayInputStream inputStream(byte[])
+    private static final java.io.ByteArrayInputStream inputStream(byte[],int,int)
+    public static final kotlin.collections.ByteIterator iterator(java.io.BufferedInputStream)
+    public static final byte[] readBytes(java.io.InputStream,int)
+    public static synthetic byte[] readBytes$default(java.io.InputStream,int,int,java.lang.Object)
+    private static final java.io.InputStreamReader reader(java.io.InputStream,java.nio.charset.Charset)
+    static synthetic java.io.InputStreamReader reader$default(java.io.InputStream,java.nio.charset.Charset,int,java.lang.Object)
+    private static final java.io.OutputStreamWriter writer(java.io.OutputStream,java.nio.charset.Charset)
+    static synthetic java.io.OutputStreamWriter writer$default(java.io.OutputStream,java.nio.charset.Charset,int,java.lang.Object)
 kotlin.io.CloseableKt:
     private static final java.lang.Object use(java.io.Closeable,kotlin.jvm.functions.Function1)
 kotlin.io.ConsoleKt
 kotlin.io.ConstantsKt
 kotlin.io.ExceptionsKt
-kotlin.io.ExposingBufferByteArrayOutputStream
 kotlin.io.FileAlreadyExistsException
 kotlin.io.FilePathComponents
 kotlin.io.FileSystemException
@@ -27330,7 +27344,6 @@ kotlin.io.FilesKt__FileReadWriteKt:
     private static final java.io.FileOutputStream outputStream(java.io.File)
     private static final java.io.PrintWriter printWriter(java.io.File,java.nio.charset.Charset)
     static synthetic java.io.PrintWriter printWriter$default(java.io.File,java.nio.charset.Charset,int,java.lang.Object)
-    public static final byte[] readBytes(java.io.File)
     public static final java.util.List readLines(java.io.File,java.nio.charset.Charset)
     public static synthetic java.util.List readLines$default(java.io.File,java.nio.charset.Charset,int,java.lang.Object)
     private static final java.io.InputStreamReader reader(java.io.File,java.nio.charset.Charset)
@@ -32203,7 +32216,7 @@ androidx.activity.result.ActivityResultRegistry$1:
     public final synthetic androidx.activity.result.ActivityResultCallback val$callback
     public final synthetic androidx.activity.result.contract.ActivityResultContract val$contract
     public final synthetic java.lang.String val$key
-androidx.activity.result.ActivityResultRegistry$3$$InternalSyntheticThrowCCEIfNotNull$170$2025804ee48157b73e7ba6ee24ee7819a25f8590dbb68233572fab25cfbc15f1$0
+androidx.activity.result.ActivityResultRegistry$3$$InternalSyntheticThrowCCEIfNotNull$171$2025804ee48157b73e7ba6ee24ee7819a25f8590dbb68233572fab25cfbc15f1$0
 androidx.activity.result.ActivityResultRegistry$3:
     public static androidx.activity.result.ActivityResultRegistry$3 addEntry()
     public static boolean addToGoal()
@@ -35562,7 +35575,7 @@ androidx.core.os.LocaleListCompat:
     public final int size()
     public final java.lang.String toLanguageTags()
     public static androidx.core.os.LocaleListCompat wrap(android.os.LocaleList)
-androidx.core.os.LocaleListCompatWrapper$$InternalSyntheticThrowCCEIfNotNull$249$dd0d3399d7d164768be69e26cdc88e49809bc46afb623c060d951b7b929d77ad$0
+androidx.core.os.LocaleListCompatWrapper$$InternalSyntheticThrowCCEIfNotNull$250$dd0d3399d7d164768be69e26cdc88e49809bc46afb623c060d951b7b929d77ad$0
 androidx.core.os.LocaleListCompatWrapper
 androidx.core.os.LocaleListInterface:
     public abstract java.util.Locale get()
@@ -38348,7 +38361,7 @@ androidx.transition.ViewUtilsBase
 androidx.transition.Visibility$DisappearListener:
     public final void hideViewWhenNotCanceled()
 androidx.transition.Visibility
-androidx.transition.WindowIdApi14$$InternalSyntheticThrowCCEIfNotNull$249$346ba31081d848221d10738ffacfe8b42a1cf2bcc44a47580e10fd7ecc1dfab1$0
+androidx.transition.WindowIdApi14$$InternalSyntheticThrowCCEIfNotNull$250$346ba31081d848221d10738ffacfe8b42a1cf2bcc44a47580e10fd7ecc1dfab1$0
 androidx.transition.WindowIdApi14
 androidx.vectordrawable.graphics.drawable.AndroidResources:
     public static final int[] STYLEABLE_ANIMATOR
@@ -39567,7 +39580,7 @@ com.google.android.material.datepicker.MaterialCalendarGridView:
     public final java.util.Calendar dayCompute
     public static void gainFocus()
     public static android.view.View getChildAtPosition()
-com.google.android.material.datepicker.MaterialDatePicker$1$$InternalSyntheticThrowCCEIfNotNull$244$8c0322c3b6a8ad59d9da5ebe01668fc41b267413290427d3382a40f1207874a7$0
+com.google.android.material.datepicker.MaterialDatePicker$1$$InternalSyntheticThrowCCEIfNotNull$245$8c0322c3b6a8ad59d9da5ebe01668fc41b267413290427d3382a40f1207874a7$0
 com.google.android.material.datepicker.MaterialDatePicker$1
 com.google.android.material.datepicker.MaterialDatePicker$2
 com.google.android.material.datepicker.MaterialDatePicker$3
@@ -40333,7 +40346,6 @@ com.google.android.material.textfield.IconHelper:
     public static final void enumEntries(java.lang.Enum[])
     public static void getCOROUTINE_SUSPENDED()
     public static boolean isAndroid()
-    public static final kotlin.collections.AbstractList$IteratorImpl iterator(java.lang.Object[])
     public static int[] mergeIconState(com.google.android.material.textfield.TextInputLayout,com.google.android.material.internal.CheckableImageButton)
     public static void setIconMinSize(com.google.android.material.internal.CheckableImageButton,int)
     public static void setIconOnClickListener(com.google.android.material.internal.CheckableImageButton,android.view.View$OnClickListener,android.view.View$OnLongClickListener)
@@ -40837,23 +40849,18 @@ com.google.crypto.tink.aead.AesEaxProtoSerialization$1
 com.google.crypto.tink.aead.AesEaxProtoSerialization:
     public static final com.google.crypto.tink.util.Bytes TYPE_URL_BYTES
 com.google.crypto.tink.aead.AesGcmKey$1:
-    public static float coerceAtMost(float,float)
-    public static long coerceAtMost(long,long)
     public static int compareValues(java.lang.Comparable,java.lang.Comparable)
     public static final kotlin.Result$Failure createFailure(java.lang.Throwable)
     public static final int differenceModulo(int,int,int)
-    public static kotlin.ranges.IntProgression downTo(int,int)
     public static java.util.List emptyList()
     public static java.util.Set emptySet()
     public static java.lang.Object fold(kotlin.coroutines.CoroutineContext$Element,java.lang.Object,kotlin.jvm.functions.Function2)
+    public static final kotlin.collections.AbstractList$IteratorImpl iterator(java.lang.Object[])
     public static final int mod(int,int)
-    public static varargs java.util.ArrayList mutableListOf(java.lang.Object[])
     public static java.util.Comparator naturalOrder()
     public static final java.util.List optimizeReadOnlyList(java.util.ArrayList)
-    public static int random(kotlin.random.Random$Default,kotlin.ranges.IntRange)
     public static final java.util.Set setOf(java.lang.Object)
     public static final void terminateCollectionToArray(int,java.lang.Object[])
-    public static void throwCce(kotlin.jvm.functions.Function2,java.lang.String)
     public static void throwCountOverflow()
     public static void throwIndexOverflow()
     public static boolean useOnlyFips()
@@ -41017,7 +41024,7 @@ com.google.crypto.tink.integration.android.AndroidKeysetManager$Builder:
     public boolean useKeystore
     public static com.google.crypto.tink.integration.android.AndroidKeysetManager$Builder withKeyTemplate()
     public final void withMasterKeyUri(java.lang.String)
-    public final void withSharedPref(android.content.Context,java.lang.String)
+    public final void withSharedPref(android.content.Context,java.lang.String,java.lang.String)
 com.google.crypto.tink.integration.android.AndroidKeysetManager:
     public static final java.lang.String TAG
     public final com.google.crypto.tink.Aead masterAead
@@ -42498,8 +42505,6 @@ com.google.crypto.tink.subtle.XChaCha20Poly1305
 com.google.crypto.tink.util.Bytes:
     public static int size()
 com.google.crypto.tink.util.SecretBytes
-dev.jing.sanedhook.util.Native$safeR$1$1$1:
-    public final java.lang.CharSequence invoke(byte)
 dev.jing.sanedhook.util.Native:
     public static final dev.jing.sanedhook.util.Native INSTANCE
     public static final dev.jing.sanedhook.util.Native a
@@ -42519,7 +42524,6 @@ dev.jing.sanedhook.util.Native:
     public static java.lang.String[] safeM()
     public static java.lang.String[] safeN()
     public static java.lang.String[] safeP()
-    public static java.lang.String safeQ()
     public static int safeS()
     public static java.lang.String[] safeT()
     public static java.lang.String[] safeU()
@@ -42610,16 +42614,17 @@ dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$8ddd4452859e2848
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a89b127b27b01e43492dd23d1ec516c37b24513222957fda5e0dea0a5fb4bc7f$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$abfa8cb93b601c54812267776d24f6deacf8a3369fd504f8aafd9ce35cd35c05$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$d222cb0d79118909225329ba1bb379faad1bcc017cce65107986b85c47453f40$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$62fbbc963d78e7ef550cdf2598511e82ec8c1d6db78e385fc0b572e291d21e96$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$749921a03ae96f5d501ac8e1a725c9ccadcff2331a2090cf2c13c51fc0d5b96c$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$fffb86612626e1ad9c141e191be2578e73061ead2c28629d1dc94acc0d9cf867$2
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$2c0b1c06773a46f35319494126842f400d3b94c58b9ed595834a31d110984823$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$724a42584b5965d0d73014ce066a02536ed091049164a7f06206f90223cec2af$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c06a8778d8282d0120a10b3a80c00495a03e1dbe01b3e237c7f8b6e3ceca3e50$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$4
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$5
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$7
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$a87a48e10fb433ab20a045122f8345165d08fec25ddd3577e71ed2ca842b77d0$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$d4f86a8770d532e694840d0b8df863e120c8655d63159ed36215e707ada2b2c5$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$6fe5c3a466e28265ae891e9a5b14d2a9683771cb964cebc6552ebf72386b4c08$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$7$a87a48e10fb433ab20a045122f8345165d08fec25ddd3577e71ed2ca842b77d0$0
 dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public static java.lang.String getDecision()
     public static long getTimestampRealtime()
@@ -42631,14 +42636,21 @@ dev.saned.assistant.OrderInterceptor$checkRemoteKillSwitchFromSaned$1:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$evaluateAndProcessOrder$2:
     public final java.lang.Object invoke$1()
-dev.saned.assistant.OrderInterceptor$executeDirectApiCall$1$2:
+dev.saned.assistant.OrderInterceptor$executeDirectApiCall$2$2:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$fetchOrderCustomerDetailsAsync$1:
     public int label
     public final java.lang.Object invoke$1()
-dev.saned.assistant.OrderInterceptor$hookCipher$1
+dev.saned.assistant.OrderInterceptor$hookCipher$2
 dev.saned.assistant.OrderInterceptor$hookFirebase$1
 dev.saned.assistant.OrderInterceptor$hookIncomingDispatchActivity$1
+dev.saned.assistant.OrderInterceptor$hookJsonConstructors$1$intercept$1:
+    public int label
+    public final java.lang.Object invoke$1()
+dev.saned.assistant.OrderInterceptor$hookJsonConstructors$1
+dev.saned.assistant.OrderInterceptor$hookPassiveHttpHeaderBuilders$headerHooker$1
+dev.saned.assistant.OrderInterceptor$hookSharedPreferences$1
+dev.saned.assistant.OrderInterceptor$hookSharedPreferences$2
 dev.saned.assistant.OrderInterceptor$isInsideJsonHook$1
 dev.saned.assistant.OrderInterceptor$performLiveApiProbe$1:
     public int label
@@ -42677,16 +42689,14 @@ dev.saned.assistant.OrderInterceptor:
     public static volatile okhttp3.OkHttpClient capturedAppHttpClient
     public static volatile long detectedJahezVersionCode
     public static int failedPollingCount
-    public static final com.google.crypto.tink.aead.internal.InsecureNonceAesGcmJce$1 isInsideJsonHook
     public static volatile boolean isJahezVersionOfficiallySupported
     public static volatile boolean isShowToasts
     public static volatile java.lang.String lastOrdersListUrl
     public static volatile int parallelRequests
     public static volatile float pollIntervalSec
-    public static final java.util.Set recentMemoryJsonHashes
     public static volatile java.lang.String verifiedAcceptMethod
     public static volatile java.lang.String verifiedAcceptUrlTemplate
-    public static synthetic boolean $r8$lambda$n4E2bzpfCuBD5tCF-jGnbd2xucQ()
+    public static synthetic boolean $r8$lambda$dwi2lphQfZJYrrEEl2o73UDPQJs()
     public static final synthetic void access$fetchOrderCustomerDetailsAsync(dev.saned.assistant.OrderInterceptor,java.lang.String)
     public static void acquireWakeLock()
     public static void applySettingsFromIntent()
@@ -42696,8 +42706,8 @@ dev.saned.assistant.OrderInterceptor:
     public static void clearPersistedToken()
     public static void closeDispatchActivitySafely(android.app.Activity,boolean)
     public static okhttp3.OkHttpClient createUnsafeOkHttpClient()
-    public static final boolean createUnsafeOkHttpClient$lambda$136()
-    public static final void executeDirectApiCall$lambda$103$runSingleStream(int,int,int,long,android.content.Context,java.lang.String,java.lang.String,java.lang.String,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicBoolean,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,kotlin.jvm.internal.Ref$ObjectRef,okhttp3.OkHttpClient,boolean)
+    public static final boolean createUnsafeOkHttpClient$lambda$140()
+    public static final void executeDirectApiCall$lambda$107$runSingleStream(int,int,int,long,android.content.Context,java.lang.String,java.lang.String,java.lang.String,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicBoolean,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,kotlin.jvm.internal.Ref$ObjectRef,okhttp3.OkHttpClient,boolean)
     public static java.lang.String extractOrderIdFromActivity()
     public static android.view.View findSliderRoot()
     public static java.util.concurrent.ConcurrentHashMap$KeySetView getApiConfirmedAcceptIds()
@@ -42719,6 +42729,7 @@ dev.saned.assistant.OrderInterceptor:
     public static java.util.concurrent.atomic.AtomicInteger getPollingHits()
     public static java.lang.String getSyncedOrdersBatchJson()
     public static java.lang.String handleOrderViaApi()
+    public static void hookJsonConstructors()
     public static void initRemotePrefs()
     public static boolean isActivePolling()
     public static boolean isAndroidIdFeatureAllowed()
@@ -42727,6 +42738,7 @@ dev.saned.assistant.OrderInterceptor:
     public static boolean isAutoReject()
     public static boolean isDeliverOrderFeatureAllowed()
     public static boolean isDryRun()
+    public static boolean isJwtChar()
     public static boolean isMasterRunning()
     public static boolean isOkHttpHooked()
     public static boolean isStayInBackground()
@@ -42744,10 +42756,10 @@ dev.saned.assistant.OrderInterceptor:
     public static void registerActivityCallbacksOnApp(android.app.Application)
     public static void respondToPing()
     public static void scanAllSharedPreferencesForTokens()
-    public static java.lang.String scanJahezSharedPreferencesForToken()
     public static void setAutoAccept()
     public static void setAutoReject()
     public static void setCachedApiHost()
+    public static void setCachedLanguage()
     public static void setCapturedDriverCipherB64()
     public static void setCurrentActivity()
     public static void setJdrvRemoteAndroidId()
@@ -42763,7 +42775,6 @@ dev.saned.assistant.OrderInterceptor:
     public static void setLastOrderEvent()
     public static void setMaxOrdersLimit()
     public static void showToast()
-    public static void simulateSwipe()
     public static void simulateTestOrder()
     public static void startActiveServerPolling()
     public static void startBootstrapLoop()
@@ -42815,21 +42826,24 @@ dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$11
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$12
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$1:
+    public final synthetic io.github.libxposed.api.XposedModule $module
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$5
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$6
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$7
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$8
-dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
-dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$9
+dev.saned.assistant.PackageCloaker$isOfficialJahezSignature$sha256$1
 dev.saned.assistant.PackageCloaker$stubPromonPackage$1
 dev.saned.assistant.PackageCloaker$stubPromonPackage$2
 dev.saned.assistant.PackageCloaker$stubPromonPackage$3
 dev.saned.assistant.PackageCloaker$stubPromonPackage$pSig$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
+    public static volatile int mapsCertCheckResult
     public static java.lang.Object createFallbackSecurityResult()
     public static java.lang.Object createPlayStoreInstallSourceInfo()
     public static java.lang.Object defaultReturnValueForType()
@@ -43244,6 +43258,7 @@ kotlin.internal.jdk7.JDK7PlatformImplementations
 kotlin.internal.jdk8.JDK8PlatformImplementations$ReflectSdkVersion:
     public static final kotlin.internal.jdk8.JDK8PlatformImplementations$ReflectSdkVersion INSTANCE
 kotlin.internal.jdk8.JDK8PlatformImplementations
+kotlin.io.ByteStreamsKt
 kotlin.io.CloseableKt
 kotlin.io.FilesKt
 kotlin.io.FilesKt__FilePathComponentsKt
@@ -43293,7 +43308,20 @@ kotlin.jvm.internal.ReflectionFactory:
     public static kotlin.reflect.KProperty0 property0()
     public static java.lang.String renderLambdaToString()
 kotlin.jvm.internal.StringCompanionObject
-kotlin.jvm.internal.TypeIntrinsics
+kotlin.jvm.internal.TypeIntrinsics$$InternalSyntheticThrowCCEIfNotNull$14$e3e5be5a015ea40cc0048c384155480bfd90ea990a40f4ff299f59c5644147ea$0
+kotlin.jvm.internal.TypeIntrinsics$$InternalSyntheticThrowCCEIfNotNull$54$8c3d22fb1f6f22d07c31f67841864dc0cf83c2d42bbce26be23771f7045e611a$0
+kotlin.jvm.internal.TypeIntrinsics:
+    public static final byte[] asUtf8ToByteArray(java.lang.String)
+    public static final void checkParallelism(int)
+    public static float coerceAtMost(float,float)
+    public static long coerceAtMost(long,long)
+    public static kotlin.ranges.IntProgression downTo(int,int)
+    public static final java.lang.String getCoroutineName()
+    public static final kotlin.jvm.functions.Function1 getIndentFunction$StringsKt__IndentKt()
+    public static final boolean hasCopyableElements(kotlin.coroutines.CoroutineContext)
+    public static int random(kotlin.random.Random$Default,kotlin.ranges.IntRange)
+    public static void throwCce(kotlin.jvm.functions.Function2,java.lang.String)
+    public static final java.lang.String toUtf8String(byte[])
 kotlin.jvm.internal.markers.KMappedMarker
 kotlin.jvm.internal.markers.KMutableList
 kotlin.random.AbstractPlatformRandom:
@@ -43303,23 +43331,7 @@ kotlin.random.Random$Default:
     public final int nextInt$1()
 kotlin.random.Random:
     public abstract int nextInt$1()
-kotlin.random.RandomKt:
-    public static final okio.RealBufferedSink buffer(okio.Sink)
-    public static final okio.RealBufferedSource buffer(okio.Source)
-    public static final void cancel(kotlin.coroutines.CoroutineContext,java.util.concurrent.CancellationException)
-    public static final java.lang.Throwable handlerException(java.lang.Throwable,java.lang.Throwable)
-    public abstract long nanoTime()
-    public abstract void parkNanos()
-    public abstract void registerTimeLoopThread()
-    public static final java.lang.String systemProp(java.lang.String)
-    public static final boolean systemProp(java.lang.String,boolean)
-    public static synthetic long systemProp$default(java.lang.String,long)
-    public static final java.lang.Object toState(java.lang.Object,kotlin.jvm.functions.Function1)
-    public static java.lang.Object toState$default(java.lang.Object)
-    public abstract void trackTask()
-    public abstract void unTrackTask()
-    public abstract void unpark()
-    public abstract void unregisterTimeLoopThread()
+kotlin.random.RandomKt
 kotlin.ranges.IntProgression$Companion
 kotlin.ranges.IntProgression:
     public static final androidx.transition.Transition$1 Companion
@@ -43364,7 +43376,6 @@ kotlin.text.CharsKt__CharKt
 kotlin.text.Charsets:
     public static final kotlin.text.Charsets INSTANCE
     public static final java.nio.charset.Charset ISO_8859_1
-    public static final java.nio.charset.Charset US_ASCII
     public static final java.nio.charset.Charset UTF_16
     public static final java.nio.charset.Charset UTF_16BE
     public static final java.nio.charset.Charset UTF_16LE
@@ -43372,7 +43383,7 @@ kotlin.text.Charsets:
     public static java.nio.charset.Charset UTF32_LE()
 kotlin.text.DelimitedRangesSequence$iterator$1:
     public static kotlin.ranges.IntRange next()
-kotlin.text.MatchGroup$$InternalSyntheticThrowCCEIfNotNull$249$5ca9406d1a5dcd4c12acc4367755014baa888391a69c49fb6dfab5eb78f63cea$0
+kotlin.text.MatchGroup$$InternalSyntheticThrowCCEIfNotNull$250$5ca9406d1a5dcd4c12acc4367755014baa888391a69c49fb6dfab5eb78f63cea$0
 kotlin.text.MatchGroup
 kotlin.text.MatchGroupCollection
 kotlin.text.MatchResult
@@ -43397,23 +43408,31 @@ kotlin.text.Regex:
     public static kotlin.text.MatcherMatchResult find()
     public static kotlin.text.MatcherMatchResult find$default(kotlin.text.Regex,java.lang.String)
     public final java.lang.String replace(java.lang.CharSequence)
-kotlin.text.RegexKt
+kotlin.text.RegexKt:
+    public static final okio.RealBufferedSink buffer(okio.Sink)
+    public static final okio.RealBufferedSource buffer(okio.Source)
+    public static final void cancel(kotlin.coroutines.CoroutineContext,java.util.concurrent.CancellationException)
+    public static final java.lang.Throwable handlerException(java.lang.Throwable,java.lang.Throwable)
+    public abstract long nanoTime()
+    public abstract void parkNanos()
+    public abstract void registerTimeLoopThread()
+    public static final java.lang.String systemProp(java.lang.String)
+    public static final boolean systemProp(java.lang.String,boolean)
+    public static synthetic long systemProp$default(java.lang.String,long)
+    public static final java.lang.Object toState(java.lang.Object,kotlin.jvm.functions.Function1)
+    public static java.lang.Object toState$default(java.lang.Object)
+    public abstract void trackTask()
+    public abstract void unTrackTask()
+    public abstract void unpark()
+    public abstract void unregisterTimeLoopThread()
 kotlin.text.RegexOption
 kotlin.text.ScreenFloatValueRegEx:
     public static final kotlin.text.ScreenFloatValueRegEx INSTANCE
 kotlin.text.StringsKt
 kotlin.text.StringsKt__AppendableKt
-kotlin.text.StringsKt__IndentKt$$InternalSyntheticThrowCCEIfNotNull$14$2ee9a6e72894d1c66ad39c76d6c7521187f17fdd077b4c6b3616a5bcf4efcb99$0
-kotlin.text.StringsKt__IndentKt$$InternalSyntheticThrowCCEIfNotNull$54$e49cbb98d0bee32dd17303742e3e6da9c9553623a72ddc1043ba2b29876aa9ea$0
 kotlin.text.StringsKt__IndentKt$getIndentFunction$1
 kotlin.text.StringsKt__IndentKt$getIndentFunction$2
-kotlin.text.StringsKt__IndentKt:
-    public static final byte[] asUtf8ToByteArray(java.lang.String)
-    public static final void checkParallelism(int)
-    public static final java.lang.String getCoroutineName()
-    public static final kotlin.jvm.functions.Function1 getIndentFunction$StringsKt__IndentKt()
-    public static final boolean hasCopyableElements(kotlin.coroutines.CoroutineContext)
-    public static final java.lang.String toUtf8String(byte[])
+kotlin.text.StringsKt__IndentKt
 kotlin.text.StringsKt__RegexExtensionsJVMKt
 kotlin.text.StringsKt__StringBuilderJVMKt
 kotlin.text.StringsKt__StringNumberConversionsJVMKt
@@ -43429,7 +43448,6 @@ kotlin.text.StringsKt__StringsKt:
     public static java.lang.String concatToString(char[])
     public static synthetic int indexOf$StringsKt__StringsKt$default(java.lang.CharSequence,java.lang.CharSequence,int,int,boolean)
     public static synthetic boolean startsWith$default(java.lang.String,java.lang.String,int)
-    public static java.lang.String substringAfter$default(java.lang.String,java.lang.String)
     public static synthetic java.lang.String substringBeforeLast$default(java.lang.String)
 kotlin.text.StringsKt___StringsJvmKt
 kotlinx.coroutines.AbstractCoroutine:
@@ -43456,7 +43474,7 @@ kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithFor
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$bb82c0daeffbf5a4e699209b4035dad3969b1d18539c4a53180462e3c4ad95d9$0
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$d25ab52e4b8153decde6488ba3961e5d4ef5d5f6f96f8749b145c080bc9ce9f3$0
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$d25ab52e4b8153decde6488ba3961e5d4ef5d5f6f96f8749b145c080bc9ce9f3$1
-kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$162$5bf0b8f7bb60723597c5bb9b9de9b58be043f66489bf9c6225f5d37de8ef0e12$0
+kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$163$5bf0b8f7bb60723597c5bb9b9de9b58be043f66489bf9c6225f5d37de8ef0e12$0
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$56$ac82d8f9b78172d6026ce7593e6d6ee3c3eacb4303b6f84fe4dc9af189abb5f2$0
 kotlinx.coroutines.CancellableContinuationImpl:
     public static java.lang.Void alreadyResumedError()
@@ -43520,7 +43538,7 @@ kotlinx.coroutines.CoroutineExceptionHandler:
     static void <clinit>()
     public abstract void handleException(kotlin.coroutines.CoroutineContext,java.lang.Throwable)
 kotlinx.coroutines.CoroutineExceptionHandlerKt
-kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$249$a04cd55831796dad4a4038d4eb866607cad4d88ce7c01ff729936a1ef385fb02$0
+kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$250$a04cd55831796dad4a4038d4eb866607cad4d88ce7c01ff729936a1ef385fb02$0
 kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$54$f32d3c65e79275cc0e34133ff17172a91084ea4fa58ff765934c26285df444a4$0
 kotlinx.coroutines.CoroutineId
 kotlinx.coroutines.CoroutineName$Key
@@ -43832,8 +43850,8 @@ kotlinx.coroutines.internal.StackTraceRecoveryKt
 kotlinx.coroutines.internal.Symbol
 kotlinx.coroutines.internal.SystemPropsKt
 kotlinx.coroutines.internal.SystemPropsKt__SystemProps_commonKt
-kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$249$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$0
-kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$249$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$2
+kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$250$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$0
+kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$250$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$2
 kotlinx.coroutines.internal.ThreadContextKt$countAll$1:
     public static kotlinx.coroutines.internal.ThreadState invoke()
     public static void invoke$2()

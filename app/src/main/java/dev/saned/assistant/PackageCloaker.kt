@@ -84,6 +84,10 @@ object PackageCloaker {
     private val isMapsAndPkgHooked = AtomicBoolean(false)
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
     private val isInstallSourceInfoHooked = AtomicBoolean(false)
+    private val isSigningInfoHooked = AtomicBoolean(false)
+    @Volatile private var cachedOfficialJahezSignature: android.content.pm.Signature? = null
+    @Volatile private var attemptedOriginSignatureExtract: Boolean = false
+    @Volatile private var loggedMapsSignaturePreserved: Boolean = false
     private val isFeatureFlagsSourceHooked = AtomicBoolean(false)
     private val isDialogTraceHooked = AtomicBoolean(false)
     private val installSourceLogCount = AtomicInteger(0)
@@ -204,48 +208,132 @@ object PackageCloaker {
 
     fun isNonRootFramework(module: XposedModule?): Boolean {
         val fw = try { module?.frameworkName ?: "" } catch (_: Throwable) { "" }
-        if (fw.contains("NPatch", ignoreCase = true) ||
+        return fw.contains("NPatch", ignoreCase = true) ||
             fw.contains("Vector", ignoreCase = true) ||
             fw.contains("LSPatch", ignoreCase = true)
-        ) {
-            return true
-        }
-        return mapsCertCheckResult == 2
     }
 
-    fun shouldReplaceMapsApiKey(module: XposedModule? = DiagnosticLogger.xposedModule): Boolean {
-        if (mapsCertCheckResult == 2) return true
-        if (mapsCertCheckResult == 1) return false
-        if (isNonRootFramework(module)) {
-            mapsCertCheckResult = 2
-            return true
+    private fun isOfficialJahezSignature(sig: android.content.pm.Signature?): Boolean {
+        if (sig == null) return false
+        return try {
+            val sha256 = MessageDigest.getInstance("SHA-256")
+                .digest(sig.toByteArray())
+                .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+            sha256.equals(Native.OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
+        } catch (_: Throwable) {
+            false
         }
+    }
+
+    private fun extractOfficialSignatureFromOriginApk(sourceDir: String? = null): android.content.pm.Signature? {
+        cachedOfficialJahezSignature?.let { return it }
+        val effSourceDir = sourceDir ?: try {
+            (OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity)?.applicationInfo?.sourceDir
+        } catch (_: Throwable) { null }
+
+        if (!effSourceDir.isNullOrEmpty() && !attemptedOriginSignatureExtract) {
+            attemptedOriginSignatureExtract = true
+            try {
+                val apkFile = java.io.File(effSourceDir)
+                if (apkFile.exists() && apkFile.canRead()) {
+                    java.util.zip.ZipFile(apkFile).use { zf ->
+                        val entries = zf.entries()
+                        while (entries.hasMoreElements()) {
+                            val entry = entries.nextElement() ?: continue
+                            val name = entry.name ?: ""
+                            if (name.endsWith("config.json", ignoreCase = true)) {
+                                try {
+                                    val jsonText = zf.getInputStream(entry).bufferedReader().use { it.readText() }
+                                    val json = JSONObject(jsonText)
+                                    val rawSig = json.optString("originalSignature", "").ifEmpty { json.optString("signature", "") }.trim()
+                                    if (rawSig.isNotEmpty()) {
+                                        val candidate = try {
+                                            android.content.pm.Signature(rawSig)
+                                        } catch (_: Throwable) {
+                                            try {
+                                                android.content.pm.Signature(android.util.Base64.decode(rawSig, android.util.Base64.DEFAULT))
+                                            } catch (_: Throwable) { null }
+                                        }
+                                        if (isOfficialJahezSignature(candidate)) {
+                                            cachedOfficialJahezSignature = candidate
+                                            mapsCertCheckResult = 1
+                                            DiagnosticLogger.logStep("PackageCloaker", "Extracted official Jahez signature from $name")
+                                            return candidate
+                                        }
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                try {
+                                    zf.getInputStream(entry).use { originStream ->
+                                        java.util.zip.ZipInputStream(originStream).use { zis ->
+                                            var inner = zis.nextEntry
+                                            while (inner != null) {
+                                                val iname = inner.name ?: ""
+                                                if (iname.startsWith("META-INF/") &&
+                                                    (iname.endsWith(".RSA", ignoreCase = true) ||
+                                                     iname.endsWith(".DSA", ignoreCase = true) ||
+                                                     iname.endsWith(".EC", ignoreCase = true))
+                                                ) {
+                                                    val certBytes = zis.readBytes()
+                                                    val cf = java.security.cert.CertificateFactory.getInstance("X.509")
+                                                    val certs = cf.generateCertificates(java.io.ByteArrayInputStream(certBytes))
+                                                    val firstCert = certs.firstOrNull()
+                                                    if (firstCert != null) {
+                                                        val candidate = android.content.pm.Signature(firstCert.encoded)
+                                                        if (isOfficialJahezSignature(candidate)) {
+                                                            cachedOfficialJahezSignature = candidate
+                                                            mapsCertCheckResult = 1
+                                                            DiagnosticLogger.logStep("PackageCloaker", "Extracted official Jahez signature from embedded $name")
+                                                            return candidate
+                                                        }
+                                                    }
+                                                }
+                                                inner = zis.nextEntry
+                                            }
+                                        }
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // Also check if NPatch/LSPatch PMS hook already provides the official signature via GET_SIGNATURES
         try {
             val ctx = OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
             if (ctx != null) {
-                val srcDir = ctx.applicationInfo?.sourceDir
-                if (!srcDir.isNullOrEmpty()) {
-                    val isOfficial = Native.safeR(srcDir)
-                    if (!isOfficial) {
-                        mapsCertCheckResult = 2
-                        return true
-                    }
-                }
                 @Suppress("DEPRECATION")
                 val pInfo = ctx.packageManager.getPackageInfo("net.jahez.fleets", PackageManager.GET_SIGNATURES)
                 @Suppress("DEPRECATION")
-                val sigs = pInfo?.signatures
-                if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
-                    val sha256 = MessageDigest.getInstance("SHA-256")
-                        .digest(sigs[0].toByteArray())
-                        .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
-                    val isOfficialCert = sha256.equals(Native.OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
-                    mapsCertCheckResult = if (isOfficialCert) 1 else 2
-                    return !isOfficialCert
+                val firstSig = pInfo?.signatures?.firstOrNull()
+                if (isOfficialJahezSignature(firstSig)) {
+                    cachedOfficialJahezSignature = firstSig
+                    mapsCertCheckResult = 1
+                    return firstSig
                 }
             }
         } catch (_: Throwable) {}
-        return true
+        return cachedOfficialJahezSignature
+    }
+
+    fun shouldReplaceMapsApiKey(module: XposedModule? = DiagnosticLogger.xposedModule, sourceDir: String? = null): Boolean {
+        // When running under NPatch / Vector / LSPatch with PMS signature bypass or embedded origin.apk,
+        // or on Root LSPosed with the official APK, net.jahez.fleets presents Jahez's official Play Store
+        // certificate to Google Maps SDK (com.google.android.gms.maps_dynamite). Overwriting Jahez's authentic
+        // com.google.android.geo.API_KEY causes an API_KEY / SHA-1 mismatch and a blank white map.
+        if (mapsCertCheckResult == 1) return false
+        if (extractOfficialSignatureFromOriginApk(sourceDir) != null) {
+            mapsCertCheckResult = 1
+            return false
+        }
+        if (isNonRootFramework(module)) {
+            mapsCertCheckResult = 1
+            return false
+        }
+        return false
     }
 
     fun getAllVersionProfiles(): List<VersionProfile> {
@@ -403,7 +491,20 @@ object PackageCloaker {
                         }
                     }
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "Hooked ApplicationPackageManager (AppInfo/PkgInfo + InstallSourceInfo/InstallerPkg)")
+                try {
+                    val creatorObj = PackageInfo.CREATOR
+                    val mCreate = creatorObj.javaClass.getDeclaredMethod("createFromParcel", Parcel::class.java)
+                    module.hook(mCreate).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            val res = chain.proceed()
+                            if (res is PackageInfo && res.packageName == "net.jahez.fleets") {
+                                patchGoogleMapsApiKeyIfNeeded(res, module)
+                            }
+                            return res
+                        }
+                    })
+                } catch (_: Throwable) {}
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked ApplicationPackageManager + PackageInfo.CREATOR (AppInfo/PkgInfo + InstallSourceInfo/InstallerPkg)")
             } catch (t: Throwable) {
                 DiagnosticLogger.logError("PackageCloaker:MapsPkg", "Error hooking ApplicationPackageManager", t)
             }
@@ -450,26 +551,51 @@ object PackageCloaker {
             }
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && isSigningInfoHooked.compareAndSet(false, true)) {
+            try {
+                val signingInfoCls = android.content.pm.SigningInfo::class.java
+                val targetNames = setOf("getApkContentsSigners", "getSigningCertificateHistory")
+                var siHookCount = 0
+                for (m in signingInfoCls.declaredMethods) {
+                    if (m.name in targetNames && m.parameterCount == 0) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val orig = chain.proceed()
+                                if (!OrderInterceptor.isMasterRunning) return orig
+                                // Do not alter Evb.c's startup check path so Evb.c inversion remains 100% consistent
+                                val inEvb = try {
+                                    Throwable().stackTrace.any { it.className == "Evb" }
+                                } catch (_: Throwable) { false }
+                                if (inEvb) return orig
+                                val origArr = orig as? Array<*>
+                                val firstOrig = origArr?.firstOrNull() as? android.content.pm.Signature
+                                if (isOfficialJahezSignature(firstOrig)) {
+                                    if (cachedOfficialJahezSignature == null) {
+                                        cachedOfficialJahezSignature = firstOrig
+                                    }
+                                    return orig
+                                }
+                                val officialSig = extractOfficialSignatureFromOriginApk()
+                                if (officialSig != null) {
+                                    return arrayOf(officialSig)
+                                }
+                                return orig
+                            }
+                        })
+                        siHookCount++
+                    }
+                }
+                DiagnosticLogger.logStep("PackageCloaker", "Hooked SigningInfo ($siHookCount methods -> official Jahez cert for Google Maps SDK)")
+            } catch (t: Throwable) {
+                DiagnosticLogger.logError("PackageCloaker:SigningInfo", "Error hooking SigningInfo", t)
+            }
+        }
+
         if (isBundleMapsKeyHooked.compareAndSet(false, true)) {
             for (bundleCls in listOf(BaseBundle::class.java, Bundle::class.java)) {
                 try {
                     for (m in bundleCls.declaredMethods) {
-                        if (m.name == "getString" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? {
-                                    val key = chain.args.firstOrNull() as? String
-                                    if (key == "com.google.android.geo.API_KEY") {
-                                        if (shouldReplaceMapsApiKey(module)) {
-                                            val replacementKey = Native.safeQ()
-                                            if (replacementKey.isNotEmpty()) {
-                                                return replacementKey
-                                            }
-                                        }
-                                    }
-                                    return chain.proceed()
-                                }
-                            })
-                        } else if (m.name == "getBoolean" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
+                        if (m.name == "getBoolean" && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == String::class.java) {
                             module.hook(m).intercept(object : XposedInterface.Hooker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     val key = chain.args.firstOrNull() as? String
@@ -483,7 +609,7 @@ object PackageCloaker {
                     }
                 } catch (_: Throwable) {}
             }
-            DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle (Maps API_KEY + FeatureFlag booleans)")
+            DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle (FeatureFlag booleans; preserved authentic Maps API_KEY)")
         }
 
         if (isFeatureFlagsSourceHooked.compareAndSet(false, true)) {
@@ -1177,16 +1303,28 @@ object PackageCloaker {
             val appInfo: ApplicationInfo = when (infoObj) {
                 is ApplicationInfo -> infoObj
                 is PackageInfo -> {
-                    if (infoObj.packageName == "net.jahez.fleets" && mapsCertCheckResult == 0) {
+                    if (infoObj.packageName == "net.jahez.fleets") {
                         try {
                             @Suppress("DEPRECATION")
                             val sigs = infoObj.signatures
-                            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {
-                                val sha256 = MessageDigest.getInstance("SHA-256")
-                                    .digest(sigs[0].toByteArray())
-                                    .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
-                                val isOfficialCert = sha256.equals(Native.OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
-                                mapsCertCheckResult = if (isOfficialCert && !isNonRootFramework(module)) 1 else 2
+                            val firstSig = sigs?.firstOrNull()
+                            if (isOfficialJahezSignature(firstSig)) {
+                                if (cachedOfficialJahezSignature == null) {
+                                    cachedOfficialJahezSignature = firstSig
+                                }
+                                mapsCertCheckResult = 1
+                            } else {
+                                val officialSig = extractOfficialSignatureFromOriginApk(infoObj.applicationInfo?.sourceDir)
+                                if (officialSig != null && OrderInterceptor.isMasterRunning) {
+                                    val inEvb = try {
+                                        Throwable().stackTrace.any { it.className == "Evb" }
+                                    } catch (_: Throwable) { false }
+                                    if (!inEvb) {
+                                        @Suppress("DEPRECATION")
+                                        infoObj.signatures = arrayOf(officialSig)
+                                    }
+                                    mapsCertCheckResult = 1
+                                }
                             }
                         } catch (_: Throwable) {}
                     }
@@ -1210,20 +1348,19 @@ object PackageCloaker {
                 }
             }
 
-            if (mapsCertCheckResult == 0) {
-                val srcDir = appInfo.sourceDir
-                if (!srcDir.isNullOrEmpty()) {
-                    val isOfficial = try { Native.safeR(srcDir) } catch (_: Throwable) { false }
-                    mapsCertCheckResult = if (isOfficial && !isNonRootFramework(module)) 1 else 2
-                } else if (isNonRootFramework(module)) {
-                    mapsCertCheckResult = 2
-                }
+            if (cachedOfficialJahezSignature == null && !appInfo.sourceDir.isNullOrEmpty()) {
+                extractOfficialSignatureFromOriginApk(appInfo.sourceDir)
             }
-            if (!shouldReplaceMapsApiKey(module)) return
-            val metaData: Bundle = appInfo.metaData ?: return
-            val replacementKey = Native.safeQ()
-            if (replacementKey.isNotEmpty()) {
-                metaData.putString("com.google.android.geo.API_KEY", replacementKey)
+
+            if (!loggedMapsSignaturePreserved) {
+                val origKey = try { appInfo.metaData?.getString("com.google.android.geo.API_KEY") } catch (_: Throwable) { null }
+                if (!origKey.isNullOrEmpty()) {
+                    loggedMapsSignaturePreserved = true
+                    DiagnosticLogger.logStep(
+                        "PackageCloaker",
+                        "Preserved authentic Jahez Google Maps API_KEY (${origKey.take(12)}...) with official cert spoofing"
+                    )
+                }
             }
         } catch (_: Throwable) {}
     }

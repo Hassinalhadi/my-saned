@@ -1,4 +1,4 @@
-#Tue Oct 27 12:49:47 UTC 2026
+#Tue Oct 27 20:38:15 UTC 2026
 base.0=/home/runner/work/my-saned/my-saned/app/build/intermediates/dex/release/minifyReleaseWithR8/classes.dex
 renamed.0=classes.dex
 path.0=classes.dex

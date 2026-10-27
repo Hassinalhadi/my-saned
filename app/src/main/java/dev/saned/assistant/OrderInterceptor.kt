@@ -600,6 +600,7 @@ object OrderInterceptor {
     } catch (_: Throwable) { 0 }
 
     val apiConfirmedAcceptIds = ConcurrentHashMap.newKeySet<Int>()
+    val apiInFlightIds = ConcurrentHashMap.newKeySet<Int>()
 
     fun handlePostOrderActivityCreate(activity: Activity, orderIdInt: Int) {
         if (orderIdInt == 0) return
@@ -617,16 +618,16 @@ object OrderInterceptor {
         }
         if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
             DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending -> triggering 0ms UI auto-accept backup")
-            for (delayMs in listOf(0L, 45L, 140L, 320L)) {
+            for (delayMs in listOf(0L, 45L, 140L, 320L, 650L, 1100L)) {
                 mainHandler.postDelayed({
                     try {
                         if (apiConfirmedAcceptIds.contains(orderIdInt)) {
                             closeDispatchActivitySafely(activity, entry.wasInBackground)
                         } else if (!activity.isFinishing && !activity.isDestroyed) {
-                            val decor = activity.window?.decorView
-                            if (decor != null) {
-                                findAndTriggerOrder(decor, activity, System.currentTimeMillis())
+                            if (cachedAuthToken.isNotEmpty() && !apiInFlightIds.contains(orderIdInt)) {
+                                executeDirectApiCall(orderIdInt.toString(), "ACCEPT")
                             }
+                            triggerIncomingDispatchAcceptUi(activity, orderIdInt)
                         }
                     } catch (_: Throwable) {}
                 }, delayMs)
@@ -646,6 +647,121 @@ object OrderInterceptor {
       if (!activity.isFinishing && !activity.isDestroyed) activity.finish()
   } catch (_: Throwable) {}
         }
+    }
+
+    private fun triggerIncomingDispatchAcceptUi(activity: Activity, orderIdInt: Int) {
+        val decor = activity.window?.decorView ?: return
+        // 1. Try standard View traversal first
+        if (findAndTriggerOrder(decor, activity, System.currentTimeMillis())) return
+
+        // 2. Direct View search for Accept/Confirm button without requiring TextView price parsing (since orderIdInt is already approved!)
+        var foundAcceptBtn: View? = null
+        fun searchViews(v: View) {
+            val txt = ((v as? TextView)?.text?.toString() ?: "") + " " + (v.contentDescription?.toString() ?: "")
+            val low = txt.trim().lowercase(Locale.US)
+            if (low.contains("accept") || low.contains("قبول") || low.contains("تأكيد") || low.contains("confirm") || low.contains("اسحب") || low.contains("swipe")) {
+                if (foundAcceptBtn == null || v.isClickable) foundAcceptBtn = v
+            }
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) {
+                    val c = v.getChildAt(i) ?: continue
+                    searchViews(c)
+                }
+            }
+        }
+        try { searchViews(decor) } catch (_: Throwable) {}
+        if (foundAcceptBtn != null) {
+            DiagnosticLogger.logStep("IncomingDispatchActivity", "UI backup clicking accept view for #$orderIdInt")
+            simulateSwipe(foundAcceptBtn!!, decor, activity)
+            return
+        }
+
+        // 3. Jetpack Compose / AccessibilityNodeInfo semantics search (works on AndroidComposeView!)
+        try {
+            val rootNode = decor.createAccessibilityNodeInfo()
+            if (rootNode != null) {
+                var clickedSemantics = false
+                val rect = android.graphics.Rect()
+                fun walkNode(node: android.view.accessibility.AccessibilityNodeInfo?) {
+                    if (node == null || clickedSemantics) return
+                    val nText = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
+                    val low = nText.trim().lowercase(Locale.US)
+                    if (low.contains("accept") || low.contains("قبول") || low.contains("تأكيد") || low.contains("confirm")) {
+                        var target: android.view.accessibility.AccessibilityNodeInfo? = node
+                        while (target != null && !target.isClickable) {
+                            target = target.parent
+                        }
+                        val clickNode = target ?: node
+                        if (clickNode.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
+                            clickedSemantics = true
+                            DiagnosticLogger.logStep("IncomingDispatchActivity", "Compose/Accessibility ACTION_CLICK triggered for #$orderIdInt")
+                        }
+                        clickNode.getBoundsInScreen(rect)
+                        if (!rect.isEmpty) {
+                            val cx = rect.exactCenterX()
+                            val cy = rect.exactCenterY()
+                            val downTime = SystemClock.uptimeMillis()
+                            val dEv = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, cx, cy, 0)
+                            val uEv = MotionEvent.obtain(downTime, downTime + 25L, MotionEvent.ACTION_UP, cx, cy, 0)
+                            decor.dispatchTouchEvent(dEv)
+                            decor.dispatchTouchEvent(uEv)
+                            dEv.recycle()
+                            uEv.recycle()
+                            clickedSemantics = true
+                            DiagnosticLogger.logStep("IncomingDispatchActivity", "Compose bounds tap at ($cx,$cy) triggered for #$orderIdInt")
+                        }
+                        return
+                    }
+                    for (i in 0 until node.childCount) {
+                        walkNode(node.getChild(i))
+                    }
+                }
+                walkNode(rootNode)
+                if (clickedSemantics) return
+            }
+        } catch (_: Throwable) {}
+
+        // 4. Activity / ViewModel reflection fallback for accept method
+        try {
+            val candidates = mutableListOf<Any>(activity)
+            var cls: Class<*>? = activity.javaClass
+            while (cls != null && cls != Activity::class.java && cls != Any::class.java) {
+                for (f in cls.declaredFields) {
+                    try {
+                        f.isAccessible = true
+                        val v = f.get(activity) ?: continue
+                        val vName = v.javaClass.name
+                        if (v is Lazy<*>) {
+                            val lv = v.value
+                            if (lv != null) candidates.add(lv)
+                        } else if (!vName.startsWith("android.") && !vName.startsWith("java.")) {
+                            candidates.add(v)
+                        }
+                    } catch (_: Throwable) {}
+                }
+                cls = cls.superclass
+            }
+            for (obj in candidates) {
+                for (m in obj.javaClass.declaredMethods) {
+                    val mName = m.name.lowercase(Locale.US)
+                    if ((mName.contains("accept") && !mName.contains("reject")) &&
+                        (m.parameterCount == 0 || (m.parameterCount == 1 && (m.parameterTypes[0] == Int::class.javaPrimitiveType || m.parameterTypes[0] == Long::class.javaPrimitiveType || m.parameterTypes[0] == String::class.java)))
+                    ) {
+                        m.isAccessible = true
+                        when (m.parameterCount) {
+                            0 -> m.invoke(obj)
+                            1 -> when (m.parameterTypes[0]) {
+                                Int::class.javaPrimitiveType -> m.invoke(obj, orderIdInt)
+                                Long::class.javaPrimitiveType -> m.invoke(obj, orderIdInt.toLong())
+                                String::class.java -> m.invoke(obj, orderIdInt.toString())
+                            }
+                        }
+                        DiagnosticLogger.logStep("IncomingDispatchActivity", "Invoked ${obj.javaClass.simpleName}.${m.name} for #$orderIdInt")
+                        return
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
     }
 
     fun onActivityCreated(activity: Activity) {
@@ -1956,28 +2072,57 @@ object OrderInterceptor {
 
     fun readExactJahezEncryptedPrefs(context: Context) {
         try {
-  val prefs = cachedEncPrefs ?: synchronized(this) {
-      cachedEncPrefs ?: run {
-          val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-          EncryptedSharedPreferences.create(
-              context, Native.safeH(), masterKey,
-              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-          ).also { cachedEncPrefs = it }
-      }
-  }
-  val tok = prefs.getString(Native.safeI(), "") ?: ""
-  if (tok.isNotEmpty()) {
-      val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
-      if (cachedAuthToken != normNew) {
-          DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
-      }
-      checkAndSetToken(tok, Native.safeI())
-  }
-  val lang = prefs.getString(Native.safeJ(), "en") ?: "en"
-  if (lang.isNotEmpty()) cachedLanguage = lang
+            val dataDir = context.applicationInfo?.dataDir ?: context.filesDir?.parentFile?.absolutePath ?: ""
+            val encXmlFile = if (dataDir.isNotEmpty()) File(dataDir, "shared_prefs/${Native.safeH()}.xml") else null
+            // Only open EncryptedSharedPreferences if the XML file already exists and was populated by Saned
+            if (encXmlFile == null || (encXmlFile.exists() && encXmlFile.length() > 220L)) {
+                val prefs = cachedEncPrefs ?: synchronized(this) {
+                    cachedEncPrefs ?: run {
+                        val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+                        EncryptedSharedPreferences.create(
+                            context, Native.safeH(), masterKey,
+                            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                        ).also { cachedEncPrefs = it }
+                    }
+                }
+                var tok = prefs.getString(Native.safeI(), "") ?: ""
+                if (tok.isEmpty()) {
+                    try {
+                        for ((k, v) in prefs.all) {
+                            val s = v?.toString()?.trim() ?: continue
+                            val jwt = extractJwtFromString(s)
+                            if (jwt.isNotEmpty()) {
+                                tok = jwt
+                                break
+                            }
+                            if (k.contains("token", ignoreCase = true) || k.contains("auth", ignoreCase = true)) {
+                                if (s.length > 25) {
+                                    tok = s
+                                    break
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+                if (tok.isNotEmpty()) {
+                    val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
+                    if (cachedAuthToken != normNew) {
+                        DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
+                    }
+                    checkAndSetToken(tok, Native.safeI())
+                } else {
+                    // Never keep a stale EncryptedSharedPreferences instance in RAM if token was empty!
+                    cachedEncPrefs = null
+                }
+                val lang = try { prefs.getString(Native.safeJ(), "en") ?: "en" } catch (_: Throwable) { "en" }
+                if (lang.isNotEmpty()) cachedLanguage = lang
+            }
         } catch (t: Throwable) {
-  DiagnosticLogger.logError("EncryptedPrefs", "Could not read ENCRYPTED_SANED_PREFERENCES yet", t)
+            cachedEncPrefs = null
+        }
+        if (cachedAuthToken.isEmpty()) {
+            try { scanJahezSharedPreferencesForToken(context) } catch (_: Throwable) {}
         }
     }
 
@@ -2094,12 +2239,73 @@ object OrderInterceptor {
     }
 
     fun hook(module: XposedModule, classLoader: ClassLoader) {
-        // Matches SanedAssistant-98-7bac1ec.apk 100%: ONLY these 4 hooks (zero OkHttp/UI/SQLite/SharedPreferences hooks)
         try { hookFirebase(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookFirebase", "Error", t) }
         try { hookIncomingDispatchActivity(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookIncomingDispatchActivity", "Error", t) }
         try { hookInstrumentation(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookInstrumentation", "Error", t) }
         try { hookCipher(module) } catch (t: Throwable) { DiagnosticLogger.logError("hookCipher", "Error", t) }
+        try { hookPassiveHttpHeaderBuilders(module, classLoader) } catch (t: Throwable) { DiagnosticLogger.logError("hookPassiveHeaders", "Error", t) }
+        try { hookSharedPreferences(module, classLoader) } catch (t: Throwable) {}
+        try { hookJsonConstructors(module) } catch (t: Throwable) {}
         isOkHttpHooked = true
+    }
+
+    private fun hookPassiveHttpHeaderBuilders(module: XposedModule, classLoader: ClassLoader) {
+        var hookedCount = 0
+        val headerHooker = object : XposedInterface.Hooker {
+            override fun intercept(chain: XposedInterface.Chain): Any? {
+                try {
+                    val k = (chain.args.getOrNull(0) as? String)?.trim() ?: ""
+                    val v = (chain.args.getOrNull(1) as? String)?.trim() ?: ""
+                    if (k.isNotEmpty() && v.isNotEmpty()) {
+                        cachedHeaders[k] = v
+                        if (k.equals("Authorization", ignoreCase = true) ||
+                            k.contains("token", ignoreCase = true) ||
+                            v.startsWith("Bearer ", ignoreCase = true) ||
+                            v.startsWith("eyJ")
+                        ) {
+                            val prev = cachedAuthToken
+                            checkAndSetToken(v, k)
+                            if (cachedAuthToken.isNotEmpty() && cachedAuthToken != prev) {
+                                DiagnosticLogger.logStep("HttpHeaderHook", "Captured live Bearer token from $k (len=${cachedAuthToken.length})")
+                            }
+                        } else if (k.equals("x-unique-Identifier", ignoreCase = true)) {
+                            if (v != capturedDriverCipherB64) {
+                                capturedDriverCipherB64 = v
+                                persistDriverCipher(v)
+                            }
+                        } else if (k.equals("Accept-Language", ignoreCase = true)) {
+                            cachedLanguage = v
+                        }
+                    } else if (chain.args.size == 1) {
+                        val line = (chain.args.getOrNull(0) as? String)?.trim() ?: ""
+                        if (line.startsWith("Authorization:", ignoreCase = true)) {
+                            val vPart = line.substringAfter(":").trim()
+                            if (vPart.isNotEmpty()) checkAndSetToken(vPart, "Authorization")
+                        }
+                    }
+                } catch (_: Throwable) {}
+                return chain.proceed()
+            }
+        }
+        val targets = listOf(
+            "okhttp3.Headers\$Builder" to setOf("add", "set", "addUnsafeNonAscii"),
+            "okhttp3.Request\$Builder" to setOf("header", "addHeader"),
+            "java.net.URLConnection" to setOf("setRequestProperty", "addRequestProperty")
+        )
+        for ((clsName, methodNames) in targets) {
+            try {
+                val cls = try { Class.forName(clsName, false, classLoader) } catch (_: Throwable) { Class.forName(clsName) }
+                for (m in cls.declaredMethods) {
+                    if (m.name in methodNames && m.parameterTypes.size == 2 &&
+                        m.parameterTypes[0] == String::class.java && m.parameterTypes[1] == String::class.java
+                    ) {
+                        module.hook(m).intercept(headerHooker)
+                        hookedCount++
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+        DiagnosticLogger.logStep("OrderInterceptor", "Hooked passive HTTP header builders ($hookedCount methods)")
     }
 
     private fun hookOkHttp(module: XposedModule, classLoader: ClassLoader): Int {
@@ -3175,39 +3381,148 @@ object OrderInterceptor {
         return ""
     }
 
+    private fun isJwtChar(b: Byte): Boolean {
+        val c = b.toInt() and 0xFF
+        return (c in 65..90) || (c in 97..122) || (c in 48..57) || c == 45 || c == 95 || c == 46
+    }
+
+    private fun extractJwtFromByteSlice(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size): String {
+        val start = offset.coerceAtLeast(0)
+        val end = (offset + length).coerceAtMost(bytes.size)
+        if (end - start < 60) return ""
+        var i = start
+        while (i <= end - 3) {
+            // Look for ASCII "eyJ" (0x65, 0x79, 0x4A)
+            if (bytes[i] == 0x65.toByte() && bytes[i + 1] == 0x79.toByte() && bytes[i + 2] == 0x4A.toByte()) {
+                var j = i + 3
+                var dotCount = 0
+                while (j < end && isJwtChar(bytes[j])) {
+                    if (bytes[j] == 0x2E.toByte()) dotCount++
+                    j++
+                }
+                val tokenLen = j - i
+                if (dotCount >= 2 && tokenLen >= 60) {
+                    val candidate = String(bytes, i, tokenLen, Charsets.US_ASCII)
+                    if (isPlausibleJwt(candidate)) {
+                        return candidate
+                    }
+                }
+                i = j
+            } else {
+                i++
+            }
+        }
+        return ""
+    }
+
+    private fun extractJwtFromString(s: String): String {
+        if (s.length < 60) return ""
+        var searchFrom = 0
+        while (searchFrom <= s.length - 60) {
+            val idx = s.indexOf("eyJ", searchFrom)
+            if (idx < 0) break
+            var end = idx + 3
+            var dots = 0
+            while (end < s.length) {
+                val ch = s[end]
+                if (ch.isLetterOrDigit() || ch == '-' || ch == '_' || ch == '.') {
+                    if (ch == '.') dots++
+                    end++
+                } else {
+                    break
+                }
+            }
+            val candidate = s.substring(idx, end)
+            if (dots >= 2 && candidate.length >= 60 && isPlausibleJwt(candidate)) {
+                return candidate
+            }
+            searchFrom = end + 1
+        }
+        return ""
+    }
+
+    private fun isPlausibleJwt(jwt: String): Boolean {
+        return try {
+            val parts = jwt.split('.')
+            if (parts.size < 3 || parts[0].length < 8 || parts[1].length < 20 || parts[2].length < 10) return false
+            val hPad = parts[0] + "=".repeat((4 - parts[0].length % 4) % 4)
+            val hStr = String(Base64.decode(hPad, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8).trim()
+            hStr.startsWith("{") && hStr.contains("alg", ignoreCase = true)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private fun hookCipher(module: XposedModule) {
         try {
             var count = 0
             for (m in Cipher::class.java.declaredMethods) {
-                if (m.name == "doFinal" && m.returnType == ByteArray::class.java && m.parameterTypes.isNotEmpty() && m.parameterTypes[0] == ByteArray::class.java) {
+                if (m.name == "doFinal" && m.parameterTypes.none { it.name.contains("ByteBuffer") }) {
                     module.hook(m).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
                             val result = chain.proceed()
-                            val inputBytes = chain.args.getOrNull(0) as? ByteArray
-                            val outputBytes = result as? ByteArray
-                            if (inputBytes != null && outputBytes != null) {
-                                val off = (chain.args.getOrNull(1) as? Int) ?: 0
-                                val len = (chain.args.getOrNull(2) as? Int) ?: (inputBytes.size - off)
-                                try {
-                                    if (startsWithDriverIdPrefix(inputBytes, off, len)) {
-                                        val newB64 = Base64.encodeToString(outputBytes, Base64.NO_WRAP)
-                                        if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
-                                            capturedDriverCipherB64 = newB64
-                                            persistDriverCipher(newB64)
-                                            DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
-                                        }
-                                    } else if (outputBytes.size in 80..4096) {
-                                        val str = String(outputBytes, Charsets.UTF_8).trim()
-                                        val eyIdx = str.indexOf("eyJ")
-                                        if (eyIdx in 0..32) {
-                                            val candidate = str.substring(eyIdx).takeWhile { !it.isWhitespace() && it != '"' && it != '\'' && it.code in 33..126 }
-                                            if (candidate.count { it == '.' } >= 2 && candidate.length > 60) {
-                                                checkAndSetToken(candidate, "TinkDecryptedToken")
-                                            }
-                                        }
+                            try {
+                                val args = chain.args
+                                val inputBytes = args.getOrNull(0) as? ByteArray
+                                val inOff = if (args.size >= 3) ((args.getOrNull(1) as? Int) ?: 0) else 0
+                                val inLen = if (inputBytes != null) {
+                                    if (args.size >= 3) ((args.getOrNull(2) as? Int) ?: (inputBytes.size - inOff)) else inputBytes.size
+                                } else 0
+
+                                val outputBytes: ByteArray?
+                                val outOff: Int
+                                val outLen: Int
+                                if (result is ByteArray) {
+                                    outputBytes = result
+                                    outOff = 0
+                                    outLen = result.size
+                                } else if (result is Int && args.size >= 4 && args[3] is ByteArray) {
+                                    outputBytes = args[3] as ByteArray
+                                    outOff = (args.getOrNull(4) as? Int) ?: 0
+                                    outLen = result
+                                } else {
+                                    outputBytes = null
+                                    outOff = 0
+                                    outLen = 0
+                                }
+
+                                // 1. Check driverId RSA encryption
+                                if (inputBytes != null && outputBytes != null && outLen > 0 && startsWithDriverIdPrefix(inputBytes, inOff, inLen)) {
+                                    val slice = if (outOff == 0 && outLen == outputBytes.size) outputBytes else outputBytes.copyOfRange(outOff, (outOff + outLen).coerceAtMost(outputBytes.size))
+                                    val newB64 = Base64.encodeToString(slice, Base64.NO_WRAP)
+                                    if (newB64.isNotEmpty() && newB64 != capturedDriverCipherB64) {
+                                        capturedDriverCipherB64 = newB64
+                                        persistDriverCipher(newB64)
+                                        DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
                                     }
-                                } catch (_: Throwable) {}
-                            }
+                                    return result
+                                }
+
+                                // 2. Check Cipher.doFinal.in (when Tink encrypts JWT into EncryptedSharedPreferences)
+                                if (inputBytes != null && inLen in 60..8192) {
+                                    val jwtIn = extractJwtFromByteSlice(inputBytes, inOff, inLen)
+                                    if (jwtIn.isNotEmpty()) {
+                                        val norm = "Bearer $jwtIn"
+                                        if (cachedAuthToken != norm) {
+                                            DiagnosticLogger.logStep("EncryptedPrefs", "Auth JWT extracted from Cipher.doFinal.in (len=${jwtIn.length})")
+                                        }
+                                        checkAndSetToken(jwtIn, "Cipher.doFinal.in")
+                                        return result
+                                    }
+                                }
+
+                                // 3. Check Cipher.doFinal.out (when Tink decrypts JWT from EncryptedSharedPreferences)
+                                if (outputBytes != null && outLen in 60..8192) {
+                                    val jwtOut = extractJwtFromByteSlice(outputBytes, outOff, outLen)
+                                    if (jwtOut.isNotEmpty()) {
+                                        val norm = "Bearer $jwtOut"
+                                        if (cachedAuthToken != norm) {
+                                            DiagnosticLogger.logStep("EncryptedPrefs", "Auth JWT extracted from Cipher.doFinal.out (len=${jwtOut.length})")
+                                        }
+                                        checkAndSetToken(jwtOut, "Cipher.doFinal.out")
+                                    }
+                                }
+                            } catch (_: Throwable) {}
                             return result
                         }
                     })
@@ -3245,6 +3560,18 @@ object OrderInterceptor {
                     val res = chain.proceed()
                     if (isInsideJsonHook.get() == true) return res
                     val str = chain.args.getOrNull(0) as? String ?: return res
+                    if (str.length in 60..65536 && str.contains("eyJ")) {
+                        try {
+                            val jwt = extractJwtFromString(str)
+                            if (jwt.isNotEmpty()) {
+                                val norm = "Bearer $jwt"
+                                if (cachedAuthToken != norm) {
+                                    DiagnosticLogger.logStep("JsonHook", "Auth JWT extracted from JSON payload (len=${jwt.length})")
+                                }
+                                checkAndSetToken(jwt, "JsonJwt")
+                            }
+                        } catch (_: Throwable) {}
+                    }
                     if (str.length in 25..65536) {
                         val hasOrderKeyword = str.contains("dispatch", ignoreCase = true) ||
                             str.contains("order", ignoreCase = true) ||
@@ -4085,27 +4412,77 @@ object OrderInterceptor {
 
     fun scanJahezSharedPreferencesForToken(context: Context): String {
         try {
-            val dataDir = context.applicationInfo.dataDir
+            val dataDir = context.applicationInfo?.dataDir ?: context.filesDir?.parentFile?.absolutePath ?: return ""
             val prefsDir = File(dataDir, "shared_prefs")
             if (prefsDir.exists() && prefsDir.isDirectory) {
                 val xmlFiles = prefsDir.listFiles { _, name -> name.endsWith(".xml") } ?: emptyArray()
+                var masterKey: MasterKey? = null
                 for (xmlFile in xmlFiles) {
                     val prefName = xmlFile.nameWithoutExtension
-                    val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                    for ((key, value) in sp.all) {
-                        val strVal = value?.toString()?.trim() ?: continue
-                        if (strVal.length > 20 && (strVal.startsWith("ey") || strVal.startsWith("Bearer "))) {
-                            checkAndSetToken(strVal, key)
-                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
-                        } else if (key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true) || key.contains("session", ignoreCase = true)) {
-                            checkAndSetToken(strVal, key)
-                            if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                    if (prefName == "sanedhook_settings" || prefName == "saned_floating_overlay_pos") continue
+                    try {
+                        val rawXml = if (xmlFile.length() in 60..524288) xmlFile.readText() else ""
+                        if (rawXml.contains("eyJ")) {
+                            val jwt = extractJwtFromString(rawXml)
+                            if (jwt.isNotEmpty()) {
+                                checkAndSetToken(jwt, prefName)
+                                if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                            }
+                        }
+                        if (rawXml.contains("__androidx_security_crypto_encrypted_prefs__") && xmlFile.length() > 220L) {
+                            try {
+                                val mk = masterKey ?: MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build().also { masterKey = it }
+                                val encSp = EncryptedSharedPreferences.create(
+                                    context, prefName, mk,
+                                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                                )
+                                for ((k, v) in encSp.all) {
+                                    val s = v?.toString()?.trim() ?: continue
+                                    val jwt = extractJwtFromString(s)
+                                    if (jwt.isNotEmpty()) {
+                                        DiagnosticLogger.logStep("EncryptedPrefs", "Auth token found in $prefName[$k] (len=${jwt.length})")
+                                        checkAndSetToken(jwt, k)
+                                        if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                                    }
+                                }
+                            } catch (_: Throwable) {}
+                        }
+                        val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                        for ((key, value) in sp.all) {
+                            val strVal = value?.toString()?.trim() ?: continue
+                            val jwt = extractJwtFromString(strVal)
+                            if (jwt.isNotEmpty()) {
+                                checkAndSetToken(jwt, key)
+                                if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                            } else if (key.contains("token", ignoreCase = true) || key.contains("auth", ignoreCase = true) || key.contains("session", ignoreCase = true)) {
+                                checkAndSetToken(strVal, key)
+                                if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+            // Also scan DataStore / filesDir for any unencrypted protobuf/json containing eyJ
+            for (dir in listOfNotNull(context.filesDir, File(context.filesDir, "datastore"))) {
+                if (dir.exists() && dir.isDirectory) {
+                    val files = dir.listFiles() ?: emptyArray()
+                    for (f in files) {
+                        if (f.isFile && f.length() in 60..262144 && !f.name.startsWith("saned_")) {
+                            try {
+                                val jwt = extractJwtFromByteSlice(f.readBytes())
+                                if (jwt.isNotEmpty()) {
+                                    DiagnosticLogger.logStep("TokenScan", "Auth JWT found in file ${f.name} (len=${jwt.length})")
+                                    checkAndSetToken(jwt, f.name)
+                                    if (cachedAuthToken.isNotEmpty()) return cachedAuthToken
+                                }
+                            } catch (_: Throwable) {}
                         }
                     }
                 }
             }
         } catch (_: Throwable) {}
-        return ""
+        return cachedAuthToken
     }
 
     /**
@@ -4149,12 +4526,30 @@ object OrderInterceptor {
         val isAccept = (action == "ACCEPT")
         val orderIdInt = orderIdNum.toIntOrNull() ?: orderIdNum.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0
 
+        if (token.isEmpty() && ctx != null) {
+            token = scanJahezSharedPreferencesForToken(ctx)
+        }
         if (token.isEmpty()) {
-            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty)")
-            if (ctx != null) showToast(ctx, "⚠️ لم يتم تسجيل الدخول — لا يمكن قبول الطلب #$orderIdNum")
+            if (orderIdInt != 0) {
+                // Allow retry when IncomingDispatchActivity opens or when token becomes available
+                loggedOrderIds.remove("#$orderIdNum")
+            }
+            DiagnosticLogger.logWarn("DirectApi", "Cannot $action #$orderIdNum: not logged in (token empty) -> triggering UI backup if screen open")
+            if (isAccept) {
+                currentActivity?.let { act ->
+                    if (!act.isFinishing && !act.isDestroyed) {
+                        act.runOnUiThread {
+                            try { triggerIncomingDispatchAcceptUi(act, orderIdInt) } catch (_: Throwable) {}
+                        }
+                    }
+                }
+            }
             return
         }
 
+        if (orderIdInt != 0 && !apiInFlightIds.add(orderIdInt)) {
+            return
+        }
         if (capturedDriverCipherB64.isEmpty()) {
             readPersistedDriverCipher(ctx)
         }
@@ -4283,6 +4678,7 @@ object OrderInterceptor {
                 }
 
                 try { doneLatch.await(3200L, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
+                if (orderIdInt != 0) apiInFlightIds.remove(orderIdInt)
 
                 val winCode = winCodeRef.get()
                 val winBodyStr = winBodyRef.get() ?: ""
