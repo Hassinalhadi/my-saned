@@ -23914,7 +23914,6 @@ com.google.gson.stream.JsonScope
 com.google.gson.stream.JsonToken
 com.google.gson.stream.JsonWriter
 com.google.gson.stream.MalformedJsonException
-dev.jing.sanedhook.util.Native$safeR$1$1$1
 dev.jing.sanedhook.util.Native:
     private static final java.lang.String FALLBACK_DB_NAME
     private static final java.lang.String FALLBACK_ENCRYPTED_PREFS
@@ -23946,8 +23945,6 @@ dev.jing.sanedhook.util.Native:
     public final native int s(long)
     public static synthetic boolean safeA$default(dev.jing.sanedhook.util.Native,java.lang.Object,java.lang.String,int,java.lang.Object)
     public final java.lang.String safeO(java.lang.String)
-    public final java.lang.String safeQ()
-    public final boolean safeR(java.lang.String)
     public final native java.lang.String[] t()
     public final native java.lang.String[] u()
 dev.saned.assistant.DeviceSpoofer:
@@ -24183,13 +24180,11 @@ dev.saned.assistant.PackageCloaker:
     public final dev.saned.assistant.PackageCloaker$VersionProfile getActiveProfile()
     public final int getDetectedVersionIndex()
     public final boolean isNativeStubbedFlag()
-    public final boolean isNonRootFramework(io.github.libxposed.api.XposedModule)
     public static synthetic void patchGoogleMapsApiKeyIfNeeded$default(dev.saned.assistant.PackageCloaker,java.lang.Object,io.github.libxposed.api.XposedModule,int,java.lang.Object)
     public final void setActiveProfile(dev.saned.assistant.PackageCloaker$VersionProfile)
     public final void setDetectedVersionIndex(int)
     public final void setLastCheckedVersionCode(long)
-    public final boolean shouldReplaceMapsApiKey(io.github.libxposed.api.XposedModule,java.lang.String)
-    public static synthetic boolean shouldReplaceMapsApiKey$default(dev.saned.assistant.PackageCloaker,io.github.libxposed.api.XposedModule,java.lang.String,int,java.lang.Object)
+    public static synthetic boolean shouldReplaceMapsApiKey$default(dev.saned.assistant.PackageCloaker,io.github.libxposed.api.XposedModule,int,java.lang.Object)
 dev.saned.assistant.R$array
 dev.saned.assistant.R$drawable:
     public static int ic_badge_original
@@ -27293,6 +27288,7 @@ kotlin.io.ByteStreamsKt:
     private static final java.io.ByteArrayInputStream inputStream(byte[])
     private static final java.io.ByteArrayInputStream inputStream(byte[],int,int)
     public static final kotlin.collections.ByteIterator iterator(java.io.BufferedInputStream)
+    public static final byte[] readBytes(java.io.InputStream)
     public static final byte[] readBytes(java.io.InputStream,int)
     public static synthetic byte[] readBytes$default(java.io.InputStream,int,int,java.lang.Object)
     private static final java.io.InputStreamReader reader(java.io.InputStream,java.nio.charset.Charset)
@@ -42505,6 +42501,8 @@ com.google.crypto.tink.subtle.XChaCha20Poly1305
 com.google.crypto.tink.util.Bytes:
     public static int size()
 com.google.crypto.tink.util.SecretBytes
+dev.jing.sanedhook.util.Native$safeR$1$1$1:
+    public final java.lang.CharSequence invoke(byte)
 dev.jing.sanedhook.util.Native:
     public static final dev.jing.sanedhook.util.Native INSTANCE
     public static final dev.jing.sanedhook.util.Native a
@@ -42524,6 +42522,7 @@ dev.jing.sanedhook.util.Native:
     public static java.lang.String[] safeM()
     public static java.lang.String[] safeN()
     public static java.lang.String[] safeP()
+    public static java.lang.String safeQ()
     public static int safeS()
     public static java.lang.String[] safeT()
     public static java.lang.String[] safeU()
@@ -42826,24 +42825,21 @@ dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$11
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$12
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$1:
-    public final synthetic io.github.libxposed.api.XposedModule $module
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$5
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$6
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$7
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$8
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$9
-dev.saned.assistant.PackageCloaker$isOfficialJahezSignature$sha256$1
+dev.saned.assistant.PackageCloaker$patchGoogleMapsApiKeyIfNeeded$appInfo$sha256$1
+dev.saned.assistant.PackageCloaker$shouldReplaceMapsApiKey$sha256$1
 dev.saned.assistant.PackageCloaker$stubPromonPackage$1
 dev.saned.assistant.PackageCloaker$stubPromonPackage$2
 dev.saned.assistant.PackageCloaker$stubPromonPackage$3
 dev.saned.assistant.PackageCloaker$stubPromonPackage$pSig$1
 dev.saned.assistant.PackageCloaker:
     public static final dev.saned.assistant.PackageCloaker INSTANCE
-    public static volatile int mapsCertCheckResult
     public static java.lang.Object createFallbackSecurityResult()
     public static java.lang.Object createPlayStoreInstallSourceInfo()
     public static java.lang.Object defaultReturnValueForType()
