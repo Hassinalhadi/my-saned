@@ -42802,7 +42802,6 @@ dev.saned.assistant.PackageCloaker$hookEarly$3
 dev.saned.assistant.PackageCloaker$hookEarly$4
 dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
-dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4

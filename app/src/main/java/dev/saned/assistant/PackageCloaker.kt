@@ -1,7 +1,6 @@
 package dev.saned.assistant
 
 import android.app.Activity
-import android.app.Dialog
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.InstallSourceInfo
@@ -11,10 +10,6 @@ import android.os.BaseBundle
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcel
-import android.os.Parcelable
-import android.view.View
-import android.view.ViewGroup
-import android.widget.TextView
 import dev.jing.sanedhook.util.Native
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -86,7 +81,6 @@ object PackageCloaker {
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
     private val isInstallSourceInfoHooked = AtomicBoolean(false)
     private val isFeatureFlagsSourceHooked = AtomicBoolean(false)
-    private val isDialogGuardHooked = AtomicBoolean(false)
     private val installSourceLogCount = AtomicInteger(0)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
@@ -238,25 +232,25 @@ object PackageCloaker {
 
     /**
      * Constructs a genuine android.content.pm.InstallSourceInfo via public Parcelable.Creator
-     * without using HiddenAPI-blocked field reflection (which throws NoSuchFieldException on Android 11-16!).
-     * Even if InstallSourceInfo.getInstallingPackageName() is AOT-inlined into a direct field read in boot.oat,
-     * the underlying mInstallingPackageName / mInitiatingPackageName / mOriginatingPackageName fields are
-     * genuinely set to "com.android.vending" and mPackageSource is set to 2 (PACKAGE_SOURCE_STORE).
+     * matching AOSP InstallSourceInfo(Parcel in):
+     *   1. mInitiatingPackageName = in.readString()
+     *   2. mInitiatingPackageSigningInfo = in.readTypedObject(SigningInfo.CREATOR) -> 0 int = null!
+     *   3. mOriginatingPackageName = in.readString()
+     *   4. mInstallingPackageName = in.readString()
+     *   5. mPackageSource = in.readInt() (API 33+)
+     *   6. mUpdateOwnerPackageName = in.readString() (API 34+)
      */
     private fun createPlayStoreInstallSourceInfo(orig: Any?): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return orig
         return try {
-            val signingInfo = try {
-                if (orig is InstallSourceInfo) orig.initiatingPackageSigningInfo as? Parcelable else null
-            } catch (_: Throwable) { null }
             val parcel = Parcel.obtain()
             try {
-                parcel.writeString(PLAY_STORE_PKG) // mInitiatingPackageName
-                parcel.writeParcelable(signingInfo, 0) // mInitiatingPackageSigningInfo
-                parcel.writeString(PLAY_STORE_PKG) // mOriginatingPackageName
-                parcel.writeString(PLAY_STORE_PKG) // mInstallingPackageName
-                parcel.writeInt(2) // mPackageSource = PackageInstaller.PACKAGE_SOURCE_STORE (API 33+)
-                parcel.writeString(PLAY_STORE_PKG) // mUpdateOwnerPackageName (API 34+)
+                parcel.writeString(PLAY_STORE_PKG) // 1. mInitiatingPackageName
+                parcel.writeInt(0)                 // 2. mInitiatingPackageSigningInfo = null (writeTypedObject null marker is 0!)
+                parcel.writeString(PLAY_STORE_PKG) // 3. mOriginatingPackageName
+                parcel.writeString(PLAY_STORE_PKG) // 4. mInstallingPackageName
+                parcel.writeInt(2)                 // 5. mPackageSource = PACKAGE_SOURCE_STORE (API 33+)
+                parcel.writeString(PLAY_STORE_PKG) // 6. mUpdateOwnerPackageName (API 34+)
                 parcel.setDataPosition(0)
                 InstallSourceInfo.CREATOR.createFromParcel(parcel)
             } finally {
@@ -270,7 +264,6 @@ object PackageCloaker {
     /**
      * Dynamically inspects the call stack when getInstallSourceInfo / getInstallerPackageName is called
      * and hooks any app-level InstallSourceCheck class with signature (Context) -> boolean to return true.
-     * This automatically covers vCode=40104 and all future versions (40105+) regardless of R8 class renaming.
      */
     private fun autoHookCallerInstallSourceCheck(module: XposedModule) {
         val cl = cachedAppClassLoader ?: return
@@ -363,7 +356,10 @@ object PackageCloaker {
                                     autoHookCallerInstallSourceCheck(module)
                                     val spoofed = createPlayStoreInstallSourceInfo(orig)
                                     if (installSourceLogCount.incrementAndGet() <= 6) {
-                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> Parcel InstallSourceInfo($PLAY_STORE_PKG)")
+                                        val verifiedPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                            try { (spoofed as? InstallSourceInfo)?.installingPackageName } catch (_: Throwable) { null }
+                                        } else null
+                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> InstallSourceInfo(installing=$verifiedPkg)")
                                     }
                                     return spoofed
                                 }
@@ -489,77 +485,6 @@ object PackageCloaker {
                 }
             } catch (_: Throwable) {}
         }
-
-        // Safety-net Dialog & MainActivity.finish() guard against "- Not installed from Play Store" dialog
-        if (isDialogGuardHooked.compareAndSet(false, true)) {
-            try {
-                val mShow = Dialog::class.java.getDeclaredMethod("show")
-                module.hook(mShow).intercept(object : XposedInterface.Hooker {
-                    override fun intercept(chain: XposedInterface.Chain): Any? {
-                        val res = chain.proceed()
-                        if (OrderInterceptor.isMasterRunning) {
-                            val dlg = chain.thisObject as? Dialog
-                            if (dlg != null) {
-                                try {
-                                    val decor = dlg.window?.decorView
-                                    if (decor != null && containsSecurityAlertText(decor)) {
-                                        DiagnosticLogger.logWarn("PackageCloaker", "Dismissed security dialog ('Not installed from Play Store')")
-                                        dlg.setOnDismissListener(null)
-                                        dlg.setOnCancelListener(null)
-                                        dlg.dismiss()
-                                    }
-                                } catch (_: Throwable) {}
-                            }
-                        }
-                        return res
-                    }
-                })
-                for (mFinName in listOf("finish", "finishAffinity")) {
-                    try {
-                        val mFin = Activity::class.java.getDeclaredMethod(mFinName)
-                        module.hook(mFin).intercept(object : XposedInterface.Hooker {
-                            override fun intercept(chain: XposedInterface.Chain): Any? {
-                                val act = chain.thisObject as? Activity
-                                if (OrderInterceptor.isMasterRunning && act != null && act.javaClass.name == getMainActivityClassName()) {
-                                    val trace = Throwable().stackTrace
-                                    val fromDialogOrGuard = trace.any { f ->
-                                        val cn = f.className ?: ""
-                                        cn.contains("Dialog", ignoreCase = true) ||
-                                        cn.contains("guardzilla", ignoreCase = true) ||
-                                        cn.contains("Security", ignoreCase = true) ||
-                                        isPromonClassName(cn)
-                                    }
-                                    if (fromDialogOrGuard) {
-                                        DiagnosticLogger.logWarn("PackageCloaker", "Blocked $mFinName() on MainActivity triggered by security dialog/callback")
-                                        return null
-                                    }
-                                }
-                                return chain.proceed()
-                            }
-                        })
-                    } catch (_: Throwable) {}
-                }
-            } catch (_: Throwable) {}
-        }
-    }
-
-    private fun containsSecurityAlertText(view: View): Boolean {
-        if (view is TextView) {
-            val txt = view.text?.toString() ?: ""
-            if (txt.contains("Not installed from Play Store", ignoreCase = true) ||
-                txt.contains("Rooted device", ignoreCase = true) ||
-                txt.contains("Auto Clicker", ignoreCase = true)
-            ) {
-                return true
-            }
-        }
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val child = view.getChildAt(i) ?: continue
-                if (containsSecurityAlertText(child)) return true
-            }
-        }
-        return false
     }
 
     private fun stubPromonPackage(module: XposedModule, classLoader: ClassLoader, pkgPrefix: String): Int {
@@ -1008,24 +933,28 @@ object PackageCloaker {
         }
         DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
-        // 3. Lu80.L: ShadowArmor profiles (scan all known profiles)
+        // 3. Lu80.L: ShadowArmor profiles (scan all known profiles, deduplicating classes)
         try {
             val saProfiles = getAllShadowArmorProfiles()
             val featureFlags = Native.safeU().toList()
+            val hookedSaClasses = HashSet<String>()
             for ((saIdx, sa) in saProfiles.withIndex()) {
                 var saCount = 0
-                try {
-                    val rootCls = classLoader.loadClass(sa.rootCheckClass)
-                    for (m in rootCls.declaredMethods) {
-                        if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterCount == 0) {
-                            module.hook(m).intercept(object : XposedInterface.Hooker {
-                                override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
-                            })
-                            saCount++
+                if (sa.rootCheckClass.isNotEmpty() && hookedSaClasses.add(sa.rootCheckClass)) {
+                    try {
+                        val rootCls = classLoader.loadClass(sa.rootCheckClass)
+                        for (m in rootCls.declaredMethods) {
+                            if (m.returnType == Boolean::class.javaPrimitiveType && m.parameterCount == 0) {
+                                module.hook(m).intercept(object : XposedInterface.Hooker {
+                                    override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) false else chain.proceed()
+                                })
+                                saCount++
+                            }
                         }
-                    }
-                } catch (_: Throwable) {}
+                    } catch (_: Throwable) {}
+                }
                 for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to true, sa.certPinClass to true)) {
+                    if (clsName.isEmpty() || !hookedSaClasses.add(clsName)) continue
                     try {
                         val c = classLoader.loadClass(clsName)
                         for (m in c.declaredMethods) {
@@ -1033,12 +962,13 @@ object PackageCloaker {
                                 module.hook(m).intercept(object : XposedInterface.Hooker {
                                     override fun intercept(chain: XposedInterface.Chain): Any? = if (OrderInterceptor.isMasterRunning) retVal else chain.proceed()
                                 })
+                                dynamicHookedInstallSourceClasses.add(clsName)
                                 saCount++
                             }
                         }
                     } catch (_: Throwable) {}
                 }
-                if (featureFlags.isNotEmpty()) {
+                if (featureFlags.isNotEmpty() && sa.featureFlagsClass.isNotEmpty() && hookedSaClasses.add(sa.featureFlagsClass)) {
                     try {
                         val ffCls = classLoader.loadClass(sa.featureFlagsClass)
                         for (m in ffCls.declaredMethods) {

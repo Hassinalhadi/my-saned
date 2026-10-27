@@ -79,7 +79,10 @@ object Native {
         "jahez_fleets", "fvfeiucoi.ag", "fvfeiucoi.c", "fvfeiucoi.y", "net.jahez.fleets.MainActivity", "fvfeiucoi.I", "a", "loadLibrary0"
     )
     private val FALLBACK_GUARD_CLASSES = arrayOf(
-        "S86", "yM", "ta3", "xD", "cj6", "tEa", "Ke0", "MV5", "XS", "wRa", "A76", "gM", "B93", "fD", "Jh6"
+        "S86", "yM", "ta3", "xD", "cj6",
+        "tEa", "Ke0", "MV5", "XS", "wRa",
+        "A76", "gM", "B93", "fD", "Jh6",
+        "A76", "gM", "d06", "fD", "Jh6"
     )
     private val FALLBACK_FEATURE_FLAGS = arrayOf(
         "rooted_device_check", "auto_clicker_check", "installation_source_check"
