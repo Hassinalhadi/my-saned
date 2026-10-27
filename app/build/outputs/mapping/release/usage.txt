@@ -24184,6 +24184,7 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static synthetic dev.saned.assistant.PackageCloaker$VersionProfile copy$default(dev.saned.assistant.PackageCloaker$VersionProfile,int,java.lang.String,java.util.List,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
 dev.saned.assistant.PackageCloaker:
     private static final java.lang.String PLAY_STORE_PKG
+    static synthetic java.lang.String formatAppCallStack$default(dev.saned.assistant.PackageCloaker,int,int,java.lang.Object)
     public final dev.saned.assistant.PackageCloaker$VersionProfile getActiveProfile()
     public final int getDetectedVersionIndex()
     public final boolean isNativeStubbedFlag()
@@ -32202,7 +32203,7 @@ androidx.activity.result.ActivityResultRegistry$1:
     public final synthetic androidx.activity.result.ActivityResultCallback val$callback
     public final synthetic androidx.activity.result.contract.ActivityResultContract val$contract
     public final synthetic java.lang.String val$key
-androidx.activity.result.ActivityResultRegistry$3$$InternalSyntheticThrowCCEIfNotNull$170$2025804ee48157b73e7ba6ee24ee7819a25f8590dbb68233572fab25cfbc15f1$0
+androidx.activity.result.ActivityResultRegistry$3$$InternalSyntheticThrowCCEIfNotNull$182$2025804ee48157b73e7ba6ee24ee7819a25f8590dbb68233572fab25cfbc15f1$0
 androidx.activity.result.ActivityResultRegistry$3:
     public static androidx.activity.result.ActivityResultRegistry$3 addEntry()
     public static boolean addToGoal()
@@ -35561,7 +35562,7 @@ androidx.core.os.LocaleListCompat:
     public final int size()
     public final java.lang.String toLanguageTags()
     public static androidx.core.os.LocaleListCompat wrap(android.os.LocaleList)
-androidx.core.os.LocaleListCompatWrapper$$InternalSyntheticThrowCCEIfNotNull$249$dd0d3399d7d164768be69e26cdc88e49809bc46afb623c060d951b7b929d77ad$0
+androidx.core.os.LocaleListCompatWrapper$$InternalSyntheticThrowCCEIfNotNull$261$dd0d3399d7d164768be69e26cdc88e49809bc46afb623c060d951b7b929d77ad$0
 androidx.core.os.LocaleListCompatWrapper
 androidx.core.os.LocaleListInterface:
     public abstract java.util.Locale get()
@@ -37111,7 +37112,6 @@ androidx.lifecycle.LifecycleCoroutineScope
 androidx.lifecycle.LifecycleCoroutineScopeImpl:
     public final kotlin.coroutines.CoroutineContext coroutineContext
     public final androidx.lifecycle.Lifecycle lifecycle
-    public final kotlin.coroutines.CoroutineContext getCoroutineContext()
     public static androidx.lifecycle.Lifecycle getLifecycle$lifecycle_common()
 androidx.lifecycle.LifecycleDispatcher:
     public static final androidx.lifecycle.LifecycleDispatcher INSTANCE
@@ -38347,7 +38347,7 @@ androidx.transition.ViewUtilsBase
 androidx.transition.Visibility$DisappearListener:
     public final void hideViewWhenNotCanceled()
 androidx.transition.Visibility
-androidx.transition.WindowIdApi14$$InternalSyntheticThrowCCEIfNotNull$249$346ba31081d848221d10738ffacfe8b42a1cf2bcc44a47580e10fd7ecc1dfab1$0
+androidx.transition.WindowIdApi14$$InternalSyntheticThrowCCEIfNotNull$261$346ba31081d848221d10738ffacfe8b42a1cf2bcc44a47580e10fd7ecc1dfab1$0
 androidx.transition.WindowIdApi14
 androidx.vectordrawable.graphics.drawable.AndroidResources:
     public static final int[] STYLEABLE_ANIMATOR
@@ -39566,7 +39566,7 @@ com.google.android.material.datepicker.MaterialCalendarGridView:
     public final java.util.Calendar dayCompute
     public static void gainFocus()
     public static android.view.View getChildAtPosition()
-com.google.android.material.datepicker.MaterialDatePicker$1$$InternalSyntheticThrowCCEIfNotNull$244$8c0322c3b6a8ad59d9da5ebe01668fc41b267413290427d3382a40f1207874a7$0
+com.google.android.material.datepicker.MaterialDatePicker$1$$InternalSyntheticThrowCCEIfNotNull$256$8c0322c3b6a8ad59d9da5ebe01668fc41b267413290427d3382a40f1207874a7$0
 com.google.android.material.datepicker.MaterialDatePicker$1
 com.google.android.material.datepicker.MaterialDatePicker$2
 com.google.android.material.datepicker.MaterialDatePicker$3
@@ -42668,6 +42668,8 @@ dev.saned.assistant.OrderInterceptor$startActiveServerPolling$1:
 dev.saned.assistant.OrderInterceptor$verifyCryptographicKeyAndTokenInEngine$valid$expectedTokHex$1:
     public static java.lang.CharSequence invoke()
     public final java.lang.String invoke(java.lang.Class)
+    public static java.lang.CharSequence invoke$1()
+    public static java.lang.CharSequence invoke$2()
 dev.saned.assistant.OrderInterceptor$verifyRemoteControlSignatureInEngine$fullHex$1
 dev.saned.assistant.OrderInterceptor:
     public static final kotlin.SynchronizedLazyImpl cachedWmgInstance$delegate
@@ -42791,17 +42793,22 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
     public static java.lang.String getRuntimeExecMethod()
-dev.saned.assistant.PackageCloaker$autoHookCallerInstallSourceCheck$stackStr$1
+dev.saned.assistant.PackageCloaker$formatAppCallStack$2
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
+dev.saned.assistant.PackageCloaker$hook$5
+dev.saned.assistant.PackageCloaker$hook$fieldNames$1
+dev.saned.assistant.PackageCloaker$hook$mSigs$1$1
+dev.saned.assistant.PackageCloaker$hook$mSigs$1
 dev.saned.assistant.PackageCloaker$hookEarly$2
 dev.saned.assistant.PackageCloaker$hookEarly$3
-dev.saned.assistant.PackageCloaker$hookEarly$4
 dev.saned.assistant.PackageCloaker$hookEarly$5
 dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$10
+dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$11
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$3
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$4
@@ -43063,10 +43070,10 @@ kotlin.TuplesKt
 kotlin.collections.AbstractCollection$toString$1$$InternalSyntheticThrowCCEIfNotNull$24$8b23b5989d83f217c632451418a9a5ca9637b7c5c6b4e7275fb3cf50257f9175$0
 kotlin.collections.AbstractCollection$toString$1:
     public final java.lang.Throwable invoke(java.lang.Throwable)
-    public static java.lang.CharSequence invoke$1()
     public final java.lang.String invoke$1()
     public static void invoke$1()
     public static java.lang.String invoke$2()
+    public static java.lang.CharSequence invoke$3()
 kotlin.collections.AbstractIterator$WhenMappings
 kotlin.collections.AbstractIterator
 kotlin.collections.AbstractList$Companion
@@ -43361,7 +43368,7 @@ kotlin.text.Charsets:
     public static java.nio.charset.Charset UTF32_LE()
 kotlin.text.DelimitedRangesSequence$iterator$1:
     public static kotlin.ranges.IntRange next()
-kotlin.text.MatchGroup$$InternalSyntheticThrowCCEIfNotNull$249$5ca9406d1a5dcd4c12acc4367755014baa888391a69c49fb6dfab5eb78f63cea$0
+kotlin.text.MatchGroup$$InternalSyntheticThrowCCEIfNotNull$261$5ca9406d1a5dcd4c12acc4367755014baa888391a69c49fb6dfab5eb78f63cea$0
 kotlin.text.MatchGroup
 kotlin.text.MatchGroupCollection
 kotlin.text.MatchResult
@@ -43393,7 +43400,7 @@ kotlin.text.ScreenFloatValueRegEx:
 kotlin.text.StringsKt
 kotlin.text.StringsKt__AppendableKt
 kotlin.text.StringsKt__IndentKt$$InternalSyntheticThrowCCEIfNotNull$14$2ee9a6e72894d1c66ad39c76d6c7521187f17fdd077b4c6b3616a5bcf4efcb99$0
-kotlin.text.StringsKt__IndentKt$$InternalSyntheticThrowCCEIfNotNull$54$e49cbb98d0bee32dd17303742e3e6da9c9553623a72ddc1043ba2b29876aa9ea$0
+kotlin.text.StringsKt__IndentKt$$InternalSyntheticThrowCCEIfNotNull$50$e49cbb98d0bee32dd17303742e3e6da9c9553623a72ddc1043ba2b29876aa9ea$0
 kotlin.text.StringsKt__IndentKt$getIndentFunction$1
 kotlin.text.StringsKt__IndentKt$getIndentFunction$2
 kotlin.text.StringsKt__IndentKt:
@@ -43407,9 +43414,9 @@ kotlin.text.StringsKt__RegexExtensionsJVMKt
 kotlin.text.StringsKt__StringBuilderJVMKt
 kotlin.text.StringsKt__StringNumberConversionsJVMKt
 kotlin.text.StringsKt__StringsJVMKt
-kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$55$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$0
-kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$55$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$1
-kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$55$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$2
+kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$51$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$0
+kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$51$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$1
+kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1$$InternalSyntheticThrowCCEIfNotNull$51$f9b5722f458f2af1bad14ff43b6817e58ace1c163323d9ecf47c775658da59f1$2
 kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$1:
     public final kotlin.coroutines.CoroutineContext invoke()
 kotlin.text.StringsKt__StringsKt$rangesDelimitedBy$2
@@ -43423,7 +43430,6 @@ kotlin.text.StringsKt__StringsKt:
 kotlin.text.StringsKt___StringsJvmKt
 kotlinx.coroutines.AbstractCoroutine:
     public abstract void afterResume()
-    public final kotlin.coroutines.CoroutineContext getCoroutineContext()
     public abstract void onCancelled()
     public abstract void onCompleted()
     public abstract void start()
@@ -43445,8 +43451,8 @@ kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithFor
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$bb82c0daeffbf5a4e699209b4035dad3969b1d18539c4a53180462e3c4ad95d9$0
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$d25ab52e4b8153decde6488ba3961e5d4ef5d5f6f96f8749b145c080bc9ce9f3$0
 kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticBackportWithForwarding$5$d25ab52e4b8153decde6488ba3961e5d4ef5d5f6f96f8749b145c080bc9ce9f3$1
-kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$162$5bf0b8f7bb60723597c5bb9b9de9b58be043f66489bf9c6225f5d37de8ef0e12$0
-kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$56$ac82d8f9b78172d6026ce7593e6d6ee3c3eacb4303b6f84fe4dc9af189abb5f2$0
+kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$167$5bf0b8f7bb60723597c5bb9b9de9b58be043f66489bf9c6225f5d37de8ef0e12$0
+kotlinx.coroutines.CancellableContinuationImpl$$InternalSyntheticThrowCCEIfNotNull$52$ac82d8f9b78172d6026ce7593e6d6ee3c3eacb4303b6f84fe4dc9af189abb5f2$0
 kotlinx.coroutines.CancellableContinuationImpl:
     public static java.lang.Void alreadyResumedError()
     public final void callSegmentOnCancellation()
@@ -43509,13 +43515,11 @@ kotlinx.coroutines.CoroutineExceptionHandler:
     static void <clinit>()
     public abstract void handleException(kotlin.coroutines.CoroutineContext,java.lang.Throwable)
 kotlinx.coroutines.CoroutineExceptionHandlerKt
-kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$249$a04cd55831796dad4a4038d4eb866607cad4d88ce7c01ff729936a1ef385fb02$0
-kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$54$f32d3c65e79275cc0e34133ff17172a91084ea4fa58ff765934c26285df444a4$0
+kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$261$a04cd55831796dad4a4038d4eb866607cad4d88ce7c01ff729936a1ef385fb02$0
+kotlinx.coroutines.CoroutineId$$InternalSyntheticThrowCCEIfNotNull$50$f32d3c65e79275cc0e34133ff17172a91084ea4fa58ff765934c26285df444a4$0
 kotlinx.coroutines.CoroutineId
 kotlinx.coroutines.CoroutineName$Key
 kotlinx.coroutines.CoroutineName
-kotlinx.coroutines.CoroutineScope:
-    public abstract kotlin.coroutines.CoroutineContext getCoroutineContext()
 kotlinx.coroutines.CoroutineScopeKt
 kotlinx.coroutines.CoroutineStart$WhenMappings
 kotlinx.coroutines.CoroutineStart:
@@ -43739,8 +43743,6 @@ kotlinx.coroutines.internal.ClassValueCtorCache$$InternalSyntheticApiModelOutlin
 kotlinx.coroutines.internal.ClassValueCtorCache$cache$1
 kotlinx.coroutines.internal.ClassValueCtorCache
 kotlinx.coroutines.internal.ConcurrentLinkedListNode
-kotlinx.coroutines.internal.ContextScope:
-    public final kotlin.coroutines.CoroutineContext getCoroutineContext()
 kotlinx.coroutines.internal.CoroutineExceptionHandlerImplKt:
     public static final void propagateExceptionFinalResort(java.lang.Throwable)
 kotlinx.coroutines.internal.CoroutineExceptionHandlerImpl_commonKt
@@ -43821,8 +43823,8 @@ kotlinx.coroutines.internal.StackTraceRecoveryKt
 kotlinx.coroutines.internal.Symbol
 kotlinx.coroutines.internal.SystemPropsKt
 kotlinx.coroutines.internal.SystemPropsKt__SystemProps_commonKt
-kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$249$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$0
-kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$249$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$2
+kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$261$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$0
+kotlinx.coroutines.internal.ThreadContextKt$countAll$1$$InternalSyntheticThrowCCEIfNotNull$261$a546074a2ed249d1eabefdc79e18209b1ee65e7faf56680f7461c253f28dd8e6$2
 kotlinx.coroutines.internal.ThreadContextKt$countAll$1:
     public static kotlinx.coroutines.internal.ThreadState invoke()
     public static void invoke$2()
@@ -43833,7 +43835,6 @@ kotlinx.coroutines.internal.ThreadContextKt:
     public static final kotlinx.coroutines.internal.ThreadContextKt$countAll$1 countAll
     public static final kotlinx.coroutines.internal.ThreadContextKt$countAll$1 findOne
     public static final kotlinx.coroutines.internal.ThreadContextKt$countAll$1 updateState
-    public static final java.lang.Object threadContextElements(kotlin.coroutines.CoroutineContext)
 kotlinx.coroutines.internal.ThreadLocalKt
 kotlinx.coroutines.internal.ThreadSafeHeap:
     public final kotlinx.coroutines.EventLoopImplBase$DelayedTask firstImpl()

@@ -1,6 +1,7 @@
 package dev.saned.assistant
 
 import android.app.Activity
+import android.app.Dialog
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.InstallSourceInfo
@@ -10,6 +11,9 @@ import android.os.BaseBundle
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcel
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
 import dev.jing.sanedhook.util.Native
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -81,9 +85,38 @@ object PackageCloaker {
     private val isBundleMapsKeyHooked = AtomicBoolean(false)
     private val isInstallSourceInfoHooked = AtomicBoolean(false)
     private val isFeatureFlagsSourceHooked = AtomicBoolean(false)
+    private val isDialogTraceHooked = AtomicBoolean(false)
     private val installSourceLogCount = AtomicInteger(0)
 
     fun isNativeStubbedFlag(): Boolean = isNativeStubbed.get()
+
+    private fun isInternalHookFrame(clsName: String?): Boolean {
+        if (clsName.isNullOrEmpty()) return true
+        return clsName.startsWith("android.") ||
+            clsName.startsWith("androidx.") ||
+            clsName.startsWith("java.") ||
+            clsName.startsWith("javax.") ||
+            clsName.startsWith("kotlin.") ||
+            clsName.startsWith("kotlinx.") ||
+            clsName.startsWith("org.matrix.") ||
+            clsName.startsWith("top.nkbe.") ||
+            clsName.startsWith("org.lsposed.") ||
+            clsName.startsWith("io.github.") ||
+            clsName.startsWith("dev.saned.") ||
+            clsName.startsWith("dev.jing.") ||
+            clsName.startsWith("LSPHooker") ||
+            clsName.startsWith("o.") ||
+            clsName.contains("喵")
+    }
+
+    private fun formatAppCallStack(maxFrames: Int = 8): String {
+        return try {
+            Throwable().stackTrace
+                .filter { !isInternalHookFrame(it.className) }
+                .take(maxFrames)
+                .joinToString(" <- ") { "${it.className}.${it.methodName}:${it.lineNumber}" }
+        } catch (_: Throwable) { "" }
+    }
 
     fun isPromonClassName(clsName: String?): Boolean {
         if (clsName.isNullOrEmpty()) return false
@@ -230,16 +263,6 @@ object PackageCloaker {
         }
     }
 
-    /**
-     * Constructs a genuine android.content.pm.InstallSourceInfo via public Parcelable.Creator
-     * matching AOSP InstallSourceInfo(Parcel in):
-     *   1. mInitiatingPackageName = in.readString()
-     *   2. mInitiatingPackageSigningInfo = in.readTypedObject(SigningInfo.CREATOR) -> 0 int = null!
-     *   3. mOriginatingPackageName = in.readString()
-     *   4. mInstallingPackageName = in.readString()
-     *   5. mPackageSource = in.readInt() (API 33+)
-     *   6. mUpdateOwnerPackageName = in.readString() (API 34+)
-     */
     private fun createPlayStoreInstallSourceInfo(orig: Any?): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return orig
         return try {
@@ -247,7 +270,7 @@ object PackageCloaker {
             try {
                 parcel.writeString(PLAY_STORE_PKG) // 1. mInitiatingPackageName
                 parcel.writeInt(0)                 // 2. mInitiatingPackageSigningInfo = null (writeTypedObject null marker is 0!)
-                parcel.writeString(PLAY_STORE_PKG) // 3. mOriginatingPackageName
+                parcel.writeString(null)           // 3. mOriginatingPackageName (null for normal Play Store installs)
                 parcel.writeString(PLAY_STORE_PKG) // 4. mInstallingPackageName
                 parcel.writeInt(2)                 // 5. mPackageSource = PACKAGE_SOURCE_STORE (API 33+)
                 parcel.writeString(PLAY_STORE_PKG) // 6. mUpdateOwnerPackageName (API 34+)
@@ -261,54 +284,11 @@ object PackageCloaker {
         }
     }
 
-    /**
-     * Dynamically inspects the call stack when getInstallSourceInfo / getInstallerPackageName is called.
-     * Note: When createPlayStoreInstallSourceInfo returns "com.android.vending" for all fields, the caller's
-     * own bytecode (e.g. d06.a(Context)) naturally evaluates "com.android.vending" == "com.android.vending".
-     * We also log the caller stack and the real return value of the check method so we can verify it in logs.
-     */
     private fun autoHookCallerInstallSourceCheck(module: XposedModule) {
-        val cl = cachedAppClassLoader ?: return
         try {
-            val trace = Throwable().stackTrace
-            val appFrames = trace.filter { f ->
-                val cn = f.className ?: ""
-                !cn.startsWith("android.") &&
-                !cn.startsWith("java.") &&
-                !cn.startsWith("javax.") &&
-                !cn.startsWith("kotlin.") &&
-                !cn.startsWith("org.matrix.") &&
-                !cn.startsWith("top.nkbe.") &&
-                !cn.startsWith("org.lsposed.") &&
-                !cn.startsWith("io.github.") &&
-                !cn.startsWith("dev.saned.") &&
-                !cn.startsWith("dev.jing.") &&
-                !cn.startsWith("LSPHooker")
-            }
-            val stackStr = appFrames.take(6).joinToString(" <- ") { "${it.className}.${it.methodName}:${it.lineNumber}" }
-            if (stackStr.isNotEmpty()) {
-                DiagnosticLogger.logStep("PackageCloaker", "InstallSource caller stack: $stackStr")
-            }
-            for (frame in appFrames) {
-                val cn = frame.className ?: continue
-                if (dynamicHookedInstallSourceClasses.add(cn)) {
-                    try {
-                        val cls = Class.forName(cn, false, cl)
-                        for (m in cls.declaredMethods) {
-                            if (m.returnType == Boolean::class.javaPrimitiveType &&
-                                m.parameterTypes.contentEquals(arrayOf(Context::class.java))
-                            ) {
-                                module.hook(m).intercept(object : XposedInterface.Hooker {
-                                    override fun intercept(chain: XposedInterface.Chain): Any? {
-                                        val realRes = try { chain.proceed() } catch (_: Throwable) { null }
-                                        DiagnosticLogger.logStep("PackageCloaker", "InstallSourceCheck $cn.${m.name}(Context) realRes=$realRes")
-                                        return realRes ?: java.lang.Boolean.TRUE
-                                    }
-                                })
-                            }
-                        }
-                    } catch (_: Throwable) {}
-                }
+            val stackStr = formatAppCallStack(10)
+            if (stackStr.isNotEmpty() && installSourceLogCount.get() <= 12) {
+                DiagnosticLogger.logStep("PackageCloaker", "InstallSource app stack: $stackStr")
             }
         } catch (_: Throwable) {}
     }
@@ -346,9 +326,8 @@ object PackageCloaker {
                             module.hook(m).intercept(object : XposedInterface.Hooker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     if (OrderInterceptor.isMasterRunning) {
-                                        autoHookCallerInstallSourceCheck(module)
-                                        if (installSourceLogCount.incrementAndGet() <= 10) {
-                                            DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG")
+                                        if (installSourceLogCount.incrementAndGet() <= 12) {
+                                            DiagnosticLogger.logStep("PackageCloaker", "getInstallerPackageName -> $PLAY_STORE_PKG (stack=${formatAppCallStack(8)})")
                                         }
                                         return PLAY_STORE_PKG
                                     }
@@ -361,13 +340,9 @@ object PackageCloaker {
                                 override fun intercept(chain: XposedInterface.Chain): Any? {
                                     val orig = try { chain.proceed() } catch (_: Throwable) { null }
                                     if (!OrderInterceptor.isMasterRunning) return orig
-                                    autoHookCallerInstallSourceCheck(module)
                                     val spoofed = createPlayStoreInstallSourceInfo(orig)
-                                    if (installSourceLogCount.incrementAndGet() <= 10) {
-                                        val verifiedPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                            try { (spoofed as? InstallSourceInfo)?.installingPackageName } catch (_: Throwable) { null }
-                                        } else null
-                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> InstallSourceInfo(installing=$verifiedPkg)")
+                                    if (installSourceLogCount.incrementAndGet() <= 12) {
+                                        DiagnosticLogger.logStep("PackageCloaker", "${m.name} -> PlayStore InstallSourceInfo (stack=${formatAppCallStack(8)})")
                                     }
                                     return spoofed
                                 }
@@ -388,7 +363,6 @@ object PackageCloaker {
                 val stringGetters = setOf(
                     "getInstallingPackageName",
                     "getInitiatingPackageName",
-                    "getOriginatingPackageName",
                     "getUpdateOwnerPackageName"
                 )
                 var isiHookCount = 0
@@ -402,6 +376,12 @@ object PackageCloaker {
                                 }
                                 return chain.proceed()
                             }
+                        })
+                        isiHookCount++
+                    } else if (m.name == "getOriginatingPackageName" && m.parameterCount == 0 && m.returnType == String::class.java) {
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? =
+                                if (OrderInterceptor.isMasterRunning) null else chain.proceed()
                         })
                         isiHookCount++
                     } else if (m.name == "getPackageSource" && m.parameterCount == 0 && m.returnType == Int::class.javaPrimitiveType) {
@@ -454,7 +434,6 @@ object PackageCloaker {
             DiagnosticLogger.logStep("PackageCloaker", "Hooked BaseBundle/Bundle (Maps API_KEY + FeatureFlag booleans)")
         }
 
-        // Hook SharedPreferencesImpl.getBoolean & JSONObject.optBoolean/getBoolean for feature flags ("installation_source_check", etc.)
         if (isFeatureFlagsSourceHooked.compareAndSet(false, true)) {
             try {
                 val spImplCls = Class.forName("android.app.SharedPreferencesImpl")
@@ -493,6 +472,79 @@ object PackageCloaker {
                 }
             } catch (_: Throwable) {}
         }
+
+        // Trace Dialog.show() if security alert text is present AND block MainActivity.finish() from security dialog OK click
+        if (isDialogTraceHooked.compareAndSet(false, true)) {
+            try {
+                val mShow = Dialog::class.java.getDeclaredMethod("show")
+                module.hook(mShow).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val res = chain.proceed()
+                        val dlg = chain.thisObject as? Dialog
+                        if (dlg != null) {
+                            try {
+                                val decor = dlg.window?.decorView
+                                if (decor != null && containsSecurityAlertText(decor)) {
+                                    DiagnosticLogger.logWarn(
+                                        "PackageCloaker",
+                                        "Security dialog shown! App stack: ${formatAppCallStack(12)}"
+                                    )
+                                }
+                            } catch (_: Throwable) {}
+                        }
+                        return res
+                    }
+                })
+                for (mFinName in listOf("finish", "finishAffinity", "finishAndRemoveTask")) {
+                    try {
+                        val mFin = Activity::class.java.getDeclaredMethod(mFinName)
+                        module.hook(mFin).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val act = chain.thisObject as? Activity
+                                if (OrderInterceptor.isMasterRunning && act != null && act.javaClass.name == getMainActivityClassName()) {
+                                    val trace = Throwable().stackTrace
+                                    val fromDialogOrGuard = trace.any { f ->
+                                        val cn = f.className ?: ""
+                                        cn.contains("Dialog", ignoreCase = true) ||
+                                        cn.contains("AlertController", ignoreCase = true) ||
+                                        cn.contains("guardzilla", ignoreCase = true) ||
+                                        cn.contains("Security", ignoreCase = true) ||
+                                        isPromonClassName(cn)
+                                    }
+                                    if (fromDialogOrGuard) {
+                                        DiagnosticLogger.logWarn(
+                                            "PackageCloaker",
+                                            "Blocked $mFinName() on MainActivity! App stack: ${formatAppCallStack(12)}"
+                                        )
+                                        return null
+                                    }
+                                }
+                                return chain.proceed()
+                            }
+                        })
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun containsSecurityAlertText(view: View): Boolean {
+        if (view is TextView) {
+            val txt = view.text?.toString() ?: ""
+            if (txt.contains("Not installed from Play Store", ignoreCase = true) ||
+                txt.contains("Rooted device", ignoreCase = true) ||
+                txt.contains("Auto Clicker", ignoreCase = true)
+            ) {
+                return true
+            }
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val child = view.getChildAt(i) ?: continue
+                if (containsSecurityAlertText(child)) return true
+            }
+        }
+        return false
     }
 
     private fun stubPromonPackage(module: XposedModule, classLoader: ClassLoader, pkgPrefix: String): Int {
@@ -850,12 +902,14 @@ object PackageCloaker {
         }
         if (!isSecurityHooked.compareAndSet(false, true)) return
 
-        // 1. Lu80.y: SecurityCallBacksState (Matches SanedAssistant-98 Lu80.y / Lu80.z / Lu80.o)
+        // 1. Lu80.y: SecurityCallBacksState (Clear all boolean fields on construction AND on copy$default)
         val secClasses = Native.safeN()
         val secStateClsName = secClasses.getOrNull(0) ?: ""
         if (secStateClsName.isNotEmpty()) {
             try {
                 val secCls = classLoader.loadClass(secStateClsName)
+                val fieldNames = secCls.declaredFields.joinToString(",") { "${it.name}:${it.type.simpleName}" }
+                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState fields=[$fieldNames]")
                 var secHooked = 0
                 fun clearSecurityStateBooleans(obj: Any?) {
                     if (obj == null) return
@@ -870,6 +924,18 @@ object PackageCloaker {
                         }
                     }
                 }
+                for (c in secCls.declaredConstructors) {
+                    module.hook(c).intercept(object : XposedInterface.Hooker {
+                        override fun intercept(chain: XposedInterface.Chain): Any? {
+                            val res = chain.proceed()
+                            if (OrderInterceptor.isMasterRunning) {
+                                clearSecurityStateBooleans(chain.thisObject)
+                            }
+                            return res
+                        }
+                    })
+                    secHooked++
+                }
                 for (m in secCls.declaredMethods) {
                     if (Modifier.isStatic(m.modifiers) && m.parameterTypes.firstOrNull() == secCls) {
                         module.hook(m).intercept(object : XposedInterface.Hooker {
@@ -877,13 +943,17 @@ object PackageCloaker {
                                 if (OrderInterceptor.isMasterRunning) {
                                     clearSecurityStateBooleans(chain.args.getOrNull(0))
                                 }
-                                return chain.proceed()
+                                val res = chain.proceed()
+                                if (OrderInterceptor.isMasterRunning) {
+                                    clearSecurityStateBooleans(res)
+                                }
+                                return res
                             }
                         })
                         secHooked++
                     }
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState hooked ($secHooked methods)")
+                DiagnosticLogger.logStep("PackageCloaker", "SecurityCallBacksState hooked ($secHooked constructors/copy methods)")
             } catch (_: Throwable) {}
         }
 
@@ -910,7 +980,9 @@ object PackageCloaker {
         }
         DiagnosticLogger.logStep("PackageCloaker", "RootBeer/RootBeerNative hooked ($rbHooked methods)")
 
-        // 3. Lu80.L: ShadowArmor profile for current detectedVersionIndex ONLY (prevents cross-version short-name collisions!)
+        // 3. Lu80.L: ShadowArmor profile for current detectedVersionIndex
+        //    Note: On vCode=40104 (index=3), d06.a(Context) returning true triggered '- Not installed from Play Store'
+        //    in 21.txt, 22.txt, 24.txt, and 25.txt — so we return FALSE for d06.a(Context) and log the full app call stack!
         try {
             val saProfiles = getAllShadowArmorProfiles()
             val sa = saProfiles.getOrNull(detectedVersionIndex)
@@ -930,7 +1002,8 @@ object PackageCloaker {
                         }
                     } catch (_: Throwable) {}
                 }
-                for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to true, sa.certPinClass to true)) {
+                val installSourceRetVal = if (detectedVersionIndex >= 3) false else true
+                for ((clsName, retVal) in listOf(sa.autoClickerClass to false, sa.installSourceClass to installSourceRetVal, sa.certPinClass to true)) {
                     if (clsName.isEmpty()) continue
                     try {
                         val c = classLoader.loadClass(clsName)
@@ -939,17 +1012,9 @@ object PackageCloaker {
                                 module.hook(m).intercept(object : XposedInterface.Hooker {
                                     override fun intercept(chain: XposedInterface.Chain): Any? {
                                         if (!OrderInterceptor.isMasterRunning) return chain.proceed()
-                                        // Let chain.proceed() run with our spoofed InstallSourceInfo("com.android.vending")
-                                        // so we log what the method itself computes AND return that exact result!
-                                        val realRes = try { chain.proceed() as? Boolean } catch (_: Throwable) { null }
-                                        val caller = try {
-                                            Throwable().stackTrace.firstOrNull {
-                                                val cn = it.className ?: ""
-                                                cn != clsName && !cn.startsWith("dev.saned.") && !cn.startsWith("org.matrix.") && !cn.startsWith("LSPHooker")
-                                            }?.let { "${it.className}.${it.methodName}:${it.lineNumber}" } ?: ""
-                                        } catch (_: Throwable) { "" }
-                                        DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor $clsName.${m.name}(Context) realRes=$realRes defaultRet=$retVal caller=$caller")
-                                        return realRes ?: retVal
+                                        val appStack = formatAppCallStack(10)
+                                        DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor $clsName.${m.name}(Context) -> forcing $retVal (stack=$appStack)")
+                                        return retVal
                                     }
                                 })
                                 dynamicHookedInstallSourceClasses.add(clsName)
@@ -976,7 +1041,43 @@ object PackageCloaker {
                         }
                     } catch (_: Throwable) {}
                 }
-                DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods)")
+                DiagnosticLogger.logStep("PackageCloaker", "ShadowArmor profile[$detectedVersionIndex] hooked ($saCount methods, installSourceRet=$installSourceRetVal)")
+            }
+
+            // Also inspect g06 / rI5 / vS and *06 sibling classes on 40104+ to auto-hook any FeatureFlags (String)->boolean class
+            val siblingCandidates = ArrayList<String>(60)
+            for (ch in 'a'..'z') siblingCandidates.add("${ch}06")
+            for (ch in 'A'..'Z') siblingCandidates.add("${ch}06")
+            siblingCandidates.addAll(listOf("rI5", "vS"))
+            val discoveredSiblings = mutableListOf<String>()
+            for (cand in siblingCandidates) {
+                try {
+                    val cls = Class.forName(cand, false, classLoader)
+                    val mSigs = cls.declaredMethods.joinToString(",") { "${it.name}(${it.parameterTypes.joinToString { p -> p.simpleName }}):${it.returnType.simpleName}" }
+                    discoveredSiblings.add("$cand[$mSigs]")
+                    for (m in cls.declaredMethods) {
+                        val pTypes = m.parameterTypes
+                        if (m.returnType == Boolean::class.javaPrimitiveType &&
+                            pTypes.isNotEmpty() &&
+                            pTypes[0] == String::class.java &&
+                            (pTypes.size == 1 || (pTypes.size == 2 && pTypes[1] == Boolean::class.javaPrimitiveType))
+                        ) {
+                            module.hook(m).intercept(object : XposedInterface.Hooker {
+                                override fun intercept(chain: XposedInterface.Chain): Any? {
+                                    val key = chain.args.getOrNull(0) as? String
+                                    if (OrderInterceptor.isMasterRunning && key != null && BLOCKED_FEATURE_FLAG_KEYS.contains(key)) {
+                                        DiagnosticLogger.logStep("PackageCloaker", "Blocked FeatureFlag '$key' in $cand.${m.name} -> false")
+                                        return false
+                                    }
+                                    return chain.proceed()
+                                }
+                            })
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+            if (discoveredSiblings.isNotEmpty()) {
+                DiagnosticLogger.logStep("PackageCloaker", "Scanned *06 security cluster: ${discoveredSiblings.take(20).joinToString("; ")}")
             }
         } catch (t: Throwable) {
             DiagnosticLogger.logError("PackageCloaker:ShadowArmor", "Error hooking ShadowArmor", t)
