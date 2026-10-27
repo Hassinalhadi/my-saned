@@ -8,6 +8,14 @@
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**
 -dontwarn kotlinx.coroutines.**
+-dontwarn com.google.crypto.tink.**
+-dontwarn androidx.security.crypto.**
+
+# Keep Tink & AndroidX Security Crypto protobuf/keyset classes intact for EncryptedSharedPreferences reflection
+-keep class com.google.crypto.tink.** { *; }
+-keep interface com.google.crypto.tink.** { *; }
+-keep class androidx.security.crypto.** { *; }
+-keep interface androidx.security.crypto.** { *; }
 
 -keepattributes JavascriptInterface
 -keepclassmembers class * {

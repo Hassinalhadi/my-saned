@@ -617,19 +617,26 @@ object OrderInterceptor {
             } catch (_: Throwable) {}
         }
         if (entry.decision == "ACCEPT" && !apiConfirmedAcceptIds.contains(orderIdInt)) {
-            DiagnosticLogger.logStep("IncomingDispatchActivity", "Order #$orderIdInt screen opened while API accept pending -> triggering 0ms UI auto-accept backup")
+            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt screen opened while API accept pending (hasToken=${cachedAuthToken.isNotEmpty()}, inFlight=${apiInFlightIds.contains(orderIdInt)}) -> scheduling 0ms..1100ms API+UI auto-accept")
             for (delayMs in listOf(0L, 45L, 140L, 320L, 650L, 1100L)) {
                 mainHandler.postDelayed({
                     try {
                         if (apiConfirmedAcceptIds.contains(orderIdInt)) {
+                            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt confirmed via API at +${delayMs}ms -> closing IncomingDispatchActivity")
                             closeDispatchActivitySafely(activity, entry.wasInBackground)
                         } else if (!activity.isFinishing && !activity.isDestroyed) {
+                            if (cachedAuthToken.isEmpty()) {
+                                readExactJahezEncryptedPrefs(activity.applicationContext ?: activity)
+                            }
                             if (cachedAuthToken.isNotEmpty() && !apiInFlightIds.contains(orderIdInt)) {
+                                DiagnosticLogger.logStep("UiAcceptDiag", "Re-firing executeDirectApiCall for #$orderIdInt at +${delayMs}ms (tokLen=${cachedAuthToken.length})")
                                 executeDirectApiCall(orderIdInt.toString(), "ACCEPT")
                             }
-                            triggerIncomingDispatchAcceptUi(activity, orderIdInt)
+                            triggerIncomingDispatchAcceptUi(activity, orderIdInt, delayMs)
                         }
-                    } catch (_: Throwable) {}
+                    } catch (t: Throwable) {
+                        DiagnosticLogger.logError("UiAcceptDiag", "Error in postDelayed UI accept at +${delayMs}ms", t)
+                    }
                 }, delayMs)
             }
             return
@@ -649,16 +656,24 @@ object OrderInterceptor {
         }
     }
 
-    private fun triggerIncomingDispatchAcceptUi(activity: Activity, orderIdInt: Int) {
+    private fun triggerIncomingDispatchAcceptUi(activity: Activity, orderIdInt: Int, delayTagMs: Long = 0L) {
         val decor = activity.window?.decorView ?: return
         // 1. Try standard View traversal first
-        if (findAndTriggerOrder(decor, activity, System.currentTimeMillis())) return
+        if (findAndTriggerOrder(decor, activity, System.currentTimeMillis())) {
+            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt (+${delayTagMs}ms): findAndTriggerOrder matched & triggered")
+            return
+        }
 
         // 2. Direct View search for Accept/Confirm button without requiring TextView price parsing (since orderIdInt is already approved!)
         var foundAcceptBtn: View? = null
+        val viewSamples = mutableListOf<String>()
         fun searchViews(v: View) {
             val txt = ((v as? TextView)?.text?.toString() ?: "") + " " + (v.contentDescription?.toString() ?: "")
-            val low = txt.trim().lowercase(Locale.US)
+            val trimmed = txt.trim()
+            if (trimmed.isNotEmpty() && viewSamples.size < 12) {
+                viewSamples.add("${v.javaClass.simpleName}('$trimmed',click=${v.isClickable})")
+            }
+            val low = trimmed.lowercase(Locale.US)
             if (low.contains("accept") || low.contains("قبول") || low.contains("تأكيد") || low.contains("confirm") || low.contains("اسحب") || low.contains("swipe")) {
                 if (foundAcceptBtn == null || v.isClickable) foundAcceptBtn = v
             }
@@ -671,12 +686,13 @@ object OrderInterceptor {
         }
         try { searchViews(decor) } catch (_: Throwable) {}
         if (foundAcceptBtn != null) {
-            DiagnosticLogger.logStep("IncomingDispatchActivity", "UI backup clicking accept view for #$orderIdInt")
+            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt (+${delayTagMs}ms): clicking accept View ${foundAcceptBtn!!.javaClass.simpleName}")
             simulateSwipe(foundAcceptBtn!!, decor, activity)
             return
         }
 
         // 3. Jetpack Compose / AccessibilityNodeInfo semantics search (works on AndroidComposeView!)
+        val nodeSamples = mutableListOf<String>()
         try {
             val rootNode = decor.createAccessibilityNodeInfo()
             if (rootNode != null) {
@@ -684,9 +700,12 @@ object OrderInterceptor {
                 val rect = android.graphics.Rect()
                 fun walkNode(node: android.view.accessibility.AccessibilityNodeInfo?) {
                     if (node == null || clickedSemantics) return
-                    val nText = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-                    val low = nText.trim().lowercase(Locale.US)
-                    if (low.contains("accept") || low.contains("قبول") || low.contains("تأكيد") || low.contains("confirm")) {
+                    val nText = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).trim()
+                    if (nText.isNotEmpty() && nodeSamples.size < 15) {
+                        nodeSamples.add("'$nText'(click=${node.isClickable})")
+                    }
+                    val low = nText.lowercase(Locale.US)
+                    if (low.contains("accept") || low.contains("قبول") || low.contains("تأكيد") || low.contains("confirm") || low.contains("موافقة")) {
                         var target: android.view.accessibility.AccessibilityNodeInfo? = node
                         while (target != null && !target.isClickable) {
                             target = target.parent
@@ -694,7 +713,7 @@ object OrderInterceptor {
                         val clickNode = target ?: node
                         if (clickNode.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
                             clickedSemantics = true
-                            DiagnosticLogger.logStep("IncomingDispatchActivity", "Compose/Accessibility ACTION_CLICK triggered for #$orderIdInt")
+                            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt (+${delayTagMs}ms): Compose/Accessibility ACTION_CLICK triggered on '$nText'")
                         }
                         clickNode.getBoundsInScreen(rect)
                         if (!rect.isEmpty) {
@@ -708,7 +727,7 @@ object OrderInterceptor {
                             dEv.recycle()
                             uEv.recycle()
                             clickedSemantics = true
-                            DiagnosticLogger.logStep("IncomingDispatchActivity", "Compose bounds tap at ($cx,$cy) triggered for #$orderIdInt")
+                            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt (+${delayTagMs}ms): Compose bounds tap at ($cx,$cy) triggered on '$nText'")
                         }
                         return
                     }
@@ -722,6 +741,7 @@ object OrderInterceptor {
         } catch (_: Throwable) {}
 
         // 4. Activity / ViewModel reflection fallback for accept method
+        val methodSamples = mutableListOf<String>()
         try {
             val candidates = mutableListOf<Any>(activity)
             var cls: Class<*>? = activity.javaClass
@@ -744,6 +764,9 @@ object OrderInterceptor {
             for (obj in candidates) {
                 for (m in obj.javaClass.declaredMethods) {
                     val mName = m.name.lowercase(Locale.US)
+                    if (methodSamples.size < 20 && (m.parameterCount <= 2) && !mName.startsWith("$$")) {
+                        methodSamples.add("${obj.javaClass.simpleName}.${m.name}(${m.parameterTypes.joinToString(",") { it.simpleName }})")
+                    }
                     if ((mName.contains("accept") && !mName.contains("reject")) &&
                         (m.parameterCount == 0 || (m.parameterCount == 1 && (m.parameterTypes[0] == Int::class.javaPrimitiveType || m.parameterTypes[0] == Long::class.javaPrimitiveType || m.parameterTypes[0] == String::class.java)))
                     ) {
@@ -756,12 +779,19 @@ object OrderInterceptor {
                                 String::class.java -> m.invoke(obj, orderIdInt.toString())
                             }
                         }
-                        DiagnosticLogger.logStep("IncomingDispatchActivity", "Invoked ${obj.javaClass.simpleName}.${m.name} for #$orderIdInt")
+                        DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt (+${delayTagMs}ms): Invoked ${obj.javaClass.simpleName}.${m.name}")
                         return
                     }
                 }
             }
         } catch (_: Throwable) {}
+
+        if (delayTagMs == 140L || delayTagMs == 650L) {
+            DiagnosticLogger.logStep(
+                "UiAcceptDiag",
+                "Order #$orderIdInt (+${delayTagMs}ms) UI snapshot: views=$viewSamples | composeNodes=$nodeSamples | methods=$methodSamples"
+            )
+        }
     }
 
     fun onActivityCreated(activity: Activity) {
@@ -2069,18 +2099,178 @@ object OrderInterceptor {
 
     @Volatile var cachedLanguage: String = "en"
     @Volatile private var cachedEncPrefs: SharedPreferences? = null
+    @Volatile private var lastTokenDiagSignature: String = ""
+    @Volatile private var lastTokenDiagTimeMs: Long = 0L
+
+    private fun logTokenDiagOnce(sig: String, msg: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (sig != lastTokenDiagSignature || (now - lastTokenDiagTimeMs) > 30_000L) {
+            lastTokenDiagSignature = sig
+            lastTokenDiagTimeMs = now
+            DiagnosticLogger.logStep("TokenDiag", msg)
+        }
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val clean = hex.trim()
+        if (clean.isEmpty() || clean.length % 2 != 0) return ByteArray(0)
+        val out = ByteArray(clean.length / 2)
+        for (i in out.indices) {
+            val hi = Character.digit(clean[i * 2], 16)
+            val lo = Character.digit(clean[i * 2 + 1], 16)
+            if (hi < 0 || lo < 0) return ByteArray(0)
+            out[i] = ((hi shl 4) or lo).toByte()
+        }
+        return out
+    }
+
+    private fun extractProtobufLengthDelimitedField(proto: ByteArray, targetFieldNum: Int): ByteArray? {
+        var idx = 0
+        while (idx < proto.size) {
+            var tag = 0
+            var shift = 0
+            while (idx < proto.size) {
+                val b = proto[idx++].toInt() and 0xFF
+                tag = tag or ((b and 0x7F) shl shift)
+                if ((b and 0x80) == 0) break
+                shift += 7
+            }
+            val wireType = tag and 0x07
+            val fieldNum = tag ushr 3
+            when (wireType) {
+                0 -> {
+                    while (idx < proto.size && (proto[idx++].toInt() and 0x80) != 0) {}
+                }
+                1 -> idx += 8
+                2 -> {
+                    var len = 0
+                    var lShift = 0
+                    while (idx < proto.size) {
+                        val b = proto[idx++].toInt() and 0xFF
+                        len = len or ((b and 0x7F) shl lShift)
+                        if ((b and 0x80) == 0) break
+                        lShift += 7
+                    }
+                    if (len < 0 || idx + len > proto.size) return null
+                    if (fieldNum == targetFieldNum) {
+                        return proto.copyOfRange(idx, idx + len)
+                    }
+                    idx += len
+                }
+                5 -> idx += 4
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /**
+     * Zero-Tink Pure-AndroidKeyStore Decryptor for ENCRYPTED_SANED_PREFERENCES.xml:
+     * Unwraps __androidx_security_crypto_encrypted_prefs_value_keyset__ using AndroidKeyStore's
+     * "_androidx_security_master_key_" via AES/GCM/NoPadding, extracts the 32-byte AES-256-GCM subkey,
+     * and decrypts preference values directly without relying on R8-obfuscated Tink protobuf reflection!
+     */
+    private fun decryptSanedPrefsDirectlyWithKeystore(context: Context): String {
+        try {
+            val prefFileName = Native.safeH().ifEmpty { "ENCRYPTED_SANED_PREFERENCES" }
+            val rawSp = context.getSharedPreferences(prefFileName, Context.MODE_PRIVATE)
+            val allEntries = rawSp.all
+            if (allEntries.isEmpty()) return ""
+            val valueKeysetHex = allEntries["__androidx_security_crypto_encrypted_prefs_value_keyset__"] as? String ?: return ""
+            val encryptedKeysetProto = hexToBytes(valueKeysetHex)
+            if (encryptedKeysetProto.size < 30) return ""
+            val encKeysetCiphertext = extractProtobufLengthDelimitedField(encryptedKeysetProto, 2) ?: return ""
+            if (encKeysetCiphertext.size <= 28) return ""
+
+            val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val masterAlias = "_androidx_security_master_key_"
+            val masterKey = ks.getKey(masterAlias, null) as? javax.crypto.SecretKey
+            if (masterKey == null) {
+                logTokenDiagOnce("no_mk", "KeyStoreDirect: '$masterAlias' not found in AndroidKeyStore (aliases=${ks.aliases().toList()})")
+                return ""
+            }
+
+            // AndroidKeystoreAesGcm format: [12-byte IV][ciphertext + 16-byte GCM tag], AAD = empty byte[0]
+            val mkCipher = Cipher.getInstance("AES/GCM/NoPadding")
+            mkCipher.init(Cipher.DECRYPT_MODE, masterKey, javax.crypto.spec.GCMParameterSpec(128, encKeysetCiphertext, 0, 12))
+            mkCipher.updateAAD(ByteArray(0))
+            val keysetPlain = mkCipher.doFinal(encKeysetCiphertext, 12, encKeysetCiphertext.size - 12)
+
+            // Extract all 32-byte AES-256-GCM key candidates (preceded by protobuf length 0x20 and tag 0x12 or 0x1a)
+            val aesKeys = mutableListOf<ByteArray>()
+            for (i in 0..(keysetPlain.size - 34)) {
+                val t = keysetPlain[i].toInt() and 0xFF
+                val l = keysetPlain[i + 1].toInt() and 0xFF
+                if ((t == 0x12 || t == 0x1A) && l == 0x20) {
+                    aesKeys.add(keysetPlain.copyOfRange(i + 2, i + 34))
+                }
+            }
+            if (aesKeys.isEmpty()) {
+                logTokenDiagOnce("no_subkey", "KeyStoreDirect: unwrapped keyset (${keysetPlain.size}B) but no 32B AES key found")
+                return ""
+            }
+
+            for ((encKeyStr, rawValObj) in allEntries) {
+                if (encKeyStr.startsWith("__androidx_security_crypto_encrypted_prefs_")) continue
+                val b64Val = rawValObj as? String ?: continue
+                val valBytes = try {
+                    Base64.decode(b64Val, Base64.DEFAULT)
+                } catch (_: Throwable) {
+                    try { Base64.decode(b64Val, Base64.URL_SAFE) } catch (_: Throwable) { continue }
+                }
+                // Tink AesGcmJce format: [5-byte Tink prefix (0x01 + 4B keyId)][12-byte IV][ciphertext + 16B tag], AAD = encKeyStr.UTF_8
+                if (valBytes.size <= 33 || valBytes[0] != 0x01.toByte()) continue
+                val aadBytes = encKeyStr.toByteArray(Charsets.UTF_8)
+                for (aesKey in aesKeys) {
+                    try {
+                        val valCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        valCipher.init(
+                            Cipher.DECRYPT_MODE,
+                            javax.crypto.spec.SecretKeySpec(aesKey, "AES"),
+                            javax.crypto.spec.GCMParameterSpec(128, valBytes, 5, 12)
+                        )
+                        valCipher.updateAAD(aadBytes)
+                        val plainBytes = valCipher.doFinal(valBytes, 17, valBytes.size - 17)
+                        val jwt = extractJwtFromByteSlice(plainBytes)
+                        if (jwt.isNotEmpty()) {
+                            val norm = "Bearer $jwt"
+                            if (cachedAuthToken != norm) {
+                                DiagnosticLogger.logStep("TokenDiag", "KeyStoreDirect extracted live JWT from $prefFileName (len=${jwt.length})")
+                            }
+                            checkAndSetToken(jwt, "KeyStoreDirect")
+                            return jwt
+                        }
+                        // Also check if this entry is language ("ar" or "en")
+                        if (plainBytes.size in 10..12) {
+                            val strPart = String(plainBytes, 8, plainBytes.size - 8, Charsets.UTF_8).trim()
+                            if (strPart == "ar" || strPart == "en") {
+                                cachedLanguage = strPart
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        } catch (t: Throwable) {
+            logTokenDiagOnce("ks_err:${t.javaClass.simpleName}", "KeyStoreDirect error: ${t.javaClass.simpleName}: ${t.message}")
+        }
+        return ""
+    }
 
     fun readExactJahezEncryptedPrefs(context: Context) {
+        val prefFileName = Native.safeH().ifEmpty { "ENCRYPTED_SANED_PREFERENCES" }
+        val dataDir = context.applicationInfo?.dataDir ?: context.filesDir?.parentFile?.absolutePath ?: ""
+        val encXmlFile = if (dataDir.isNotEmpty()) File(dataDir, "shared_prefs/$prefFileName.xml") else null
         try {
-            val dataDir = context.applicationInfo?.dataDir ?: context.filesDir?.parentFile?.absolutePath ?: ""
-            val encXmlFile = if (dataDir.isNotEmpty()) File(dataDir, "shared_prefs/${Native.safeH()}.xml") else null
-            // Only open EncryptedSharedPreferences if the XML file already exists and was populated by Saned
-            if (encXmlFile == null || (encXmlFile.exists() && encXmlFile.length() > 220L)) {
+            val xmlExists = encXmlFile?.exists() == true
+            val xmlLen = if (xmlExists) (encXmlFile?.length() ?: 0L) else -1L
+            if (!xmlExists || xmlLen <= 220L) {
+                logTokenDiagOnce("xml_missing:$xmlExists:$xmlLen", "EncryptedPrefs XML status: exists=$xmlExists, len=$xmlLen, path=${encXmlFile?.absolutePath}")
+            } else {
                 val prefs = cachedEncPrefs ?: synchronized(this) {
                     cachedEncPrefs ?: run {
                         val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
                         EncryptedSharedPreferences.create(
-                            context, Native.safeH(), masterKey,
+                            context, prefFileName, masterKey,
                             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
                         ).also { cachedEncPrefs = it }
@@ -2108,19 +2298,27 @@ object OrderInterceptor {
                 if (tok.isNotEmpty()) {
                     val normNew = if (tok.startsWith("Bearer ", ignoreCase = true)) tok.trim() else "Bearer ${tok.trim()}"
                     if (cachedAuthToken != normNew) {
-                        DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully (len=${tok.length})")
+                        DiagnosticLogger.logStep("EncryptedPrefs", "Auth token read successfully via Tink (len=${tok.length})")
                     }
                     checkAndSetToken(tok, Native.safeI())
                 } else {
-                    // Never keep a stale EncryptedSharedPreferences instance in RAM if token was empty!
                     cachedEncPrefs = null
+                    logTokenDiagOnce("tink_empty:$xmlLen", "EncryptedPrefs opened (xmlLen=$xmlLen) but token key '${Native.safeI()}' was empty (keys=${prefs.all.keys})")
                 }
                 val lang = try { prefs.getString(Native.safeJ(), "en") ?: "en" } catch (_: Throwable) { "en" }
                 if (lang.isNotEmpty()) cachedLanguage = lang
             }
         } catch (t: Throwable) {
             cachedEncPrefs = null
+            logTokenDiagOnce("tink_ex:${t.javaClass.simpleName}", "EncryptedPrefs Tink exception: ${t.javaClass.name}: ${t.message} -> falling back to KeyStoreDirect")
         }
+
+        // Fallback 1: Pure AndroidKeyStore direct decryptor (works even if Tink protobuf reflection fails!)
+        if (cachedAuthToken.isEmpty() && encXmlFile != null && encXmlFile.exists() && encXmlFile.length() > 220L) {
+            decryptSanedPrefsDirectlyWithKeystore(context)
+        }
+
+        // Fallback 2: Scan all shared_prefs & datastore files
         if (cachedAuthToken.isEmpty()) {
             try { scanJahezSharedPreferencesForToken(context) } catch (_: Throwable) {}
         }
@@ -3453,6 +3651,134 @@ object OrderInterceptor {
         }
     }
 
+    private val loggedDriverIdStack = AtomicBoolean(false)
+    private val hookedCallerClasses = ConcurrentHashMap.newKeySet<String>()
+
+    private fun scanObjectGraphForJwt(rootObj: Any?, sourceTag: String, maxDepth: Int = 4, visited: MutableSet<Int> = HashSet()) {
+        if (rootObj == null || maxDepth < 0) return
+        val id = System.identityHashCode(rootObj)
+        if (!visited.add(id) || visited.size > 80) return
+        try {
+            when (rootObj) {
+                is String -> {
+                    if (rootObj.length in 60..8192 && rootObj.contains("eyJ")) {
+                        val jwt = extractJwtFromString(rootObj)
+                        if (jwt.isNotEmpty()) {
+                            val norm = "Bearer $jwt"
+                            if (cachedAuthToken != norm) {
+                                DiagnosticLogger.logStep("CallerHook", "Extracted live JWT via $sourceTag (len=${jwt.length})")
+                            }
+                            checkAndSetToken(jwt, sourceTag)
+                        }
+                    }
+                }
+                is Array<*> -> {
+                    for (elem in rootObj) {
+                        if (elem is String && elem.length in 60..8192 && elem.contains("eyJ")) {
+                            val jwt = extractJwtFromString(elem)
+                            if (jwt.isNotEmpty()) {
+                                val norm = "Bearer $jwt"
+                                if (cachedAuthToken != norm) {
+                                    DiagnosticLogger.logStep("CallerHook", "Extracted live JWT from String[] in $sourceTag (len=${jwt.length})")
+                                }
+                                checkAndSetToken(jwt, sourceTag)
+                                return
+                            }
+                        } else if (elem != null && maxDepth > 0) {
+                            scanObjectGraphForJwt(elem, sourceTag, maxDepth - 1, visited)
+                        }
+                    }
+                }
+                is Iterable<*> -> {
+                    var count = 0
+                    for (elem in rootObj) {
+                        if (++count > 25) break
+                        scanObjectGraphForJwt(elem, sourceTag, maxDepth - 1, visited)
+                    }
+                }
+                is Map<*, *> -> {
+                    for ((k, v) in rootObj) {
+                        scanObjectGraphForJwt(k, sourceTag, maxDepth - 1, visited)
+                        scanObjectGraphForJwt(v, sourceTag, maxDepth - 1, visited)
+                    }
+                }
+                else -> {
+                    if (maxDepth <= 0) return
+                    val clsName = rootObj.javaClass.name
+                    if (clsName.startsWith("java.") || clsName.startsWith("javax.") ||
+                        clsName.startsWith("android.") || clsName.startsWith("kotlin.") ||
+                        clsName.startsWith("dalvik.") || clsName.startsWith("dev.saned.")
+                    ) return
+                    var cls: Class<*>? = rootObj.javaClass
+                    var levels = 0
+                    while (cls != null && cls != Any::class.java && levels < 2) {
+                        for (f in cls.declaredFields) {
+                            if (java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
+                            val ft = f.type
+                            if (ft.isPrimitive) continue
+                            try {
+                                f.isAccessible = true
+                                val fv = f.get(rootObj) ?: continue
+                                scanObjectGraphForJwt(fv, "$sourceTag.${f.name}", maxDepth - 1, visited)
+                            } catch (_: Throwable) {}
+                        }
+                        cls = cls.superclass
+                        levels++
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun hookDriverIdCallerStack(module: XposedModule) {
+        try {
+            val stack = Thread.currentThread().stackTrace
+            val appFrames = stack.filter { frame ->
+                val cn = frame.className
+                !cn.startsWith("java.") && !cn.startsWith("javax.") &&
+                    !cn.startsWith("android.") && !cn.startsWith("com.android.") &&
+                    !cn.startsWith("dalvik.") && !cn.startsWith("kotlin.") &&
+                    !cn.startsWith("kotlinx.") && !cn.startsWith("dev.saned.") &&
+                    !cn.startsWith("dev.jing.") && !cn.startsWith("io.github.libxposed.") &&
+                    !cn.startsWith("de.robv.") && !cn.startsWith("org.lsposed.") &&
+                    !cn.startsWith("com.google.crypto.tink.")
+            }
+            if (loggedDriverIdStack.compareAndSet(false, true)) {
+                val summary = appFrames.take(8).joinToString(" <- ") { "${it.className}.${it.methodName}:${it.lineNumber}" }
+                DiagnosticLogger.logStep("CipherHook", "driverId encryption caller stack: $summary")
+            }
+            val cl = appContext?.classLoader ?: currentActivity?.classLoader ?: return
+            for (frame in appFrames.take(5)) {
+                val clsName = frame.className
+                if (!hookedCallerClasses.add(clsName)) continue
+                try {
+                    val cls = Class.forName(clsName, false, cl)
+                    var mCount = 0
+                    for (m in cls.declaredMethods) {
+                        if (java.lang.reflect.Modifier.isAbstract(m.modifiers)) continue
+                        module.hook(m).intercept(object : XposedInterface.Hooker {
+                            override fun intercept(chain: XposedInterface.Chain): Any? {
+                                val res = chain.proceed()
+                                if (cachedAuthToken.isEmpty()) {
+                                    try {
+                                        scanObjectGraphForJwt(chain.thisObject, "${cls.simpleName}.this", 3)
+                                        for (arg in chain.args) {
+                                            scanObjectGraphForJwt(arg, "${cls.simpleName}.arg", 4)
+                                        }
+                                        scanObjectGraphForJwt(res, "${cls.simpleName}.ret", 4)
+                                    } catch (_: Throwable) {}
+                                }
+                                return res
+                            }
+                        })
+                        mCount++
+                    }
+                    DiagnosticLogger.logStep("CallerHook", "Hooked driverId caller class $clsName ($mCount methods) for live token extraction")
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun hookCipher(module: XposedModule) {
         try {
             var count = 0
@@ -3463,8 +3789,10 @@ object OrderInterceptor {
                             val result = chain.proceed()
                             try {
                                 val args = chain.args
-                                val inputBytes = args.getOrNull(0) as? ByteArray
-                                val inOff = if (args.size >= 3) ((args.getOrNull(1) as? Int) ?: 0) else 0
+                                // Distinguish 2-arg doFinal(byte[] output, int outputOffset): int from input-buffer overloads
+                                val isTwoArgOutputOverload = (args.size == 2 && args[0] is ByteArray && args[1] is Int && result is Int)
+                                val inputBytes = if (!isTwoArgOutputOverload) (args.getOrNull(0) as? ByteArray) else null
+                                val inOff = if (!isTwoArgOutputOverload && args.size >= 3) ((args.getOrNull(1) as? Int) ?: 0) else 0
                                 val inLen = if (inputBytes != null) {
                                     if (args.size >= 3) ((args.getOrNull(2) as? Int) ?: (inputBytes.size - inOff)) else inputBytes.size
                                 } else 0
@@ -3476,6 +3804,10 @@ object OrderInterceptor {
                                     outputBytes = result
                                     outOff = 0
                                     outLen = result.size
+                                } else if (isTwoArgOutputOverload) {
+                                    outputBytes = args[0] as ByteArray
+                                    outOff = args[1] as Int
+                                    outLen = result as Int
                                 } else if (result is Int && args.size >= 4 && args[3] is ByteArray) {
                                     outputBytes = args[3] as ByteArray
                                     outOff = (args.getOrNull(4) as? Int) ?: 0
@@ -3494,6 +3826,11 @@ object OrderInterceptor {
                                         capturedDriverCipherB64 = newB64
                                         persistDriverCipher(newB64)
                                         DiagnosticLogger.logStep("CipherHook", "Captured encrypted driverId header (${capturedDriverCipherB64.take(12)}...)")
+                                    }
+                                    if (cachedAuthToken.isEmpty()) {
+                                        hookDriverIdCallerStack(module)
+                                        val ctx = appContext ?: currentActivity ?: resolveApplicationContext()
+                                        if (ctx != null) readExactJahezEncryptedPrefs(ctx)
                                     }
                                     return result
                                 }
@@ -4274,14 +4611,18 @@ object OrderInterceptor {
                 failedReasons.add("Price ($fmtP SAR) < min ($minOrderPrice SAR)")
             }
         }
+        // Truncate distances to 1 decimal place to match Saned's IncomingDispatchActivity UI display (e.g., 1.73 km displays as 1.7 km on screen)
+        val uiDistRest = if (distRest > 0.0) (kotlin.math.floor((distRest + 1e-9) * 10.0) / 10.0) else 0.0
+        val uiDistCust = if (distCust > 0.0) (kotlin.math.floor((distCust + 1e-9) * 10.0) / 10.0) else 0.0
+
         if (maxDistToRestaurant > 0.0) {
             if (distRest <= 0.0) {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     failedReasons.add("location unknown")
                 }
-            } else if (distRest > maxDistToRestaurant) {
+            } else if (uiDistRest > maxDistToRestaurant + 1e-6) {
                 val fmtD = String.format(Locale.US, "%.2f", distRest)
-                failedReasons.add("Pickup distance ($fmtD km) > max ($maxDistToRestaurant km)")
+                failedReasons.add("Pickup distance ($fmtD km / UI $uiDistRest km) > max ($maxDistToRestaurant km)")
             }
         }
         if (maxDistCustomer > 0.0) {
@@ -4289,9 +4630,9 @@ object OrderInterceptor {
                 if (!LocationEngine.isFixLocationUnknownEnabled) {
                     if (!failedReasons.contains("location unknown")) failedReasons.add("location unknown")
                 }
-            } else if (distCust > maxDistCustomer) {
+            } else if (uiDistCust > maxDistCustomer + 1e-6) {
                 val fmtC = String.format(Locale.US, "%.2f", distCust)
-                failedReasons.add("Drop-off distance ($fmtC km) > max ($maxDistCustomer km)")
+                failedReasons.add("Drop-off distance ($fmtC km / UI $uiDistCust km) > max ($maxDistCustomer km)")
             }
         }
 
@@ -4350,6 +4691,17 @@ object OrderInterceptor {
         if (orderIdInt != 0) {
             val existing = handledOrdersMap[orderIdInt]
             if (existing != null && (nowRealtime - existing.timestampRealtime) < 60_000L) {
+                val ageMs = nowRealtime - existing.timestampRealtime
+                val isConfirmed = apiConfirmedAcceptIds.contains(orderIdInt)
+                val isInFlight = apiInFlightIds.contains(orderIdInt)
+                DiagnosticLogger.logStep(
+                    "OrderDecision",
+                    "Order $normOrderId [$sourceChannel] follow-up after ${ageMs}ms: prevDecision=${existing.decision}, apiConfirmed=$isConfirmed, inFlight=$isInFlight, hasToken=${cachedAuthToken.isNotEmpty()}"
+                )
+                if (existing.decision == "ACCEPT" && !isConfirmed && !isInFlight) {
+                    val effFood = if (foodPrice > 0.0) foodPrice else cashAmt
+                    executeDirectApiCall(rawId, "ACCEPT", price, dist, restaurant, custDist, pickupAddr, custAddr, custName, custPhone, cashAmt, "Retry on $sourceChannel", pickupLat, pickupLng, destLat, destLng, effFood, paymentMethod, reference, startNs)
+                }
                 return existing.decision
             }
         }
@@ -4383,9 +4735,11 @@ object OrderInterceptor {
         if (reference.isNotEmpty()) cacheOrderCoords(reference, pickupLat, pickupLng, destLat, destLng)
         cacheOrderPayment(rawId, effFoodPrice, cashAmt, paymentMethod)
         if (reference.isNotEmpty()) cacheOrderPayment(reference, effFoodPrice, cashAmt, paymentMethod)
+        val uiRest = if (dist > 0.0) (kotlin.math.floor((dist + 1e-9) * 10.0) / 10.0) else 0.0
+        val uiCust = if (custDist > 0.0) (kotlin.math.floor((custDist + 1e-9) * 10.0) / 10.0) else 0.0
         DiagnosticLogger.logStep(
             "OrderDecision",
-            "Order $normOrderId [$sourceChannel] -> $action ($reason) | price=$price (min=$minOrderPrice), restDist=${String.format(Locale.US, "%.2f", dist)}km (max=$maxDistToRestaurant), custDist=${String.format(Locale.US, "%.2f", custDist)}km (max=$maxDistCustomer), active=${countCurrentActiveOrders()}/${if (isExtraOrderEnabled || maxOrdersLimit >= 3) 3 else 2}, master=$isMasterRunning, autoAccept=$isAutoAccept, dryRun=$isDryRun, hasToken=${cachedAuthToken.isNotEmpty()}, hasCipher=${capturedDriverCipherB64.isNotEmpty()}"
+            "Order $normOrderId [$sourceChannel] -> $action ($reason) | price=$price (min=$minOrderPrice), restDist=${String.format(Locale.US, "%.2f", dist)}km [ui=${uiRest}km, max=$maxDistToRestaurant], custDist=${String.format(Locale.US, "%.2f", custDist)}km [ui=${uiCust}km, max=$maxDistCustomer], active=${countCurrentActiveOrders()}/${if (isExtraOrderEnabled || maxOrdersLimit >= 3) 3 else 2}, master=$isMasterRunning, autoAccept=$isAutoAccept, autoReject=$isAutoReject, dryRun=$isDryRun, licOk=${isLicenseActiveInsideSaned()}, hasToken=${cachedAuthToken.isNotEmpty()} (len=${cachedAuthToken.length}), hasCipher=${capturedDriverCipherB64.isNotEmpty()} (len=${capturedDriverCipherB64.length})"
         )
 
         when (action) {
@@ -4548,11 +4902,16 @@ object OrderInterceptor {
         }
 
         if (orderIdInt != 0 && !apiInFlightIds.add(orderIdInt)) {
+            DiagnosticLogger.logStep("DirectApi", "Skipping duplicate in-flight $action for #$orderIdNum")
             return
         }
         if (capturedDriverCipherB64.isEmpty()) {
             readPersistedDriverCipher(ctx)
         }
+        DiagnosticLogger.logStep(
+            "DirectApi",
+            "Dispatching $action for #$orderIdNum (orderIdInt=$orderIdInt, tokLen=${token.length}, cipherLen=${capturedDriverCipherB64.length}, lang=$cachedLanguage)"
+        )
         val clientToUse = httpClient
         fastApiExecutor.execute {
             try { processThreadPriorityBoost() } catch (_: Throwable) {}
