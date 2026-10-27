@@ -82,7 +82,7 @@ object Native {
         "S86", "yM", "ta3", "xD", "cj6",
         "tEa", "Ke0", "MV5", "XS", "wRa",
         "A76", "gM", "B93", "fD", "Jh6",
-        "A76", "gM", "d06", "fD", "Jh6"
+        "", "", "d06", "", ""
     )
     private val FALLBACK_FEATURE_FLAGS = arrayOf(
         "rooted_device_check", "auto_clicker_check", "installation_source_check"
@@ -129,12 +129,6 @@ object Native {
     fun safeP(): Array<String> = FALLBACK_VERSION_PROFILES
     fun safeQ(): String = FALLBACK_MAPS_API_KEY
 
-    /**
-     * Matches Native.r(path) at 0x21d80 & 0xc0b2 in libshnative.so:
-     * Returns true ONLY if the APK at [path] is signed with Jahez's official Play Store certificate
-     * (ddd7c4454531d8be96dba3421d157fa7343ce0d3352f10ad02b3ca9c5bd003cf) and has no Non-Root patch entries.
-     * Returns false if the APK was re-signed or patched by NPatch, Vector, LSPatch, or any APK modifier.
-     */
     fun safeR(path: String): Boolean {
         if (path.isBlank()) return false
         return try {
@@ -180,7 +174,6 @@ object Native {
                     return certSha256.equals(OFFICIAL_JAHEZ_CERT_SHA256, ignoreCase = true)
                 }
             }
-            // If no v1 META-INF signature block exists (e.g. v2/v3-only re-signed APK), return false so unrestricted Maps key is injected
             false
         } catch (_: Throwable) {
             false

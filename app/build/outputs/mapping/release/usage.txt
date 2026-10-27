@@ -42666,6 +42666,7 @@ dev.saned.assistant.OrderInterceptor$simulateSwipe$1:
 dev.saned.assistant.OrderInterceptor$startActiveServerPolling$1:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$verifyCryptographicKeyAndTokenInEngine$valid$expectedTokHex$1:
+    public static java.lang.CharSequence invoke()
     public final java.lang.String invoke(java.lang.Class)
 dev.saned.assistant.OrderInterceptor$verifyRemoteControlSignatureInEngine$fullHex$1
 dev.saned.assistant.OrderInterceptor:
@@ -42790,16 +42791,15 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.util.List getNativeClasses()
     public static java.lang.String getNativeLibName()
     public static java.lang.String getRuntimeExecMethod()
-dev.saned.assistant.PackageCloaker$autoHookCallerInstallSourceCheck$1
+dev.saned.assistant.PackageCloaker$autoHookCallerInstallSourceCheck$stackStr$1
 dev.saned.assistant.PackageCloaker$hook$1
 dev.saned.assistant.PackageCloaker$hook$2
 dev.saned.assistant.PackageCloaker$hook$3
 dev.saned.assistant.PackageCloaker$hook$4
-dev.saned.assistant.PackageCloaker$hook$5
-dev.saned.assistant.PackageCloaker$hook$6
 dev.saned.assistant.PackageCloaker$hookEarly$2
 dev.saned.assistant.PackageCloaker$hookEarly$3
 dev.saned.assistant.PackageCloaker$hookEarly$4
+dev.saned.assistant.PackageCloaker$hookEarly$5
 dev.saned.assistant.PackageCloaker$hookEarly$6
 dev.saned.assistant.PackageCloaker$hookEarly$pSig$1
 dev.saned.assistant.PackageCloaker$installMapsAndPackageCloakerHooks$2
@@ -43062,8 +43062,8 @@ kotlin.SynchronizedLazyImpl:
 kotlin.TuplesKt
 kotlin.collections.AbstractCollection$toString$1$$InternalSyntheticThrowCCEIfNotNull$24$8b23b5989d83f217c632451418a9a5ca9637b7c5c6b4e7275fb3cf50257f9175$0
 kotlin.collections.AbstractCollection$toString$1:
-    public static java.lang.CharSequence invoke()
     public final java.lang.Throwable invoke(java.lang.Throwable)
+    public static java.lang.CharSequence invoke$1()
     public final java.lang.String invoke$1()
     public static void invoke$1()
     public static java.lang.String invoke$2()
