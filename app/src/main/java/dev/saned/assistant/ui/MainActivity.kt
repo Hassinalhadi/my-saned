@@ -410,7 +410,7 @@ class MainActivity : AppCompatActivity() {
         bottomNav.addView(navOrdersBtn)
         bottomNav.addView(navMapBtn)
         bottomNav.addView(navSettingsBtn)
-        navLogsBtn.visibility = View.VISIBLE
+        navLogsBtn.visibility = View.GONE
         bottomNav.addView(navLogsBtn)
         rootContainer.addView(bottomNav)
 

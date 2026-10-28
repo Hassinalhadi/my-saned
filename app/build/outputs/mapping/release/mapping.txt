@@ -3,8 +3,8 @@
 # min_api: 26
 # common_typos_disable
 # {"id":"com.android.tools.r8.mapping","version":"2.2"}
-# pg_map_id: 209942c
-# pg_map_hash: SHA-256 209942cff54feb86d17cb3d509d6402a1312f54a4f66d21a47a627387181c2c5
+# pg_map_id: 42cc03d
+# pg_map_hash: SHA-256 42cc03d968bf27f9ab57c7438459d27f4b0d34861d718a764571bd4ad9eddf17
 android.app.AppComponentFactory -> android.app.AppComponentFactory:
 # {"id":"com.android.tools.r8.synthesized"}
 android.support.v4.app.RemoteActionCompatParcelizer -> android.support.v4.app.RemoteActionCompatParcelizer:
@@ -136638,7 +136638,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1011:1021:android.widget.ScrollView buildOrdersTabView():859:859 -> onCreate
     1011:1021:void onCreate(android.os.Bundle):303 -> onCreate
     1022:1024:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2097,"4":2099,"7":2102},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2099,"4":2101,"7":2104},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1025:1029:android.widget.ScrollView buildOrdersTabView():862:862 -> onCreate
     1025:1029:void onCreate(android.os.Bundle):303 -> onCreate
     1030:1033:android.widget.ScrollView buildOrdersTabView():863:863 -> onCreate
@@ -136665,7 +136665,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1083:1091:android.widget.ScrollView buildOrdersTabView():886:886 -> onCreate
     1083:1091:void onCreate(android.os.Bundle):303 -> onCreate
     1092:1096:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2103,"4":2105,"7":2108},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2105,"4":2107,"7":2110},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1097:1105:android.widget.ScrollView buildOrdersTabView():892:892 -> onCreate
     1097:1105:void onCreate(android.os.Bundle):303 -> onCreate
     1106:1112:android.widget.ScrollView buildOrdersTabView():893:893 -> onCreate
@@ -136695,7 +136695,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1165:1173:android.widget.ScrollView buildOrdersTabView():910:910 -> onCreate
     1165:1173:void onCreate(android.os.Bundle):303 -> onCreate
     1174:1176:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2109,"4":2111,"7":2114},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2111,"4":2113,"7":2116},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1177:1181:android.widget.ScrollView buildOrdersTabView():913:913 -> onCreate
     1177:1181:void onCreate(android.os.Bundle):303 -> onCreate
     1182:1191:android.widget.ScrollView buildOrdersTabView():914:914 -> onCreate
@@ -136767,7 +136767,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1437:1441:void onCreate(android.os.Bundle):334:334 -> onCreate
     1442:1452:void onCreate(android.os.Bundle):336:336 -> onCreate
     1453:1455:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2115,"4":2117,"7":2120},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2117,"4":2119,"7":2122},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1456:1458:void onCreate(android.os.Bundle):339:339 -> onCreate
     1459:1473:void onCreate(android.os.Bundle):340:340 -> onCreate
     1474:1484:void onCreate(android.os.Bundle):342:342 -> onCreate
@@ -136786,7 +136786,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1547:1551:void onCreate(android.os.Bundle):356:356 -> onCreate
     1552:1560:void onCreate(android.os.Bundle):358:358 -> onCreate
     1561:1563:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2121,"4":2123,"7":2126},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2123,"4":2125,"7":2128},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1564:1566:void onCreate(android.os.Bundle):361:361 -> onCreate
     1567:1581:void onCreate(android.os.Bundle):362:362 -> onCreate
     1582:1592:void onCreate(android.os.Bundle):364:364 -> onCreate
@@ -136804,7 +136804,7 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1653:1657:void onCreate(android.os.Bundle):377:377 -> onCreate
     1658:1668:void onCreate(android.os.Bundle):379:379 -> onCreate
     1669:1671:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2127,"4":2129,"7":2132},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2129,"4":2131,"7":2134},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1672:1674:void onCreate(android.os.Bundle):382:382 -> onCreate
     1675:1689:void onCreate(android.os.Bundle):383:383 -> onCreate
     1690:1700:void onCreate(android.os.Bundle):385:385 -> onCreate
@@ -136823,84 +136823,84 @@ dev.saned.assistant.ui.MainActivity -> dev.saned.assistant.ui.MainActivity:
     1763:1767:void onCreate(android.os.Bundle):399:399 -> onCreate
     1768:1776:void onCreate(android.os.Bundle):401:401 -> onCreate
     1777:1779:void onCreate(android.os.Bundle):0:0 -> onCreate
-      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2133,"4":2135,"7":2138},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"0":2135,"4":2137,"7":2140},"outline":"Lo/xb0;p(Ldev/saned/assistant/ui/MainActivity;Ljava/lang/String;Ljava/lang/String;Landroid/widget/TextView;F)V"}
     1780:1782:void onCreate(android.os.Bundle):404:404 -> onCreate
     1783:1797:void onCreate(android.os.Bundle):405:405 -> onCreate
     1798:1808:void onCreate(android.os.Bundle):407:407 -> onCreate
     1809:1815:void onCreate(android.os.Bundle):408:408 -> onCreate
     1816:1822:void onCreate(android.os.Bundle):410:410 -> onCreate
     1823:1829:void onCreate(android.os.Bundle):411:411 -> onCreate
-    1830:1836:void onCreate(android.os.Bundle):412:412 -> onCreate
-    1837:1843:void onCreate(android.os.Bundle):413:413 -> onCreate
-    1844:1846:void onCreate(android.os.Bundle):414:414 -> onCreate
-    1847:1849:void onCreate(android.os.Bundle):415:415 -> onCreate
-    1850:1854:void onCreate(android.os.Bundle):417:417 -> onCreate
-    1855:1863:void onCreate(android.os.Bundle):418:418 -> onCreate
-    1864:1866:void onCreate(android.os.Bundle):423:423 -> onCreate
-    1867:1872:void onCreate(android.os.Bundle):424:424 -> onCreate
-    1873:1875:void onCreate(android.os.Bundle):425:425 -> onCreate
-    1876:1878:void onCreate(android.os.Bundle):426:426 -> onCreate
-    1879:1893:void onCreate(android.os.Bundle):428:428 -> onCreate
-    1894:1896:void startLicenseExpiryCountdownLoop():1085:1085 -> onCreate
-    1894:1896:void onCreate(android.os.Bundle):429 -> onCreate
-    1897:1918:void syncRemoteKillSwitchAsync():1923:1923 -> onCreate
-    1897:1918:void onCreate(android.os.Bundle):430 -> onCreate
-    1919:1921:void onCreate(android.os.Bundle):439:439 -> onCreate
-    1922:1925:void refreshOrdersLogUI$default(dev.saned.assistant.ui.MainActivity,boolean,int,java.lang.Object):2885:2885 -> onCreate
-    1922:1925:void onCreate(android.os.Bundle):440 -> onCreate
-    1926:1931:void onCreate(android.os.Bundle):414:414 -> onCreate
-    1932:1936:void onCreate(android.os.Bundle):413:413 -> onCreate
-    1937:1941:void onCreate(android.os.Bundle):412:412 -> onCreate
-    1942:1946:void onCreate(android.os.Bundle):411:411 -> onCreate
-    1947:1953:void onCreate(android.os.Bundle):410:410 -> onCreate
-    1954:1965:void onCreate(android.os.Bundle):408:408 -> onCreate
-    1966:1977:void onCreate(android.os.Bundle):407:407 -> onCreate
-    1978:1989:void onCreate(android.os.Bundle):386:386 -> onCreate
-    1990:2001:void onCreate(android.os.Bundle):385:385 -> onCreate
-    2002:2013:void onCreate(android.os.Bundle):365:365 -> onCreate
-    2014:2025:void onCreate(android.os.Bundle):364:364 -> onCreate
-    2026:2037:void onCreate(android.os.Bundle):343:343 -> onCreate
-    2038:2049:void onCreate(android.os.Bundle):342:342 -> onCreate
-    2050:2056:void onCreate(android.os.Bundle):311:311 -> onCreate
-    2057:2063:void onCreate(android.os.Bundle):310:310 -> onCreate
-    2064:2070:void onCreate(android.os.Bundle):309:309 -> onCreate
-    2071:2075:void onCreate(android.os.Bundle):308:308 -> onCreate
-    2076:2082:android.widget.ScrollView buildOrdersTabView():933:933 -> onCreate
-    2076:2082:void onCreate(android.os.Bundle):303 -> onCreate
-    2083:2092:android.widget.ScrollView buildOrdersTabView():932:932 -> onCreate
-    2083:2092:void onCreate(android.os.Bundle):303 -> onCreate
-    2093:2096:android.widget.ScrollView buildOrdersTabView():931:931 -> onCreate
-    2093:2096:void onCreate(android.os.Bundle):303 -> onCreate
-    2097:2097:android.widget.ScrollView buildOrdersTabView():860:860 -> onCreate
-    2097:2097:void onCreate(android.os.Bundle):303 -> onCreate
+    1830:1838:void onCreate(android.os.Bundle):412:412 -> onCreate
+    1839:1845:void onCreate(android.os.Bundle):413:413 -> onCreate
+    1846:1848:void onCreate(android.os.Bundle):414:414 -> onCreate
+    1849:1851:void onCreate(android.os.Bundle):415:415 -> onCreate
+    1852:1856:void onCreate(android.os.Bundle):417:417 -> onCreate
+    1857:1865:void onCreate(android.os.Bundle):418:418 -> onCreate
+    1866:1868:void onCreate(android.os.Bundle):423:423 -> onCreate
+    1869:1874:void onCreate(android.os.Bundle):424:424 -> onCreate
+    1875:1877:void onCreate(android.os.Bundle):425:425 -> onCreate
+    1878:1880:void onCreate(android.os.Bundle):426:426 -> onCreate
+    1881:1895:void onCreate(android.os.Bundle):428:428 -> onCreate
+    1896:1898:void startLicenseExpiryCountdownLoop():1085:1085 -> onCreate
+    1896:1898:void onCreate(android.os.Bundle):429 -> onCreate
+    1899:1920:void syncRemoteKillSwitchAsync():1923:1923 -> onCreate
+    1899:1920:void onCreate(android.os.Bundle):430 -> onCreate
+    1921:1923:void onCreate(android.os.Bundle):439:439 -> onCreate
+    1924:1927:void refreshOrdersLogUI$default(dev.saned.assistant.ui.MainActivity,boolean,int,java.lang.Object):2885:2885 -> onCreate
+    1924:1927:void onCreate(android.os.Bundle):440 -> onCreate
+    1928:1933:void onCreate(android.os.Bundle):414:414 -> onCreate
+    1934:1938:void onCreate(android.os.Bundle):413:413 -> onCreate
+    1939:1943:void onCreate(android.os.Bundle):412:412 -> onCreate
+    1944:1948:void onCreate(android.os.Bundle):411:411 -> onCreate
+    1949:1955:void onCreate(android.os.Bundle):410:410 -> onCreate
+    1956:1967:void onCreate(android.os.Bundle):408:408 -> onCreate
+    1968:1979:void onCreate(android.os.Bundle):407:407 -> onCreate
+    1980:1991:void onCreate(android.os.Bundle):386:386 -> onCreate
+    1992:2003:void onCreate(android.os.Bundle):385:385 -> onCreate
+    2004:2015:void onCreate(android.os.Bundle):365:365 -> onCreate
+    2016:2027:void onCreate(android.os.Bundle):364:364 -> onCreate
+    2028:2039:void onCreate(android.os.Bundle):343:343 -> onCreate
+    2040:2051:void onCreate(android.os.Bundle):342:342 -> onCreate
+    2052:2058:void onCreate(android.os.Bundle):311:311 -> onCreate
+    2059:2065:void onCreate(android.os.Bundle):310:310 -> onCreate
+    2066:2072:void onCreate(android.os.Bundle):309:309 -> onCreate
+    2073:2077:void onCreate(android.os.Bundle):308:308 -> onCreate
+    2078:2084:android.widget.ScrollView buildOrdersTabView():933:933 -> onCreate
+    2078:2084:void onCreate(android.os.Bundle):303 -> onCreate
+    2085:2094:android.widget.ScrollView buildOrdersTabView():932:932 -> onCreate
+    2085:2094:void onCreate(android.os.Bundle):303 -> onCreate
+    2095:2098:android.widget.ScrollView buildOrdersTabView():931:931 -> onCreate
+    2095:2098:void onCreate(android.os.Bundle):303 -> onCreate
     2099:2099:android.widget.ScrollView buildOrdersTabView():860:860 -> onCreate
     2099:2099:void onCreate(android.os.Bundle):303 -> onCreate
-    2102:2102:android.widget.ScrollView buildOrdersTabView():861:861 -> onCreate
-    2102:2102:void onCreate(android.os.Bundle):303 -> onCreate
-    2103:2103:android.widget.ScrollView buildOrdersTabView():887:887 -> onCreate
-    2103:2103:void onCreate(android.os.Bundle):303 -> onCreate
+    2101:2101:android.widget.ScrollView buildOrdersTabView():860:860 -> onCreate
+    2101:2101:void onCreate(android.os.Bundle):303 -> onCreate
+    2104:2104:android.widget.ScrollView buildOrdersTabView():861:861 -> onCreate
+    2104:2104:void onCreate(android.os.Bundle):303 -> onCreate
     2105:2105:android.widget.ScrollView buildOrdersTabView():887:887 -> onCreate
     2105:2105:void onCreate(android.os.Bundle):303 -> onCreate
-    2108:2108:android.widget.ScrollView buildOrdersTabView():891:891 -> onCreate
-    2108:2108:void onCreate(android.os.Bundle):303 -> onCreate
-    2109:2109:android.widget.ScrollView buildOrdersTabView():911:911 -> onCreate
-    2109:2109:void onCreate(android.os.Bundle):303 -> onCreate
+    2107:2107:android.widget.ScrollView buildOrdersTabView():887:887 -> onCreate
+    2107:2107:void onCreate(android.os.Bundle):303 -> onCreate
+    2110:2110:android.widget.ScrollView buildOrdersTabView():891:891 -> onCreate
+    2110:2110:void onCreate(android.os.Bundle):303 -> onCreate
     2111:2111:android.widget.ScrollView buildOrdersTabView():911:911 -> onCreate
     2111:2111:void onCreate(android.os.Bundle):303 -> onCreate
-    2114:2114:android.widget.ScrollView buildOrdersTabView():912:912 -> onCreate
-    2114:2114:void onCreate(android.os.Bundle):303 -> onCreate
-    2115:2115:void onCreate(android.os.Bundle):337:337 -> onCreate
+    2113:2113:android.widget.ScrollView buildOrdersTabView():911:911 -> onCreate
+    2113:2113:void onCreate(android.os.Bundle):303 -> onCreate
+    2116:2116:android.widget.ScrollView buildOrdersTabView():912:912 -> onCreate
+    2116:2116:void onCreate(android.os.Bundle):303 -> onCreate
     2117:2117:void onCreate(android.os.Bundle):337:337 -> onCreate
-    2120:2120:void onCreate(android.os.Bundle):338:338 -> onCreate
-    2121:2121:void onCreate(android.os.Bundle):359:359 -> onCreate
+    2119:2119:void onCreate(android.os.Bundle):337:337 -> onCreate
+    2122:2122:void onCreate(android.os.Bundle):338:338 -> onCreate
     2123:2123:void onCreate(android.os.Bundle):359:359 -> onCreate
-    2126:2126:void onCreate(android.os.Bundle):360:360 -> onCreate
-    2127:2127:void onCreate(android.os.Bundle):380:380 -> onCreate
+    2125:2125:void onCreate(android.os.Bundle):359:359 -> onCreate
+    2128:2128:void onCreate(android.os.Bundle):360:360 -> onCreate
     2129:2129:void onCreate(android.os.Bundle):380:380 -> onCreate
-    2132:2132:void onCreate(android.os.Bundle):381:381 -> onCreate
-    2133:2133:void onCreate(android.os.Bundle):402:402 -> onCreate
+    2131:2131:void onCreate(android.os.Bundle):380:380 -> onCreate
+    2134:2134:void onCreate(android.os.Bundle):381:381 -> onCreate
     2135:2135:void onCreate(android.os.Bundle):402:402 -> onCreate
-    2138:2138:void onCreate(android.os.Bundle):403:403 -> onCreate
+    2137:2137:void onCreate(android.os.Bundle):402:402 -> onCreate
+    2140:2140:void onCreate(android.os.Bundle):403:403 -> onCreate
     0:6:void onPause():6915:6915 -> onPause
     7:11:void onPause():6916:6916 -> onPause
     12:14:void onPause():6918:6918 -> onPause
