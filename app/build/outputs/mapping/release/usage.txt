@@ -19675,6 +19675,20 @@ dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public final boolean component3()
     public final dev.saned.assistant.OrderInterceptor$HandledOrderEntry copy(java.lang.String,long,boolean)
     public static synthetic dev.saned.assistant.OrderInterceptor$HandledOrderEntry copy$default(dev.saned.assistant.OrderInterceptor$HandledOrderEntry,java.lang.String,long,boolean,int,java.lang.Object)
+dev.saned.assistant.OrderInterceptor$JwtInfo:
+    public final java.lang.String component1()
+    public final java.lang.String component2()
+    public final java.lang.String component3()
+    public final java.lang.String component4()
+    public final long component5()
+    public final boolean component6()
+    public final boolean component7()
+    public final java.lang.String component8()
+    public final dev.saned.assistant.OrderInterceptor$JwtInfo copy(java.lang.String,java.lang.String,java.lang.String,java.lang.String,long,boolean,boolean,java.lang.String)
+    public static synthetic dev.saned.assistant.OrderInterceptor$JwtInfo copy$default(dev.saned.assistant.OrderInterceptor$JwtInfo,java.lang.String,java.lang.String,java.lang.String,java.lang.String,long,boolean,boolean,java.lang.String,int,java.lang.Object)
+    public final java.lang.String getAud()
+    public final java.lang.String getIss()
+    public final java.lang.String getSub()
 dev.saned.assistant.OrderInterceptor$hookDialogShow$1
 dev.saned.assistant.OrderInterceptor$hookOkHttp$1
 dev.saned.assistant.OrderInterceptor$hookOkHttp$2
@@ -19710,7 +19724,7 @@ dev.saned.assistant.OrderInterceptor:
     public static synthetic void cacheOrderPayment$default(dev.saned.assistant.OrderInterceptor,java.lang.String,double,double,java.lang.String,int,java.lang.Object)
     private final void captureRequestMetadata(java.lang.Object)
     public static synthetic void checkAndSetToken$default(dev.saned.assistant.OrderInterceptor,java.lang.String,java.lang.String,int,java.lang.Object)
-    static synthetic okhttp3.Request executeDirectApiCall$lambda$111$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
+    static synthetic okhttp3.Request executeDirectApiCall$lambda$118$buildFastRequest$default(java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,int,java.lang.Object)
     public final java.util.List getAllRootViews()
     public final java.util.concurrent.ConcurrentHashMap$KeySetView getApiInFlightIds()
     public final java.lang.String getAppUiLanguage()
@@ -19742,6 +19756,7 @@ dev.saned.assistant.OrderInterceptor:
     public final double getMaxDistToRestaurant()
     public final double getMinOrderPrice()
     public final int getParallelRequests()
+    public final java.lang.String getSecondaryAltJwt()
     public final java.lang.String getVerifiedAcceptMethod()
     public final java.lang.String getVerifiedAcceptUrlTemplate()
     private final void hookDialogShow(io.github.libxposed.api.XposedModule)
@@ -19774,7 +19789,7 @@ dev.saned.assistant.OrderInterceptor:
     private final void scanExistingActivitiesInActivityThread()
     private static final void scanExistingActivitiesInActivityThread$lambda$30(android.app.Activity)
     private final boolean scanHomeScreenOrderCards(android.view.View,android.app.Activity)
-    private static final void scanHomeScreenOrderCards$lambda$142(kotlin.jvm.internal.Ref$ObjectRef)
+    private static final void scanHomeScreenOrderCards$lambda$149(kotlin.jvm.internal.Ref$ObjectRef)
     private static final void scanHomeScreenOrderCards$traverseList(kotlin.jvm.internal.Ref$ObjectRef,kotlin.jvm.internal.Ref$ObjectRef,android.view.View)
     public final void setActivePolling(boolean)
     public final void setAppContext(android.content.Context)
@@ -19785,6 +19800,7 @@ dev.saned.assistant.OrderInterceptor:
     public final void setDryRun(boolean)
     public final void setExtraOrderEnabled(boolean)
     public final void setFloatingOverlayEnabled(boolean)
+    public final void setHasLiveProcessToken(boolean)
     public final void setJahezVersionOfficiallySupported(boolean)
     public final void setJdrvEngineMagic(int)
     public final void setJdrvHwDeviceId(java.lang.String)
@@ -19808,6 +19824,7 @@ dev.saned.assistant.OrderInterceptor:
     public final void setOkHttpHooked(boolean)
     public final void setParallelRequests(int)
     public final void setPollIntervalSec(float)
+    public final void setSecondaryAltJwt(java.lang.String)
     public final void setShowToasts(boolean)
     public final void setSilenceAlertTone(boolean)
     public final void setSoundEnabled(boolean)
@@ -23398,7 +23415,6 @@ kotlin.jvm.internal.PropertyReference:
     public boolean isLateinit()
 kotlin.jvm.internal.Ref$ByteRef
 kotlin.jvm.internal.Ref$CharRef
-kotlin.jvm.internal.Ref$DoubleRef
 kotlin.jvm.internal.Ref$LongRef
 kotlin.jvm.internal.Ref$ShortRef
 kotlin.jvm.internal.Ref
@@ -24797,7 +24813,6 @@ kotlin.text.StringsKt___StringsKt:
     private static final long sumOfULong(java.lang.CharSequence,kotlin.jvm.functions.Function1)
     public static final java.lang.CharSequence take(java.lang.CharSequence,int)
     public static final java.lang.CharSequence takeLast(java.lang.CharSequence,int)
-    public static final java.lang.String takeLast(java.lang.String,int)
     public static final java.lang.CharSequence takeLastWhile(java.lang.CharSequence,kotlin.jvm.functions.Function1)
     public static final java.lang.String takeLastWhile(java.lang.String,kotlin.jvm.functions.Function1)
     public static final java.lang.CharSequence takeWhile(java.lang.CharSequence,kotlin.jvm.functions.Function1)
@@ -26342,7 +26357,6 @@ okhttp3.Connection:
     public abstract java.net.Socket socket()
 okhttp3.ConnectionPool:
     public final int connectionCount()
-    public final void evictAll()
     public final int idleConnectionCount()
 okhttp3.ConnectionSpec$Builder:
     public final okhttp3.ConnectionSpec$Builder allEnabledCipherSuites()
@@ -26917,7 +26931,6 @@ okhttp3.internal.connection.RealConnectionPool$Companion:
     public final okhttp3.internal.connection.RealConnectionPool get(okhttp3.ConnectionPool)
 okhttp3.internal.connection.RealConnectionPool:
     public final int connectionCount()
-    public final void evictAll()
     public final int idleConnectionCount()
 okhttp3.internal.http.DatesKt:
     public static final long MAX_DATE
@@ -36621,25 +36634,37 @@ dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$8ddd4452859e2848
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$a89b127b27b01e43492dd23d1ec516c37b24513222957fda5e0dea0a5fb4bc7f$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$abfa8cb93b601c54812267776d24f6deacf8a3369fd504f8aafd9ce35cd35c05$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$3$d222cb0d79118909225329ba1bb379faad1bcc017cce65107986b85c47453f40$0
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$545ae310336e13a1dd43cb5f57df716e0a68abc7d55e18d6acc89a15706f072a$2
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$2c0b1c06773a46f35319494126842f400d3b94c58b9ed595834a31d110984823$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$2b4cad76ea8c9572b4f7a3b019a46b70341744f352515f53ca68998cd1cf0eb2$2
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$4$695b6638bc4a3d608b5da057dc4d7f2ef082598793abb624cb41c9d827b5e93d$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$2c0b1c06773a46f35319494126842f400d3b94c58b9ed595834a31d110984823$1:
+    public final synthetic okhttp3.OkHttpClient f$23
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$724a42584b5965d0d73014ce066a02536ed091049164a7f06206f90223cec2af$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c06a8778d8282d0120a10b3a80c00495a03e1dbe01b3e237c7f8b6e3ceca3e50$0
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$2
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$4
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$5
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$5$c666652156b3175ba521ee3debea5b24f9028b198ae480e2b3ec7e890558b55c$7
-dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$7c0bf22489fe3549310f2fce2603daaea19082f5bb5ed6af27b6330c9dea9be4$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$99a2c436d26d216144667c5dd462087ed10b27cc53c92cf8ae8776577a897e40$0
+dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$6$99a2c436d26d216144667c5dd462087ed10b27cc53c92cf8ae8776577a897e40$1
 dev.saned.assistant.OrderInterceptor$$InternalSyntheticLambda$8$a87a48e10fb433ab20a045122f8345165d08fec25ddd3577e71ed2ca842b77d0$0
 dev.saned.assistant.OrderInterceptor$HandledOrderEntry:
     public static java.lang.String getDecision()
     public static long getTimestampRealtime()
     public static boolean getWasInBackground()
+dev.saned.assistant.OrderInterceptor$JwtInfo:
+    public static java.lang.String getClaimsSummary()
+    public static long getExp()
+    public static java.lang.String getRawJwt()
+    public static boolean isExpired()
+    public static boolean isSanedDriverToken()
 dev.saned.assistant.OrderInterceptor$cachedWmgInstance$2
 dev.saned.assistant.OrderInterceptor$cachedWmgViewsField$2
 dev.saned.assistant.OrderInterceptor$checkRemoteKillSwitchFromSaned$1:
     public int label
     public final java.lang.Object invoke$1()
+dev.saned.assistant.OrderInterceptor$decryptSanedPrefsDirectlyWithKeystore$summary$1:
+    public static java.lang.CharSequence invoke()
+    public final java.lang.String invoke(java.lang.Class)
 dev.saned.assistant.OrderInterceptor$evaluateAndProcessOrder$2:
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$executeDirectApiCall$2$2:
@@ -36647,8 +36672,7 @@ dev.saned.assistant.OrderInterceptor$executeDirectApiCall$2$2:
 dev.saned.assistant.OrderInterceptor$fetchOrderCustomerDetailsAsync$1:
     public int label
     public final java.lang.Object invoke$1()
-dev.saned.assistant.OrderInterceptor$hookDriverIdCallerStack$summary$1:
-    public final java.lang.String invoke(java.lang.Class)
+dev.saned.assistant.OrderInterceptor$hookDriverIdCallerStack$summary$1
 dev.saned.assistant.OrderInterceptor$hookFirebase$1
 dev.saned.assistant.OrderInterceptor$hookIncomingDispatchActivity$1
 dev.saned.assistant.OrderInterceptor$hookJsonConstructors$1$intercept$1:
@@ -36660,6 +36684,9 @@ dev.saned.assistant.OrderInterceptor$hookSharedPreferences$1
 dev.saned.assistant.OrderInterceptor$hookSharedPreferences$2
 dev.saned.assistant.OrderInterceptor$isInsideJsonHook$1
 dev.saned.assistant.OrderInterceptor$performLiveApiProbe$1:
+    public int label
+    public final java.lang.Object invoke$1()
+dev.saned.assistant.OrderInterceptor$refreshConnectionOnHttp400$1:
     public int label
     public final java.lang.Object invoke$1()
 dev.saned.assistant.OrderInterceptor$respondToPing$1:
@@ -36701,7 +36728,7 @@ dev.saned.assistant.OrderInterceptor:
     public static volatile float pollIntervalSec
     public static volatile java.lang.String verifiedAcceptMethod
     public static volatile java.lang.String verifiedAcceptUrlTemplate
-    public static synthetic boolean $r8$lambda$EZmkhmgwOD6HRXBFeFUoeTkcl6A()
+    public static synthetic boolean $r8$lambda$8c5Q5sMhpwz_l9yansIo91s1CQ0()
     public static final synthetic void access$fetchOrderCustomerDetailsAsync(dev.saned.assistant.OrderInterceptor,java.lang.String)
     public static void acquireWakeLock()
     public static void applySettingsFromIntent()
@@ -36711,9 +36738,7 @@ dev.saned.assistant.OrderInterceptor:
     public static void clearPersistedToken()
     public static void closeDispatchActivitySafely(android.app.Activity,boolean)
     public static okhttp3.OkHttpClient createUnsafeOkHttpClient()
-    public static final boolean createUnsafeOkHttpClient$lambda$144()
-    public static java.lang.String decryptSanedPrefsDirectlyWithKeystore()
-    public static final void executeDirectApiCall$lambda$111$runSingleStream(int,int,int,long,android.content.Context,java.lang.String,java.lang.String,java.lang.String,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicBoolean,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicInteger,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,java.util.concurrent.atomic.AtomicReference,kotlin.jvm.internal.Ref$ObjectRef,okhttp3.OkHttpClient,boolean)
+    public static final boolean createUnsafeOkHttpClient$lambda$151()
     public static synthetic java.lang.String extractJwtFromByteSlice$default(dev.saned.assistant.OrderInterceptor,byte[])
     public static java.lang.String extractOrderIdFromActivity()
     public static byte[] extractProtobufLengthDelimitedField()
@@ -36725,6 +36750,7 @@ dev.saned.assistant.OrderInterceptor:
     public static okhttp3.OkHttpClient getCapturedAppHttpClient()
     public static android.app.Activity getCurrentActivity()
     public static java.util.concurrent.ConcurrentHashMap getHandledOrdersMap()
+    public static boolean getHasLiveProcessToken()
     public static java.util.concurrent.atomic.AtomicInteger getHttpRequestsCount()
     public static int getLastHttpResponseCode()
     public static java.lang.String getLastInterceptedUrl()
@@ -36753,7 +36779,6 @@ dev.saned.assistant.OrderInterceptor:
     public static boolean isOkHttpHooked()
     public static boolean isStayInBackground()
     public static boolean isStrictVersionCheck()
-    public static void markOrderLiveActive()
     public static java.lang.String normalizeArabicNumerals()
     public static void notifyUnsupportedVersion()
     public static void performLiveApiProbe()
@@ -36815,11 +36840,11 @@ dev.saned.assistant.PackageCloaker$VersionProfile:
     public static java.lang.String getRuntimeExecMethod()
 dev.saned.assistant.PackageCloaker$describeBooleanFields$2$$InternalSyntheticThrowCCEIfNotNull$24$b83929ce074aa60f2562f2a567877c97527c90de741bd3133d444e1187dd0cb1$0
 dev.saned.assistant.PackageCloaker$describeBooleanFields$2:
-    public static java.lang.CharSequence invoke()
     public final java.lang.Throwable invoke(java.lang.Throwable)
     public static java.lang.CharSequence invoke$1()
     public final java.lang.String invoke$1()
     public static void invoke$1()
+    public static java.lang.CharSequence invoke$2()
     public static java.lang.String invoke$2()
 dev.saned.assistant.PackageCloaker$formatAppCallStack$2
 dev.saned.assistant.PackageCloaker$hook$1
@@ -37273,7 +37298,6 @@ kotlin.io.FilesKt
 kotlin.io.FilesKt__FilePathComponentsKt
 kotlin.io.FilesKt__FileReadWriteKt
 kotlin.io.FilesKt__FileTreeWalkKt
-kotlin.io.FilesKt__UtilsKt
 kotlin.io.TextStreamsKt
 kotlin.jvm.JvmClassMappingKt
 kotlin.jvm.internal.ArrayIterator
@@ -37306,6 +37330,7 @@ kotlin.jvm.internal.PropertyReference0:
     public abstract kotlin.reflect.KCallable compute$kotlin$jvm$internal$PropertyReference()
 kotlin.jvm.internal.PropertyReference0Impl
 kotlin.jvm.internal.PropertyReference
+kotlin.jvm.internal.Ref$DoubleRef
 kotlin.jvm.internal.Ref$IntRef
 kotlin.jvm.internal.Reflection:
     public static final kotlin.reflect.KClass[] EMPTY_K_CLASS_ARRAY
@@ -38607,6 +38632,7 @@ okhttp3.internal.connection.RealConnectionPool:
     static void <clinit>()
     public static long cleanup()
     public static boolean connectionBecameIdle()
+    public static void evictAll()
 okhttp3.internal.connection.RouteDatabase
 okhttp3.internal.connection.RouteException:
     public static void addConnectException()
