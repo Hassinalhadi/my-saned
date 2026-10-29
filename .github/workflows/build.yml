@@ -1870,6 +1870,906 @@ jobs:
               )
               open(gradle_path, "w", encoding="utf-8").write(gradle_src)
 
+          # 13. Apply all 8 UI & UX fixes requested by the user (100% precision)
+          # Fix themes.xml so Dark Mode never turns CheckBox/Switch text white on white cards (Image 16)
+          theme_path = "app/src/main/res/values/themes.xml"
+          if os.path.exists(theme_path):
+              t_src = open(theme_path, "r", encoding="utf-8").read()
+              t_src = t_src.replace("Theme.MaterialComponents.DayNight.NoActionBar", "Theme.MaterialComponents.Light.NoActionBar")
+              open(theme_path, "w", encoding="utf-8").write(t_src)
+
+          main_src = open(main_path, "r", encoding="utf-8").read()
+
+          # Ensure Change Location / Direct Order Delivery starts OFF by default on app launch (Images 10 & 19)
+          old_oncreate_pts = 'routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)'
+          new_oncreate_pts = (
+              'SettingsStore.setFakeLocation(this, false)\n'
+              '        SettingsStore.setRouteSimActive(this, false)\n'
+              '        try {\n'
+              '            val lm = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager\n'
+              '            if (lm != null) {\n'
+              '                val providers = listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.PASSIVE_PROVIDER)\n'
+              '                for (prv in providers) {\n'
+              '                    try {\n'
+              '                        @Suppress("MissingPermission")\n'
+              '                        val loc = lm.getLastKnownLocation(prv)\n'
+              '                        if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0) {\n'
+              '                            SettingsStore.setFakeLat(this, loc.latitude)\n'
+              '                            SettingsStore.setFakeLng(this, loc.longitude)\n'
+              '                            SettingsStore.setPoint1(this, loc.latitude, loc.longitude)\n'
+              '                            break\n'
+              '                        }\n'
+              '                    } catch (_: Throwable) {}\n'
+              '                }\n'
+              '            }\n'
+              '        } catch (_: Throwable) {}\n'
+              '        routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)'
+          )
+          assert old_oncreate_pts in main_src, "old_oncreate_pts not found"
+          main_src = main_src.replace(old_oncreate_pts, new_oncreate_pts, 1)
+
+          # Fix #1 (Image 9): Bottom Navigation Bar alignment (center labels directly beneath icons) & distinct colors for Orders, Map, Settings
+          old_bottom_nav = """        navOrdersIconBg = TextView(this).apply {
+                      text = "🏠"
+                      textSize = 20f
+                      gravity = Gravity.CENTER
+                      setPadding(52, 14, 52, 14)
+                  }
+                  navOrdersLabel = TextView(this).apply {
+                      text = tr("الطلبات", "Orders")
+                      textSize = 14f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(0, 6, 0, 0)
+                  }
+                  navOrdersBtn.addView(navOrdersIconBg)
+                  navOrdersBtn.addView(navOrdersLabel)
+
+                  navSettingsBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 6, 0, 6)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(1) }
+                  }
+                  navSettingsIconBg = TextView(this).apply {
+                      text = "⚙️"
+                      textSize = 20f
+                      gravity = Gravity.CENTER
+                      setPadding(52, 14, 52, 14)
+                  }
+                  navSettingsLabel = TextView(this).apply {
+                      text = tr("الإعدادات", "Settings")
+                      textSize = 14f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(0, 6, 0, 0)
+                  }
+                  navSettingsBtn.addView(navSettingsIconBg)
+                  navSettingsBtn.addView(navSettingsLabel)
+
+                  navLogsBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(2) }
+                  }
+                  navLogsIconBg = TextView(this).apply {
+                      text = "📋"
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      setPadding(42, 10, 42, 10)
+                  }
+                  navLogsLabel = TextView(this).apply {
+                      text = tr("السجلات", "Logs")
+                      textSize = 12.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(0, 6, 0, 0)
+                  }
+                  navLogsBtn.addView(navLogsIconBg)
+                  navLogsBtn.addView(navLogsLabel)
+
+                  navMapBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 6, 0, 6)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(3) }
+                  }
+                  navMapIconBg = TextView(this).apply {
+                      text = "🗺️"
+                      textSize = 20f
+                      gravity = Gravity.CENTER
+                      setPadding(52, 14, 52, 14)
+                  }
+                  navMapLabel = TextView(this).apply {
+                      text = tr("الخريطة", "Map")
+                      textSize = 14f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(0, 6, 0, 0)
+                  }"""
+
+          new_bottom_nav = """        navOrdersIconBg = TextView(this).apply {
+                      text = "🏠"
+                      textSize = 19f
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(36, 6, 36, 6)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navOrdersLabel = TextView(this).apply {
+                      text = tr("الطلبات", "Orders")
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(0, 2, 0, 0)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navOrdersBtn.addView(navOrdersIconBg)
+                  navOrdersBtn.addView(navOrdersLabel)
+
+                  navSettingsBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 4, 0, 4)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(1) }
+                  }
+                  navSettingsIconBg = TextView(this).apply {
+                      text = "⚙️"
+                      textSize = 19f
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(36, 6, 36, 6)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navSettingsLabel = TextView(this).apply {
+                      text = tr("الإعدادات", "Settings")
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(0, 2, 0, 0)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navSettingsBtn.addView(navSettingsIconBg)
+                  navSettingsBtn.addView(navSettingsLabel)
+
+                  navLogsBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(2) }
+                  }
+                  navLogsIconBg = TextView(this).apply {
+                      text = "📋"
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(32, 6, 32, 6)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navLogsLabel = TextView(this).apply {
+                      text = tr("السجلات", "Logs")
+                      textSize = 12.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(0, 2, 0, 0)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navLogsBtn.addView(navLogsIconBg)
+                  navLogsBtn.addView(navLogsLabel)
+
+                  navMapBtn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 4, 0, 4)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener { switchTab(3) }
+                  }
+                  navMapIconBg = TextView(this).apply {
+                      text = "🗺️"
+                      textSize = 19f
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(36, 6, 36, 6)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  navMapLabel = TextView(this).apply {
+                      text = tr("الخريطة", "Map")
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setPadding(0, 2, 0, 0)
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }"""
+          assert old_bottom_nav in main_src, "old_bottom_nav not found"
+          main_src = main_src.replace(old_bottom_nav, new_bottom_nav, 1)
+
+          old_switch_tab_colors = """        navOrdersIconBg.background = if (tabIndex == 0) roundedBg("#EDE9FE", 20f) else null
+                  navSettingsIconBg.background = if (tabIndex == 1) roundedBg("#EDE9FE", 20f) else null
+                  navLogsIconBg.background = if (tabIndex == 2) roundedBg("#EDE9FE", 20f) else null
+                  navMapIconBg.background = if (tabIndex == 3) roundedBg("#EDE9FE", 20f) else null
+
+                  navOrdersLabel.setTextColor(Color.parseColor(if (tabIndex == 0) "#4C1D95" else "#64748B"))
+                  navSettingsLabel.setTextColor(Color.parseColor(if (tabIndex == 1) "#4C1D95" else "#64748B"))
+                  navLogsLabel.setTextColor(Color.parseColor(if (tabIndex == 2) "#4C1D95" else "#64748B"))
+                  navMapLabel.setTextColor(Color.parseColor(if (tabIndex == 3) "#4C1D95" else "#64748B"))"""
+
+          new_switch_tab_colors = """        navOrdersIconBg.background = if (tabIndex == 0) roundedBg("#EDE9FE", 18f) else null
+                  navMapIconBg.background = if (tabIndex == 3) roundedBg("#D1FAE5", 18f) else null
+                  navSettingsIconBg.background = if (tabIndex == 1) roundedBg("#FEF3C7", 18f) else null
+                  navLogsIconBg.background = if (tabIndex == 2) roundedBg("#E0F2FE", 18f) else null
+
+                  navOrdersLabel.setTextColor(Color.parseColor(if (tabIndex == 0) "#4F46E5" else "#6366F1"))
+                  navMapLabel.setTextColor(Color.parseColor(if (tabIndex == 3) "#059669" else "#10B981"))
+                  navSettingsLabel.setTextColor(Color.parseColor(if (tabIndex == 1) "#D97706" else "#F59E0B"))
+                  navLogsLabel.setTextColor(Color.parseColor(if (tabIndex == 2) "#0284C7" else "#38BDF8"))"""
+          assert old_switch_tab_colors in main_src, "old_switch_tab_colors not found"
+          main_src = main_src.replace(old_switch_tab_colors, new_switch_tab_colors, 1)
+
+          old_map_tab_open = 'if (tabIndex == 3 && ::mapWebView.isInitialized) {\n            mapWebView.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)\n        }'
+          new_map_tab_open = (
+              'if (tabIndex == 3 && ::mapWebView.isInitialized) {\n'
+              '            if (!chkFakeLoc.isChecked) {\n'
+              '                try {\n'
+              '                    val lm = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager\n'
+              '                    if (lm != null) {\n'
+              '                        for (prv in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.PASSIVE_PROVIDER)) {\n'
+              '                            @Suppress("MissingPermission")\n'
+              '                            val loc = try { lm.getLastKnownLocation(prv) } catch (_: Throwable) { null }\n'
+              '                            if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0) {\n'
+              '                                point1Lat = loc.latitude\n'
+              '                                point1Lng = loc.longitude\n'
+              '                                mapWebView.evaluateJavascript("if(window.setDriverPin) window.setDriverPin(" + loc.latitude + ", " + loc.longitude + ", 0, true);", null)\n'
+              '                                break\n'
+              '                            }\n'
+              '                        }\n'
+              '                    }\n'
+              '                } catch (_: Throwable) {}\n'
+              '            }\n'
+              '            mapWebView.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)\n'
+              '        }'
+          )
+          assert old_map_tab_open in main_src, "old_map_tab_open not found"
+          main_src = main_src.replace(old_map_tab_open, new_map_tab_open, 1)
+
+          # Fix #4 (Image 13): Replace Generate New ID & Copy ID with Paste IMEI & Force Stop Saned
+          old_aid_btns = """        val btnGen = Button(this).apply {
+                      text = tr("🎲 توليد معرف جديد", "🎲 Generate New ID")
+                      textSize = 14f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#4F46E5"))
+                      setPadding(20, 26, 20, 26)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(0, 0, 8, 0)
+                      }
+                      setOnClickListener {
+                          val newId = generateRandomAndroidId()
+                          edtAndroidId.setText(newId)
+                          chkAndroidId.isChecked = true
+                          SettingsStore.setSpoofAndroidId(this@MainActivity, true)
+                          SettingsStore.setSpoofedAndroidId(this@MainActivity, newId)
+                          Toast.makeText(
+                              this@MainActivity,
+                              tr("✅ تم توليد وتفعيل معرف جهاز جديد: $newId", "✅ Generated & enabled new Android ID: $newId"),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                      }
+                  }
+                  btnRow.addView(btnGen)
+
+                  val btnCopy = Button(this).apply {
+                      text = tr("📋 نسخ المعرف", "📋 Copy ID")
+                      textSize = 14f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#0284C7"))
+                      setPadding(20, 26, 20, 26)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(8, 0, 0, 0)
+                      }
+                      setOnClickListener {
+                          val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                          clip.setPrimaryClip(ClipData.newPlainText("Device ID", edtAndroidId.text.toString().trim()))
+                          Toast.makeText(
+                              this@MainActivity,
+                              tr("تم نسخ معرف الجهاز إلى الحافظة", "Android ID copied to clipboard"),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                      }
+                  }
+                  btnRow.addView(btnCopy)"""
+
+          new_aid_btns = """        val btnGen = Button(this).apply {
+                      text = tr("📋 لصق IMEI", "📋 Paste IMEI")
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#4F46E5"))
+                      setPadding(16, 26, 16, 26)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(0, 0, 8, 0)
+                      }
+                      setOnClickListener {
+                          val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                          val pasted = clip.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()?.trim() ?: ""
+                          if (pasted.isNotEmpty()) {
+                              edtAndroidId.setText(pasted)
+                              chkAndroidId.isChecked = true
+                              SettingsStore.setSpoofAndroidId(this@MainActivity, true)
+                              SettingsStore.setSpoofedAndroidId(this@MainActivity, pasted)
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("✅ تم لصق وتفعيل المعرف: " + pasted, "✅ Pasted & enabled IMEI: " + pasted),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          } else {
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("⚠️ الحافظة فارغة، يرجى نسخ IMEI أولاً", "⚠️ Clipboard is empty, please copy IMEI first"),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      }
+                  }
+                  btnRow.addView(btnGen)
+
+                  val btnCopy = Button(this).apply {
+                      text = tr("🛑 إيقاف إجباري لساند", "🛑 Force Stop Saned")
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.WHITE)
+                      setBackgroundColor(Color.parseColor("#DC2626"))
+                      setPadding(16, 26, 16, 26)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(8, 0, 0, 0)
+                      }
+                      setOnClickListener {
+                          saveAllSettings()
+                          try {
+                              sendBroadcast(Intent("dev.saned.assistant.ACTION_FORCE_STOP_SANED").apply {
+                                  setPackage("net.jahez.fleets")
+                                  addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
+                              })
+                              sendBroadcast(Intent("dev.saned.assistant.ACTION_FORCE_STOP_SANED"))
+                          } catch (_: Throwable) {}
+                          try {
+                              val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                              am.killBackgroundProcesses("net.jahez.fleets")
+                          } catch (_: Throwable) {}
+                          uiBgExecutor.execute {
+                              try {
+                                  Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop net.jahez.fleets")).waitFor()
+                              } catch (_: Throwable) {}
+                          }
+                          Toast.makeText(
+                              this@MainActivity,
+                              tr("🛑 تم إيقاف تطبيق ساند إجبارياً (Force Stop)", "🛑 Force stopped Saned successfully"),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                      }
+                  }
+                  btnRow.addView(btnCopy)"""
+          assert old_aid_btns in main_src, "old_aid_btns not found"
+          main_src = main_src.replace(old_aid_btns, new_aid_btns, 1)
+
+          # Fix #8 (Image 19) & Fix #2 (Image 10):
+          # Image 19: Convert chkFakeLoc checkbox into a centered small-to-medium toggle button (OFF by default) bound to original function
+          # Image 10: Replace the 3 complex button rows (modeRow, twoPtBox, layerRow) with a single Change Location toggle button (OFF by default)
+          old_chk_fakeloc = """        // Toggles Row (Pure Arabic or Pure English — NO mixed text!)
+                  chkFakeLoc = CheckBox(this).apply {
+                      text = tr("تفعيل وضع توصيل الطلب المباشر (DELIVER ORDER)", "Enable Direct Order Delivery (DELIVER ORDER)")
+                      isChecked = SettingsStore.isFakeLocation(this@MainActivity)
+                      textSize = 15f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 18, 12, 18)
+                      setTextColor(Color.parseColor("#0F172A"))
+                      setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFakeLocation(this@MainActivity, isChecked)
+                          if (!isChecked && isRouteSimRunning) {
+                              stopRouteSimulation()
+                          }
+                          updateRouteSimBannerUI()
+                      }
+                  }
+                  layout.addView(chkFakeLoc)"""
+
+          new_chk_fakeloc = """        // Image 19: Centered small-to-medium toggle button for Enable Direct Order Delivery (OFF by default)
+                  var syncDeliverAndChangeBtns: ((Boolean) -> Unit)? = null
+                  chkFakeLoc = CheckBox(this).apply {
+                      isChecked = SettingsStore.isFakeLocation(this@MainActivity)
+                      visibility = View.GONE
+                      setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFakeLocation(this@MainActivity, isChecked)
+                          if (!isChecked && isRouteSimRunning) {
+                              stopRouteSimulation()
+                          }
+                          syncDeliverAndChangeBtns?.invoke(isChecked)
+                          updateRouteSimBannerUI()
+                      }
+                  }
+                  layout.addView(chkFakeLoc)
+
+                  val deliverToggleWrap = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 4, 0, 8)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  }
+                  val btnDeliverOrderCenterToggle = TextView(this).apply {
+                      textSize = 12.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setTextColor(Color.WHITE)
+                      setPadding(36, 18, 36, 18)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                      setOnClickListener {
+                          val next = !chkFakeLoc.isChecked
+                          chkFakeLoc.isChecked = next
+                          if (next) {
+                              SettingsStore.pushLiveLocationStep(this@MainActivity, point1Lat, point1Lng, 0.0f, 0.0f, false)
+                          }
+                      }
+                  }
+                  deliverToggleWrap.addView(btnDeliverOrderCenterToggle)
+                  layout.addView(deliverToggleWrap)"""
+          assert old_chk_fakeloc in main_src, "old_chk_fakeloc not found"
+          main_src = main_src.replace(old_chk_fakeloc, new_chk_fakeloc, 1)
+
+          old_map_rows_add = """        modeRow.addView(btnModeTeleport)
+                  modeRow.addView(btnModePoint1)
+                  modeRow.addView(btnModePoint2)
+                  layout.addView(modeRow)"""
+          new_map_rows_add = """        modeRow.addView(btnModeTeleport)
+                  modeRow.addView(btnModePoint1)
+                  modeRow.addView(btnModePoint2)
+                  modeRow.visibility = View.GONE
+                  layout.addView(modeRow)"""
+          assert old_map_rows_add in main_src, "old_map_rows_add not found"
+          main_src = main_src.replace(old_map_rows_add, new_map_rows_add, 1)
+
+          old_twopt_add = """        twoPtBox.addView(twoPtBtnRow)
+                  layout.addView(twoPtBox)"""
+          new_twopt_add = """        twoPtBox.addView(twoPtBtnRow)
+                  twoPtBox.visibility = View.GONE
+                  layout.addView(twoPtBox)"""
+          assert old_twopt_add in main_src, "old_twopt_add not found"
+          main_src = main_src.replace(old_twopt_add, new_twopt_add, 1)
+
+          old_layer_add = """        layerRow.addView(btnLayerRoad)
+                  layerRow.addView(btnLayerSat)
+                  layerRow.addView(btnLayerTraffic)
+                  layerRow.addView(btnLoadOrderRoute)
+                  layout.addView(layerRow)"""
+          new_layer_add = """        layerRow.addView(btnLayerRoad)
+                  layerRow.addView(btnLayerSat)
+                  layerRow.addView(btnLayerTraffic)
+                  layerRow.addView(btnLoadOrderRoute)
+                  layerRow.visibility = View.GONE
+                  layout.addView(layerRow)
+
+                  // Image 10: Single "Change Location" toggle button (OFF by default, user-controlled ON/OFF)
+                  val changeLocWrap = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      setPadding(0, 4, 0, 10)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  }
+                  val btnChangeLocToggle = TextView(this).apply {
+                      textSize = 13.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      textAlignment = View.TEXT_ALIGNMENT_CENTER
+                      setTextColor(Color.WHITE)
+                      setPadding(42, 22, 42, 22)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                      setOnClickListener {
+                          val next = !chkFakeLoc.isChecked
+                          chkFakeLoc.isChecked = next
+                          if (next) {
+                              SettingsStore.pushLiveLocationStep(this@MainActivity, point1Lat, point1Lng, 0.0f, 0.0f, false)
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("📍 تم تفعيل تغيير الموقع (Change Location: ON)", "📍 Change Location enabled (ON)"),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          } else {
+                              SettingsStore.setFakeLocation(this@MainActivity, false)
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("⚪ تم إغلاق تغيير الموقع والعودة للموقع الحقيقي (OFF)", "⚪ Change Location disabled (OFF)"),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      }
+                  }
+                  changeLocWrap.addView(btnChangeLocToggle)
+                  layout.addView(changeLocWrap)
+
+                  syncDeliverAndChangeBtns = { active ->
+                      btnDeliverOrderCenterToggle.text = if (active) {
+                          tr("📦 توصيل الطلب المباشر (DELIVER ORDER) : مفعل ✅", "📦 Enable Direct Order Delivery : ON ✅")
+                      } else {
+                          tr("📦 توصيل الطلب المباشر (DELIVER ORDER) : مغلق ❌", "📦 Enable Direct Order Delivery : OFF ❌")
+                      }
+                      btnDeliverOrderCenterToggle.background = roundedBg(if (active) "#059669" else "#475569", 12f)
+
+                      btnChangeLocToggle.text = if (active) {
+                          tr("📍 تغيير الموقع (Change Location) : مفعل ✅", "📍 Change Location : ON ✅")
+                      } else {
+                          tr("📍 تغيير الموقع (Change Location) : مغلق ❌", "📍 Change Location : OFF ❌")
+                      }
+                      btnChangeLocToggle.background = roundedBg(if (active) "#2563EB" else "#475569", 12f)
+                  }
+                  syncDeliverAndChangeBtns.invoke(chkFakeLoc.isChecked)"""
+          assert old_layer_add in main_src, "old_layer_add not found"
+          main_src = main_src.replace(old_layer_add, new_layer_add, 1)
+
+          # In applyImmediateSpoofLocation, do NOT force chkFakeLoc.isChecked = true if the user has Change Location turned OFF!
+          old_apply_spoof = """        if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
+                      chkFakeLoc.isChecked = true
+                  }
+                  SettingsStore.pushLiveLocationStep(
+                      this,
+                      lat = lat,
+                      lng = lng,
+                      speedKmh = if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
+                      bearing = SettingsStore.getRouteSimBearing(this),
+                      simActive = isRouteSimRunning && !isRouteSimPaused
+                  )"""
+          new_apply_spoof = """        point1Lat = lat
+                  point1Lng = lng
+                  SettingsStore.setFakeLat(this, lat)
+                  SettingsStore.setFakeLng(this, lng)
+                  SettingsStore.setPoint1(this, lat, lng)
+                  if (::chkFakeLoc.isInitialized && chkFakeLoc.isChecked) {
+                      SettingsStore.pushLiveLocationStep(
+                          this,
+                          lat = lat,
+                          lng = lng,
+                          speedKmh = if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
+                          bearing = SettingsStore.getRouteSimBearing(this),
+                          simActive = isRouteSimRunning && !isRouteSimPaused
+                      )
+                  }"""
+          assert old_apply_spoof in main_src, "old_apply_spoof not found"
+          main_src = main_src.replace(old_apply_spoof, new_apply_spoof, 1)
+
+          # Fix #5 (Image 15): Replace car emoji marker with Google Maps small sky-blue circular dot & show current location
+          old_car_css = """                    .car-marker-icon {
+                                  display: flex; align-items: center; justify-content: center;
+                                  width: 36px; height: 36px; border-radius: 50%;
+                                  background: #1a73e8; color: #fff; font-size: 19px;
+                                  border: 3px solid #ffffff; box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+                              }"""
+          new_car_css = """                    .car-marker-icon {
+                                  width: 18px; height: 18px; border-radius: 50%;
+                                  background: #0ea5e9;
+                                  border: 3px solid #ffffff;
+                                  box-shadow: 0 0 0 7px rgba(14, 165, 233, 0.28), 0 2px 6px rgba(0,0,0,0.35);
+                                  box-sizing: border-box;
+                              }"""
+          assert old_car_css in main_src, "old_car_css not found"
+          main_src = main_src.replace(old_car_css, new_car_css, 1)
+
+          old_driver_icon = """                    var driverIcon = L.divIcon({
+                                  className: '',
+                                  html: '<div class="car-marker-icon" id="driverCarBox">🚗</div>',
+                                  iconSize: [36, 36],
+                                  iconAnchor: [18, 18]
+                              });"""
+          new_driver_icon = """                    var driverIcon = L.divIcon({
+                                  className: '',
+                                  html: '<div class="car-marker-icon" id="driverCarBox"></div>',
+                                  iconSize: [18, 18],
+                                  iconAnchor: [9, 9]
+                              });"""
+          assert old_driver_icon in main_src, "old_driver_icon not found"
+          main_src = main_src.replace(old_driver_icon, new_driver_icon, 1)
+
+          # Fix #6 & #7 (Images 16 & 17): Fix horizontal alignment, explicit dark text color, and bold typeface on all switches & checkboxes
+          old_sw_master = """        swMaster = Switch(this).apply {
+                      text = tr("تفعيل جميع ميزات J-Driver (تشغيل / إيقاف شامل)", "Enable All J-Driver Functions (Master ON / OFF)")
+                      textSize = 15.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 22, 12, 22)"""
+          new_sw_master = """        swMaster = Switch(this).apply {
+                      text = tr("تفعيل جميع ميزات J-Driver (تشغيل / إيقاف شامل)", "Enable All J-Driver Functions (Master ON / OFF)")
+                      textSize = 15f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(12, 22, 12, 22)"""
+          assert old_sw_master in main_src, "old_sw_master not found"
+          main_src = main_src.replace(old_sw_master, new_sw_master, 1)
+
+          old_chk_aid = """        chkAndroidId = CheckBox(this).apply {
+                      text = tr("تفعيل تغيير معرف الجهاز (Change Android ID)", "Enable Custom Android ID")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 18, 12, 18)"""
+          new_chk_aid = """        chkAndroidId = CheckBox(this).apply {
+                      text = tr("تفعيل تغيير معرف الجهاز (Change Android ID)", "Enable Custom Android ID")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(12, 18, 12, 18)"""
+          assert old_chk_aid in main_src, "old_chk_aid not found"
+          main_src = main_src.replace(old_chk_aid, new_chk_aid, 1)
+
+          old_filter_chks = """        chkAutoAccept = CheckBox(this).apply {
+                      text = tr("🚀 تفعيل القبول التلقائي الفوري للطلبات المطابقة", "🚀 Enable Instant Auto-Accept for Matching Orders")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isAutoAccept(this@MainActivity)
+                  }
+                  layout.addView(chkAutoAccept)
+
+                  chkAutoReject = CheckBox(this).apply {
+                      text = tr("🛡️ تفعيل الرفض التلقائي للطلبات خارج حدود المسافة والسعر", "🛡️ Enable Instant Auto-Reject for Orders Outside Limits")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isAutoReject(this@MainActivity)
+                  }
+                  layout.addView(chkAutoReject)
+
+                  // Dry-Run testing mode is permanently disabled and hidden for final production driver release
+                  chkDryRun = CheckBox(this).apply {
+                      isChecked = false
+                      visibility = View.GONE
+                  }
+                  layout.addView(chkDryRun)
+
+                  chkStayInBackground = CheckBox(this).apply {
+                      text = tr("📱 البقاء في الخلفية عند قبول الطلب تلقائياً", "📱 Keep App in Background When Orders Are Auto-Accepted")
+                      textSize = 14f
+                      setPadding(12, 16, 12, 16)
+                      isChecked = SettingsStore.isStayInBackground(this@MainActivity)
+                  }
+                  layout.addView(chkStayInBackground)
+
+                  chkSilenceAlertTone = CheckBox(this).apply {
+                      text = tr("🔕 كتم صوت رنين الطلب المزعج عند القبول التلقائي", "🔕 Silence Loud Order Alert Tone on Auto-Accept")
+                      textSize = 14f
+                      setPadding(12, 16, 12, 16)
+                      isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
+                  }
+                  layout.addView(chkSilenceAlertTone)
+
+                  chkSoundAlert = CheckBox(this).apply {
+                      text = tr("🔔 تشغيل نغمة خفيفة عند قبول الطلب", "🔔 Play Short Beep When an Order Is Accepted")
+                      textSize = 14f
+                      setPadding(12, 16, 12, 16)
+                      isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+                  }
+                  layout.addView(chkSoundAlert)
+
+                  // Strict version check hidden in production UI
+                  chkStrictVersionCheck = CheckBox(this).apply {
+                      isChecked = false
+                      visibility = View.GONE
+                  }
+                  layout.addView(chkStrictVersionCheck)
+
+                  chkFloatingOverlay = CheckBox(this).apply {
+                      text = tr("⚡ إظهار الأيقونة الطائفة فوق شاشة ساند للتحكم السريع", "⚡ Show Floating Quick Control Icon Over Saned Screen")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isFloatingOverlayEnabled(this@MainActivity)
+                      setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFloatingOverlayEnabled(this@MainActivity, isChecked)
+                      }
+                  }"""
+
+          new_filter_chks = """        chkAutoAccept = CheckBox(this).apply {
+                      text = tr("🚀 تفعيل القبول التلقائي الفوري للطلبات المطابقة", "🚀 Enable Instant Auto-Accept for Matching Orders")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isAutoAccept(this@MainActivity)
+                  }
+                  layout.addView(chkAutoAccept)
+
+                  chkAutoReject = CheckBox(this).apply {
+                      text = tr("🛡️ تفعيل الرفض التلقائي للطلبات خارج حدود المسافة والسعر", "🛡️ Enable Instant Auto-Reject for Orders Outside Limits")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isAutoReject(this@MainActivity)
+                  }
+                  layout.addView(chkAutoReject)
+
+                  // Dry-Run testing mode is permanently disabled and hidden for final production driver release
+                  chkDryRun = CheckBox(this).apply {
+                      isChecked = false
+                      visibility = View.GONE
+                  }
+                  layout.addView(chkDryRun)
+
+                  chkStayInBackground = CheckBox(this).apply {
+                      text = tr("📱 البقاء في الخلفية عند قبول الطلب تلقائياً", "📱 Keep App in Background When Orders Are Auto-Accepted")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isStayInBackground(this@MainActivity)
+                  }
+                  layout.addView(chkStayInBackground)
+
+                  chkSilenceAlertTone = CheckBox(this).apply {
+                      text = tr("🔕 كتم صوت رنين الطلب المزعج عند القبول التلقائي", "🔕 Silence Loud Order Alert Tone on Auto-Accept")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isSilenceAlertTone(this@MainActivity)
+                  }
+                  layout.addView(chkSilenceAlertTone)
+
+                  chkSoundAlert = CheckBox(this).apply {
+                      text = tr("🔔 تشغيل نغمة خفيفة عند قبول الطلب", "🔔 Play Short Beep When an Order Is Accepted")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isSoundEnabled(this@MainActivity)
+                  }
+                  layout.addView(chkSoundAlert)
+
+                  // Strict version check hidden in production UI
+                  chkStrictVersionCheck = CheckBox(this).apply {
+                      isChecked = false
+                      visibility = View.GONE
+                  }
+                  layout.addView(chkStrictVersionCheck)
+
+                  chkFloatingOverlay = CheckBox(this).apply {
+                      text = tr("⚡ إظهار الأيقونة الطائفة فوق شاشة ساند للتحكم السريع", "⚡ Show Floating Quick Control Icon Over Saned Screen")
+                      textSize = 14.5f
+                      typeface = Typeface.DEFAULT_BOLD
+                      setTextColor(Color.parseColor("#0F172A"))
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      setPadding(12, 18, 12, 18)
+                      isChecked = SettingsStore.isFloatingOverlayEnabled(this@MainActivity)
+                      setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFloatingOverlayEnabled(this@MainActivity, isChecked)
+                      }
+                  }"""
+          assert old_filter_chks in main_src, "old_filter_chks not found"
+          main_src = main_src.replace(old_filter_chks, new_filter_chks, 1)
+
+          open(main_path, "w", encoding="utf-8").write(main_src)
+
+          # Fix #3 (Image 11) & Fix #4 (Force Stop Saned receiver) in OrderInterceptor.kt
+          order_src = open(order_path, "r", encoding="utf-8").read()
+          old_deliver_box = """            val tvDeliverHdr = TextView(activity).apply {
+                          text = if (isAr) "📦 DELIVER ORDER (توصيل الطلب)" else "📦 DELIVER ORDER"
+                          textSize = 11f
+                          typeface = android.graphics.Typeface.DEFAULT_BOLD
+                          setTextColor(android.graphics.Color.parseColor("#93C5FD"))
+                          setPadding(0, 0, 0, dp(4f))
+                      }
+                      deliverBox.addView(tvDeliverHdr)
+
+                      deliverBox.addView(makeToggleBtn(
+                          labelProvider = {
+                              val mockOn = LocationEngine.isFakeLocationEnabled
+                              if (isAr) {
+                                  "تفعيل DELIVER ORDER : " + (if (mockOn) "مفعل ✅" else "متوقف ❌")
+                              } else {
+                                  "Enable DELIVER ORDER : " + (if (mockOn) "ON ✅" else "OFF ❌")
+                              }
+                          },
+                          stateProvider = { LocationEngine.isFakeLocationEnabled },
+                          activeColor = "#2563EB"
+                      ) {
+                          val next = !LocationEngine.isFakeLocationEnabled
+                          LocationEngine.isFakeLocationEnabled = next
+                          SettingsStore.setFakeLocation(activity, next)
+                          pushQuickSettingsUpdateToProvider(activity)
+                      })
+
+                      deliverBox.addView(makeToggleBtn(
+                          labelProvider = {
+                              val simOn = LocationEngine.isTripSimulationActive
+                              if (isAr) {
+                                  "تشغيل حركة DELIVER ORDER : " + (if (simOn) "يعمل 🚗💨" else "متوقف ⏹️")
+                              } else {
+                                  "Run DELIVER ORDER Movement : " + (if (simOn) "ON ✅" else "OFF ❌")
+                              }
+                          },
+                          stateProvider = { LocationEngine.isTripSimulationActive },
+                          activeColor = "#0284C7"
+                      ) {
+                          val next = !LocationEngine.isTripSimulationActive
+                          if (next && !LocationEngine.isFakeLocationEnabled) {
+                              LocationEngine.isFakeLocationEnabled = true
+                              SettingsStore.setFakeLocation(activity, true)
+                          }
+                          LocationEngine.isTripSimulationActive = next
+                          SettingsStore.setRouteSimActive(activity, next)
+                          pushQuickSettingsUpdateToProvider(activity)
+                      })"""
+
+          new_deliver_box = """            deliverBox.addView(makeToggleBtn(
+                          labelProvider = {
+                              val mockOn = LocationEngine.isFakeLocationEnabled
+                              if (isAr) {
+                                  "📍 GPS : " + (if (mockOn) "مفعل ✅" else "متوقف ❌")
+                              } else {
+                                  "📍 GPS : " + (if (mockOn) "ON ✅" else "OFF ❌")
+                              }
+                          },
+                          stateProvider = { LocationEngine.isFakeLocationEnabled },
+                          activeColor = "#2563EB"
+                      ) {
+                          val next = !LocationEngine.isFakeLocationEnabled
+                          LocationEngine.isFakeLocationEnabled = next
+                          if (!next) {
+                              LocationEngine.isTripSimulationActive = false
+                              SettingsStore.setRouteSimActive(activity, false)
+                          }
+                          SettingsStore.setFakeLocation(activity, next)
+                          pushQuickSettingsUpdateToProvider(activity)
+                      })"""
+          assert old_deliver_box in order_src, "old_deliver_box not found"
+          order_src = order_src.replace(old_deliver_box, new_deliver_box, 1)
+
+          # Wire ACTION_FORCE_STOP_SANED inside OrderInterceptor.kt so Force Stop Saned works even without root!
+          old_rcv_when = '"dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {'
+          new_rcv_when = (
+              '"dev.saned.assistant.ACTION_FORCE_STOP_SANED" -> {\n'
+              '                    try { currentActivity?.finishAndRemoveTask() } catch (_: Throwable) {}\n'
+              '                    try { currentActivity?.finishAffinity() } catch (_: Throwable) {}\n'
+              '                    android.os.Process.killProcess(android.os.Process.myPid())\n'
+              '                    System.exit(0)\n'
+              '                }\n'
+              '                "dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {'
+          )
+          assert old_rcv_when in order_src, "old_rcv_when not found"
+          order_src = order_src.replace(old_rcv_when, new_rcv_when, 1)
+
+          old_filter_add = 'addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")'
+          new_filter_add = 'addAction("dev.saned.assistant.ACTION_FORCE_STOP_SANED")\n      addAction("dev.saned.assistant.ACTION_CLEAR_TOKEN")'
+          assert old_filter_add in order_src, "old_filter_add not found"
+          order_src = order_src.replace(old_filter_add, new_filter_add, 1)
+
+          open(order_path, "w", encoding="utf-8").write(order_src)
+
+
           print("Immortal One-Day-Trial Vault & Anti-Clock-Manipulation Shield applied successfully!")
           PYEOF
 
