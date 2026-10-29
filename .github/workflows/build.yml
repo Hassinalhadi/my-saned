@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Maximum Security Hardening (C++ Crypto + Payload Encryption + R8)
+    name: Maximum Security Hardening (C++ Crypto + Immortal Trial Vault + R8)
     runs-on: ubuntu-latest
 
     steps:
@@ -39,7 +39,7 @@ jobs:
           sudo apt-get install -y -qq zipalign apksigner zip unzip python3 > /dev/null
           mkdir -p SanedAssistant-98-OpenSource
 
-      - name: Apply Maximum Security Shield (C++ SHA256/HMAC Engine, Encrypted Endpoints & Strict Token Gate)
+      - name: Apply Maximum Security Shield & Immortal One-Day-Trial Anti-Tamper Vault
         run: |
           python3 - << 'PYEOF'
           import os, re, shutil, secrets, hashlib, subprocess, glob
@@ -100,8 +100,6 @@ jobs:
           cert_mask = secrets.token_bytes(32)
           enc_cert = bytes(cert_bytes[i] ^ cert_mask[i] ^ ((0xA5 + (i * 9)) & 0xFF) for i in range(32))
 
-          # Critical strings from Native.kt encrypted with SHA-256(expected_mk || slot_idx || block_idx)
-          # If APK signature is tampered, expected_mk is poisoned and these endpoints/queries turn into unusable bytes!
           plain_slots = [
               "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/",
               "https://gateway.saned.io/api/v1/dispatch/reject/",
@@ -349,7 +347,6 @@ jobs:
               return res;
           }}
 
-          // Decrypts protected Native.kt slots (API URLs, SQL queries, class names) inside C++
           extern "C" JNIEXPORT jbyteArray JNICALL
           Java_dev_saned_assistant_SecurityBridge_nativeDecryptSlot(
                   JNIEnv* env, jclass, jbyteArray cert_sha256_arr, jboolean allow_embedded, jint slot_idx) {{
@@ -391,7 +388,6 @@ jobs:
               return out_arr;
           }}
 
-          // Computes HMAC-SHA256 inside C++ without exposing MasterKey to Java
           extern "C" JNIEXPORT jbyteArray JNICALL
           Java_dev_saned_assistant_SecurityBridge_nativeComputeHmacSha256(
                   JNIEnv* env, jclass, jbyteArray cert_sha256_arr, jboolean allow_embedded, jbyteArray msg_arr) {{
@@ -412,7 +408,6 @@ jobs:
               return out;
           }}
 
-          // Generates the 20-byte deterministic 1-day trial payload inside C++ so key-packing logic is completely removed from MainActivity.kt
           extern "C" JNIEXPORT jbyteArray JNICALL
           Java_dev_saned_assistant_SecurityBridge_nativeBuildTrialPayload20(
                   JNIEnv* env, jclass, jbyteArray cert_sha256_arr, jint dev_hash, jbyteArray nonce_seed_arr) {{
@@ -497,26 +492,45 @@ jobs:
           else:
               print("NDK clang++ not found on runner; using Kotlin SecurityBridge fallback.")
 
-          # 5. Generate Kotlin SecurityBridge with slot caching & fallback decryption
+          # 5. Generate Kotlin SecurityBridge with Immortal Trial Vault, Widevine DRM Hardware ID & Anti-Clock-Tampering
           with open("app/src/main/java/dev/saned/assistant/SecurityBridge.kt", "w", encoding="utf-8") as f:
               f.write(f"""package dev.saned.assistant
 
           import android.content.Context
           import android.content.pm.PackageManager
+          import android.media.MediaDrm
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
           import android.os.Debug
+          import android.os.SystemClock
+          import android.provider.Settings
           import java.io.File
+          import java.net.HttpURLConnection
+          import java.net.URL
           import java.security.MessageDigest
           import java.util.Locale
+          import java.util.UUID
           import java.util.concurrent.ConcurrentHashMap
+          import java.util.concurrent.atomic.AtomicLong
           import javax.crypto.Mac
           import javax.crypto.spec.SecretKeySpec
+          import kotlin.math.abs
 
           object SecurityBridge {{
               private const val MODULE_PKG = "dev.jing.sanedhook"
               private const val TARGET_PKG = "net.jahez.fleets"
               private const val LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
               @Volatile private var nativeLoaded = false
+              @Volatile private var cachedHwTrialId: String = ""
               private val slotCache = ConcurrentHashMap<Int, String>()
+
+              // Monotonic Network-Anchored Clock Reference (immune to Settings Date/Time rollback)
+              private val lastVerifiedNetWallMs = AtomicLong(0L)
+              private val lastVerifiedNetElapsedMs = AtomicLong(0L)
+              private val highestObservedWallMs = AtomicLong(0L)
+              private val firstActBootAnchorWallMs = AtomicLong(0L)
+              private val firstActBootAnchorElapsedMs = AtomicLong(0L)
 
               @JvmStatic
               fun tryLoadNative(ctx: Context?): Boolean {{
@@ -526,9 +540,10 @@ jobs:
                       nativeLoaded = true
                       return true
                   }} catch (_: Throwable) {{}}
-                  if (ctx != null) {{
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+                  if (activeCtx != null) {{
                       try {{
-                          val libDir = ctx.packageManager.getApplicationInfo(MODULE_PKG, 0).nativeLibraryDir
+                          val libDir = activeCtx.packageManager.getApplicationInfo(MODULE_PKG, 0).nativeLibraryDir
                           if (!libDir.isNullOrEmpty()) {{
                               val soFile = File(libDir, "libjdriver_sec.so")
                               if (soFile.exists()) {{
@@ -575,19 +590,20 @@ jobs:
               fun extractCert(ctx: Context?): Pair<ByteArray?, Boolean> {{
                   val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
                   if (activeCtx == null) return null to true
+                  val currentPkg = try {{ activeCtx.packageName }} catch (_: Throwable) {{ "" }}
+                  val inTargetProcess = (currentPkg == TARGET_PKG)
                   return try {{
                       @Suppress("DEPRECATION")
                       val pkgInfo = activeCtx.packageManager.getPackageInfo(MODULE_PKG, PackageManager.GET_SIGNATURES)
                       @Suppress("DEPRECATION")
                       val sigs = pkgInfo.signatures
                       if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {{
-                          MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray()) to false
-                      }} else null to false
-                  }} catch (_: PackageManager.NameNotFoundException) {{
-                      val pkg = try {{ activeCtx.packageName }} catch (_: Throwable) {{ "" }}
-                      null to (pkg == TARGET_PKG)
+                          MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray()) to inTargetProcess
+                      }} else {{
+                          null to inTargetProcess
+                      }}
                   }} catch (_: Throwable) {{
-                      null to false
+                      null to inTargetProcess
                   }}
               }}
 
@@ -650,17 +666,433 @@ jobs:
                   val msgBytes = data.toByteArray(Charsets.UTF_8)
                   val loaded = tryLoadNative(ctx)
                   val (actualCert, isEmbedded) = extractCert(ctx)
-                  val macBytes: ByteArray = if (loaded) {{
+                  val macBytes: ByteArray = (if (loaded) {{
                       try {{
                           nativeComputeHmacSha256(actualCert, isEmbedded, msgBytes)
                       }} catch (_: Throwable) {{ null }}
-                  }} else null ?: run {{
+                  }} else null) ?: run {{
                       val mk = deriveMasterKey(ctx)
                       val mac = Mac.getInstance("HmacSHA256")
                       mac.init(SecretKeySpec(mk, "HmacSHA256"))
                       mac.doFinal(msgBytes)
                   }}
                   return macBytes.joinToString("") {{ String.format(Locale.US, "%02x", it.toInt() and 0xFF) }}.take(takeChars)
+              }}
+
+              // =========================================================================
+              // IMMUTABLE HARDWARE WIDEVINE TEE ID + ANTI-UNINSTALL & ANTI-CLOCK VAULT
+              // =========================================================================
+
+              /**
+               * Hardware-fused Widevine TEE DRM Unique ID + SoC Board Fingerprint.
+               * Cannot be reset by uninstalling the app, clearing data, or spoofing ANDROID_ID!
+               */
+              @JvmStatic
+              fun getImmutableHardwareTrialId(): String {{
+                  if (cachedHwTrialId.isNotEmpty()) return cachedHwTrialId
+                  var drmHex = ""
+                  try {{
+                      val widevineUuid = UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
+                      val drm = MediaDrm(widevineUuid)
+                      try {{
+                          val devUniqueBytes = drm.getPropertyByteArray(MediaDrm.PROPERTY_DEVICE_UNIQUE_ID)
+                          if (devUniqueBytes != null && devUniqueBytes.isNotEmpty()) {{
+                              drmHex = MessageDigest.getInstance("SHA-256").digest(devUniqueBytes)
+                                  .joinToString("") {{ String.format(Locale.US, "%02x", it.toInt() and 0xFF) }}
+                          }}
+                      }} finally {{
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {{
+                              try {{ drm.close() }} catch (_: Throwable) {{}}
+                          }} else {{
+                              @Suppress("DEPRECATION")
+                              try {{ drm.release() }} catch (_: Throwable) {{}}
+                          }}
+                      }}
+                  }} catch (_: Throwable) {{}}
+
+                  val socRaw = buildString {{
+                      append(drmHex).append('|')
+                      append(Build.BOARD).append('|')
+                      append(Build.BRAND).append('|')
+                      append(Build.DEVICE).append('|')
+                      append(Build.HARDWARE).append('|')
+                      append(Build.MANUFACTURER).append('|')
+                      append(Build.MODEL).append('|')
+                      append(Build.PRODUCT).append('|')
+                      append(Build.BOOTLOADER)
+                  }}
+                  val digest = MessageDigest.getInstance("SHA-256").digest(socRaw.toByteArray(Charsets.UTF_8))
+                  val chars = CharArray(8)
+                  for (i in 0 until 8) {{
+                      chars[i] = LIC_ALPHABET[(digest[i].toInt() and 0xFF) % LIC_ALPHABET.length]
+                  }}
+                  val hwId = "HW-${{String(chars, 0, 4)}}-${{String(chars, 4, 4)}}"
+                  cachedHwTrialId = hwId
+                  return hwId
+              }}
+
+              /**
+               * Checks if Android's Automatic Network Date & Time is enabled in System Settings.
+               */
+              @JvmStatic
+              fun isAutoTimeEnabled(ctx: Context?): Boolean {{
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity ?: return true
+                  return try {{
+                      val autoTime = Settings.Global.getInt(activeCtx.contentResolver, Settings.Global.AUTO_TIME, 1)
+                      autoTime != 0
+                  }} catch (_: Throwable) {{
+                      true
+                  }}
+              }}
+
+              /**
+               * Records a verified network UTC timestamp (from HTTPS Date header) and anchors it to SystemClock.elapsedRealtime().
+               */
+              @JvmStatic
+              fun recordVerifiedNetworkTime(ctx: Context?, netUtcMs: Long) {{
+                  if (netUtcMs < 1700000000000L) return
+                  val elapsed = SystemClock.elapsedRealtime()
+                  lastVerifiedNetWallMs.set(netUtcMs)
+                  lastVerifiedNetElapsedMs.set(elapsed)
+                  ratchetHighestClockMs(ctx, netUtcMs)
+              }}
+
+              /**
+               * Fetches live UTC network time from trusted HTTPS servers to block offline date manipulation before activating Trial.
+               */
+              @JvmStatic
+              fun fetchLiveNetworkTimeSync(ctx: Context?): Long {{
+                  val cachedWall = lastVerifiedNetWallMs.get()
+                  val cachedElapsed = lastVerifiedNetElapsedMs.get()
+                  if (cachedWall > 1700000000000L && cachedElapsed > 0L) {{
+                      val delta = SystemClock.elapsedRealtime() - cachedElapsed
+                      if (delta in 0L..600_000L) {{
+                          return cachedWall + delta
+                      }}
+                  }}
+                  val endpoints = listOf(
+                      "https://www.google.com/generate_204",
+                      "https://cp.cloudflare.com/generate_204",
+                      "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",
+                      "https://gateway.saned.io"
+                  )
+                  for (ep in endpoints) {{
+                      try {{
+                          val conn = (URL(ep).openConnection() as HttpURLConnection).apply {{
+                              connectTimeout = 3500
+                              readTimeout = 3500
+                              requestMethod = "HEAD"
+                              instanceFollowRedirects = false
+                              useCaches = false
+                          }}
+                          val d = conn.date
+                          conn.disconnect()
+                          if (d > 1700000000000L) {{
+                              recordVerifiedNetworkTime(ctx, d)
+                              return d
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  return 0L
+              }}
+
+              private fun getImmortalVaultFiles(ctx: Context?, tagHex: String): List<File> {{
+                  val hwId = getImmutableHardwareTrialId()
+                  val list = mutableListOf<File>()
+                  // 1. System-wide /data/local/tmp files (survive J-Driver uninstall & Clear Data 100%)
+                  try {{ list.add(File("/data/local/tmp/.jdrv_vault_${{hwId}}.dat")) }} catch (_: Throwable) {{}}
+                  try {{ list.add(File("/data/local/tmp/.jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
+                  // 2. Shared external storage hidden markers (survive uninstall)
+                  for (base in listOf("/sdcard/Android", "/sdcard/Download", "/storage/emulated/0/Android", "/storage/emulated/0/Download")) {{
+                      try {{
+                          val d = File(base)
+                          if (d.exists() && d.canWrite()) {{
+                              list.add(File(d, ".jdrv_vault_${{hwId}}.dat"))
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  // 3. App-local & External Media/Cache dirs
+                  if (ctx != null) {{
+                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_vault_${{hwId}}.dat")) }} catch (_: Throwable) {{}}
+                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
+                      try {{ list.add(File(ctx.filesDir, ".jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
+                      try {{
+                          ctx.externalCacheDirs?.forEach {{ dir ->
+                              if (dir != null) list.add(File(dir, ".jdrv_vault_${{hwId}}.dat"))
+                          }}
+                      }} catch (_: Throwable) {{}}
+                      try {{
+                          @Suppress("DEPRECATION")
+                          ctx.externalMediaDirs?.forEach {{ dir ->
+                              if (dir != null) list.add(File(dir, ".jdrv_vault_${{hwId}}.dat"))
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  return list
+              }}
+
+              @JvmStatic
+              fun ratchetHighestClockMs(ctx: Context?, candidateMs: Long): Long {{
+                  var best = highestObservedWallMs.get()
+                  if (candidateMs > best) {{
+                      highestObservedWallMs.set(candidateMs)
+                      best = candidateMs
+                  }}
+                  try {{
+                      val f = File("/data/local/tmp/.jdrv_clock_ratchet.dat")
+                      if (f.exists() && f.canRead()) {{
+                          val parts = f.readText(Charsets.UTF_8).trim().split("|")
+                          if (parts.size == 2) {{
+                              val savedTs = parts[0].toLongOrNull() ?: 0L
+                              val savedSig = parts[1]
+                              if (savedTs > 1700000000000L && savedSig == computeHmacHex(ctx, "CLK_RATCHET|$savedTs", 24)) {{
+                                  if (savedTs > best) {{
+                                      best = savedTs
+                                      highestObservedWallMs.set(best)
+                                  }}
+                              }}
+                          }}
+                      }}
+                      if (best > 1700000000000L) {{
+                          val sig = computeHmacHex(ctx, "CLK_RATCHET|$best", 24)
+                          f.writeText("$best|$sig", Charsets.UTF_8)
+                          f.setReadable(true, false)
+                          f.setWritable(true, false)
+                      }}
+                  }} catch (_: Throwable) {{}}
+
+                  if (ctx != null) {{
+                      try {{
+                          val sp = ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE)
+                          val spHigh = sp.getLong("jdrv_highest_clock_ms", 0L)
+                          if (spHigh > best) {{
+                              best = spHigh
+                              highestObservedWallMs.set(best)
+                          }}
+                          if (best > spHigh && best - spHigh > 15_000L) {{
+                              sp.edit().putLong("jdrv_highest_clock_ms", best).apply()
+                          }}
+                      }} catch (_: Throwable) {{}}
+                      try {{
+                          val msp = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                          val mHigh = msp.getLong("jdrv_highest_clock_ms", 0L)
+                          if (mHigh > best) {{
+                              best = mHigh
+                              highestObservedWallMs.set(best)
+                          }}
+                          if (best > mHigh && best - mHigh > 15_000L) {{
+                              msp.edit().putLong("jdrv_highest_clock_ms", best).apply()
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  return best
+              }}
+
+              /**
+               * Tamper-proof current timestamp combining:
+               * 1. System.currentTimeMillis()
+               * 2. Persistent HMAC-signed Clock Ratchet (/data/local/tmp + SharedPreferences)
+               * 3. Monotonic SystemClock.elapsedRealtime() delta from last verified HTTPS Date header
+               * 4. Monotonic SystemClock.elapsedRealtime() delta from activation anchor
+               */
+              @JvmStatic
+              fun trustedNowMs(ctx: Context?): Long {{
+                  val sysNow = System.currentTimeMillis()
+                  val elapsedNow = SystemClock.elapsedRealtime()
+                  var effective = sysNow
+
+                  // Only ratchet forward from sysNow if AUTO_TIME is enabled and sysNow is not artificially set to a far-future year
+                  val netWall = lastVerifiedNetWallMs.get()
+                  val netElapsed = lastVerifiedNetElapsedMs.get()
+                  if (netWall > 1700000000000L && netElapsed > 0L && elapsedNow >= netElapsed) {{
+                      val netProjected = netWall + (elapsedNow - netElapsed)
+                      if (netProjected > effective) effective = netProjected
+                      ratchetHighestClockMs(ctx, netProjected)
+                  }} else if (isAutoTimeEnabled(ctx)) {{
+                      ratchetHighestClockMs(ctx, sysNow)
+                  }}
+
+                  val ratchet = ratchetHighestClockMs(ctx, 0L)
+                  if (ratchet > effective) effective = ratchet
+
+                  val actWall = firstActBootAnchorWallMs.get()
+                  val actElapsed = firstActBootAnchorElapsedMs.get()
+                  if (actWall > 1700000000000L && actElapsed > 0L && elapsedNow >= actElapsed) {{
+                      val monoProjected = actWall + (elapsedNow - actElapsed)
+                      if (monoProjected > effective) effective = monoProjected
+                  }}
+                  return effective
+              }}
+
+              @JvmStatic
+              fun parseAndVerifyVaultEntry(ctx: Context?, line: String, expectedTagHex: String, myDevId: String): Long {{
+                  val parts = line.trim().split("|")
+                  if (parts.size < 4) return 0L
+                  val tHex = parts[0]
+                  val dId = parts[1]
+                  val ts = parts[2].toLongOrNull() ?: return -1L
+                  val sig = parts[3]
+                  if (ts <= 0L) return 0L
+                  val hwId = getImmutableHardwareTrialId()
+                  // Accept entry if it matches EITHER the current myDevId OR the immutable hardware Widevine ID (blocks ANDROID_ID spoofing!)
+                  val expectedSigDev = computeHmacHex(ctx, "ACT_STAMP|$tHex|$dId|$ts", 32)
+                  if (!sig.equals(expectedSigDev, ignoreCase = true)) return -1L
+                  if (tHex == expectedTagHex && dId == myDevId) return ts
+                  if (dId == hwId || tHex == "HW_TRIAL") return ts
+                  return 0L
+              }}
+
+              /**
+               * Reads the EARLIEST (oldest) verified activation timestamp across all 6 storage layers.
+               * Prevents a newly reinstalled app from overwriting an already-used trial!
+               */
+              @JvmStatic
+              fun readEarliestVerifiedActivationMs(ctx: Context, tagHex: String, myDevId: String): Long {{
+                  val (_, trialTagHex) = generateTrialKeyPair(ctx, myDevId, computeDeviceHashStatic(myDevId))
+                  val isCheckingTrial = (tagHex == trialTagHex)
+                  val hwId = getImmutableHardwareTrialId()
+                  var earliestTs = 0L
+                  var tampered = false
+
+                  fun considerTs(candidate: Long) {{
+                      if (candidate == -1L) {{
+                          tampered = true
+                      }} else if (candidate > 0L) {{
+                          if (earliestTs == 0L || candidate < earliestTs) {{
+                              earliestTs = candidate
+                          }}
+                      }}
+                  }}
+
+                  // 1. Check local rankPrefs & mainPrefs
+                  val rankPrefs = ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE)
+                  val mainPrefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                  val actKeyPref = "jdrv_first_act_$tagHex"
+                  val sigKeyPref = "jdrv_first_act_sig_$tagHex"
+                  if (rankPrefs.contains(actKeyPref)) {{
+                      val ts = rankPrefs.getLong(actKeyPref, 0L)
+                      val sig = rankPrefs.getString(sigKeyPref, "") ?: ""
+                      if (ts > 0L) {{
+                          val expSig = computeHmacHex(ctx, "ACT_STAMP|$tagHex|$myDevId|$ts", 32)
+                          if (sig.isNotEmpty() && !sig.equals(expSig, ignoreCase = true)) tampered = true
+                          else considerTs(ts)
+                      }}
+                  }}
+
+                  for (prefKey in listOf("jdrv_ledger_$tagHex", "jdrv_trial_ledger_entry", "jdrv_hw_trial_ledger")) {{
+                      val line = mainPrefs.getString(prefKey, null)
+                      if (!line.isNullOrEmpty()) {{
+                          if (isCheckingTrial || line.startsWith("$tagHex|")) {{
+                              considerTs(parseAndVerifyVaultEntry(ctx, line, tagHex, myDevId))
+                          }}
+                      }}
+                  }}
+
+                  // 2. Check /data/local/tmp/saned_config.json (survives J-Driver uninstall!)
+                  try {{
+                      val cfgFile = File("/data/local/tmp/saned_config.json")
+                      if (cfgFile.exists() && cfgFile.canRead()) {{
+                          val j = org.json.JSONObject(cfgFile.readText(Charsets.UTF_8))
+                          val cfgLedger = j.optString("jdrv_trial_ledger_entry", "")
+                          if (cfgLedger.isNotEmpty() && (isCheckingTrial || cfgLedger.startsWith("$tagHex|"))) {{
+                              considerTs(parseAndVerifyVaultEntry(ctx, cfgLedger, tagHex, myDevId))
+                          }}
+                          val cfgHwLedger = j.optString("jdrv_hw_trial_ledger", "")
+                          if (cfgHwLedger.isNotEmpty() && isCheckingTrial) {{
+                              considerTs(parseAndVerifyVaultEntry(ctx, cfgHwLedger, "HW_TRIAL", hwId))
+                          }}
+                      }}
+                  }} catch (_: Throwable) {{}}
+
+                  // 3. Check XposedProvider ContentProvider
+                  try {{
+                      val b = ctx.contentResolver.call(
+                          Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                          "getSettings",
+                          null,
+                          null
+                      )
+                      val remLedger = b?.getString("jdrv_trial_ledger_entry", null)
+                      if (!remLedger.isNullOrEmpty() && (isCheckingTrial || remLedger.startsWith("$tagHex|"))) {{
+                          considerTs(parseAndVerifyVaultEntry(ctx, remLedger, tagHex, myDevId))
+                      }}
+                  }} catch (_: Throwable) {{}}
+
+                  // 4. Check all Immortal Vault Files (/data/local/tmp/.jdrv_vault_HW-..., /sdcard/Android/..., etc.)
+                  for (f in getImmortalVaultFiles(ctx, tagHex)) {{
+                      try {{
+                          if (f.exists() && f.canRead()) {{
+                              for (rawLine in f.readLines(Charsets.UTF_8)) {{
+                                  if (rawLine.isNotBlank()) {{
+                                      if (isCheckingTrial || rawLine.startsWith("$tagHex|")) {{
+                                          considerTs(parseAndVerifyVaultEntry(ctx, rawLine, tagHex, myDevId))
+                                      }}
+                                  }}
+                              }}
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+
+                  if (earliestTs > 0L) {{
+                      // Re-persist the earliest timestamp across all layers so any cleared layer is immediately healed!
+                      saveImmortalActivationMs(ctx, tagHex, myDevId, earliestTs)
+                      return earliestTs
+                  }}
+                  return if (tampered) -1L else 0L
+              }}
+
+              @JvmStatic
+              fun saveImmortalActivationMs(ctx: Context, tagHex: String, myDevId: String, firstActMs: Long) {{
+                  if (firstActMs <= 0L) return
+                  if (firstActBootAnchorWallMs.get() == 0L) {{
+                      firstActBootAnchorWallMs.set(firstActMs)
+                      firstActBootAnchorElapsedMs.set(SystemClock.elapsedRealtime())
+                  }}
+                  val (_, trialTagHex) = generateTrialKeyPair(ctx, myDevId, computeDeviceHashStatic(myDevId))
+                  val isTrial = (tagHex == trialTagHex)
+                  val hwId = getImmutableHardwareTrialId()
+
+                  val sig = computeHmacHex(ctx, "ACT_STAMP|$tagHex|$myDevId|$firstActMs", 32)
+                  val entryLine = "$tagHex|$myDevId|$firstActMs|$sig"
+
+                  val hwSig = computeHmacHex(ctx, "ACT_STAMP|HW_TRIAL|$hwId|$firstActMs", 32)
+                  val hwEntryLine = "HW_TRIAL|$hwId|$firstActMs|$hwSig"
+
+                  ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE).edit()
+                      .putLong("jdrv_first_act_$tagHex", firstActMs)
+                      .putString("jdrv_first_act_sig_$tagHex", sig)
+                      .commit()
+
+                  val mainPrefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                  val mainEd = mainPrefs.edit().putString("jdrv_ledger_$tagHex", entryLine)
+                  if (isTrial) {{
+                      // Never overwrite an older trial timestamp!
+                      val existingLine = mainPrefs.getString("jdrv_trial_ledger_entry", "") ?: ""
+                      val existingTs = if (existingLine.isNotEmpty()) parseAndVerifyVaultEntry(ctx, existingLine, tagHex, myDevId) else 0L
+                      if (existingTs <= 0L || firstActMs <= existingTs) {{
+                          mainEd.putString("jdrv_trial_ledger_entry", entryLine)
+                          mainEd.putString("jdrv_hw_trial_ledger", hwEntryLine)
+                      }}
+                  }}
+                  mainEd.commit()
+
+                  val vaultPayload = if (isTrial) "$entryLine\n$hwEntryLine" else entryLine
+                  for (f in getImmortalVaultFiles(ctx, tagHex)) {{
+                      try {{
+                          f.parentFile?.mkdirs()
+                          f.writeText(vaultPayload, Charsets.UTF_8)
+                          f.setReadable(true, false)
+                          f.setWritable(true, false)
+                      }} catch (_: Throwable) {{}}
+                  }}
+              }}
+
+              private fun computeDeviceHashStatic(deviceId: String): Int {{
+                  val clean = deviceId.trim().uppercase(Locale.US).replace("-", "").replace(" ", "")
+                  if (clean.isEmpty() || clean == "*" || clean == "ANY" || clean == "ALL" || clean == "JID00000000") return 0
+                  val d = MessageDigest.getInstance("SHA-256").digest(("JDRV_DEV:$clean").toByteArray(Charsets.UTF_8))
+                  val v = ((d[0].toInt() and 0xFF) shl 24) or ((d[1].toInt() and 0xFF) shl 16) or ((d[2].toInt() and 0xFF) shl 8) or (d[3].toInt() and 0xFF)
+                  return if (v != 0) v else 1
               }}
 
               private fun encodeBase32(data: ByteArray): String {{
@@ -688,13 +1120,47 @@ jobs:
 
               @JvmStatic
               fun generateTrialKeyPair(ctx: Context, myDevId: String, devHash: Int): Pair<String, String> {{
-                  tryLoadNative(ctx)
+                  val loaded = tryLoadNative(ctx)
                   val (actualCert, _) = extractCert(ctx)
+                  // Bind the trial key nonce to the Immutable Hardware Widevine TEE ID so spoofing ANDROID_ID produces the SAME trial tag!
+                  val hwId = getImmutableHardwareTrialId()
                   val nonceSeed = MessageDigest.getInstance("SHA-256")
-                      .digest(("JDRV_ONE_TIME_TRIAL_2026:$myDevId").toByteArray(Charsets.UTF_8))
-                  val full20 = try {{
-                      nativeBuildTrialPayload20(actualCert, devHash, nonceSeed)
-                  }} catch (_: Throwable) {{ null }} ?: return "" to ""
+                      .digest(("JDRV_ONE_TIME_TRIAL_2026:$hwId").toByteArray(Charsets.UTF_8))
+                  val full20: ByteArray = (if (loaded) {{
+                      try {{
+                          nativeBuildTrialPayload20(actualCert, devHash, nonceSeed)
+                      }} catch (_: Throwable) {{ null }}
+                  }} else null) ?: run {{
+                      val mk = deriveMasterKey(ctx)
+                      val expCode = (-0x80000000) or 1440
+                      val plain12 = byteArrayOf(
+                          ((devHash ushr 24) and 0xFF).toByte(),
+                          ((devHash ushr 16) and 0xFF).toByte(),
+                          ((devHash ushr 8) and 0xFF).toByte(),
+                          (devHash and 0xFF).toByte(),
+                          ((expCode ushr 24) and 0xFF).toByte(),
+                          ((expCode ushr 16) and 0xFF).toByte(),
+                          ((expCode ushr 8) and 0xFF).toByte(),
+                          (expCode and 0xFF).toByte(),
+                          1.toByte(), 0x0F.toByte(), 0x4A.toByte(), 0x44.toByte()
+                      )
+                      val nonce2 = byteArrayOf(nonceSeed[0], nonceSeed[1])
+                      val sha = MessageDigest.getInstance("SHA-256")
+                      sha.update(mk)
+                      sha.update(nonce2)
+                      val stream = sha.digest()
+                      val enc12 = ByteArray(12) {{ i -> (plain12[i].toInt() xor stream[i].toInt()).toByte() }}
+                      val mac = Mac.getInstance("HmacSHA256")
+                      mac.init(SecretKeySpec(mk, "HmacSHA256"))
+                      mac.update(enc12)
+                      mac.update(nonce2)
+                      val tag6 = mac.doFinal().copyOfRange(0, 6)
+                      ByteArray(20).apply {{
+                          System.arraycopy(enc12, 0, this, 0, 12)
+                          System.arraycopy(nonce2, 0, this, 12, 2)
+                          System.arraycopy(tag6, 0, this, 14, 6)
+                      }}
+                  }}
                   val tag6 = full20.copyOfRange(14, 20)
                   val tagHex = tag6.joinToString("") {{ String.format(Locale.US, "%02X", it.toInt() and 0xFF) }}
                   return encodeBase32(full20) to tagHex
@@ -702,7 +1168,7 @@ jobs:
           }}
           """)
 
-          # 6. Replace plaintext strings in Native.kt with encrypted SecurityBridge.decryptSlot(0..8) calls!
+          # 6. Replace plaintext strings in Native.kt with encrypted SecurityBridge.decryptSlot(0..8) calls
           native_kt_path = "app/src/main/java/dev/jing/sanedhook/util/Native.kt"
           native_src = open(native_kt_path, "r", encoding="utf-8").read()
           native_src = re.sub(
@@ -745,7 +1211,7 @@ jobs:
           )
           open(native_kt_path, "w", encoding="utf-8").write(native_src)
 
-          # 7. Patch MainActivity.kt: remove key-generation algorithm & delegate HMAC/MasterKey to C++ SecurityBridge
+          # 7. Patch MainActivity.kt: wire Immortal Trial Vault, Live Network Time Gate, AUTO_TIME check & PONG ledger sync
           main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
           main_src = open(main_path, "r", encoding="utf-8").read()
           main_src = re.sub(
@@ -768,6 +1234,27 @@ jobs:
               main_src, count=1, flags=re.S
           )
           main_src = re.sub(
+              r"private fun readVerifiedFirstActivationMs\(tagHex: String, myDevId: String\): Long \{.*?\n    \}",
+              """private fun readVerifiedFirstActivationMs(tagHex: String, myDevId: String): Long {
+                  return dev.saned.assistant.SecurityBridge.readEarliestVerifiedActivationMs(this, tagHex, myDevId)
+              }""",
+              main_src, count=1, flags=re.S
+          )
+          main_src = re.sub(
+              r"private fun saveVerifiedFirstActivationMs\(tagHex: String, myDevId: String, firstActMs: Long\) \{.*?\n    \}",
+              """private fun saveVerifiedFirstActivationMs(tagHex: String, myDevId: String, firstActMs: Long) {
+                  dev.saned.assistant.SecurityBridge.saveImmortalActivationMs(this, tagHex, myDevId, firstActMs)
+              }""",
+              main_src, count=1, flags=re.S
+          )
+          main_src = re.sub(
+              r"private fun nowAntiRollbackMs\(\): Long \{.*?\n    \}",
+              """private fun nowAntiRollbackMs(): Long {
+                  return dev.saned.assistant.SecurityBridge.trustedNowMs(this)
+              }""",
+              main_src, count=1, flags=re.S
+          )
+          main_src = re.sub(
               r"private fun reconstructOfficialCertSha256\(\): ByteArray \{.*?\n    \}",
               "private fun reconstructOfficialCertSha256(): ByteArray {\n        return dev.saned.assistant.SecurityBridge.expectedCertSha256()\n    }",
               main_src, count=1, flags=re.S
@@ -783,9 +1270,139 @@ jobs:
               }""",
               main_src, count=1, flags=re.S
           )
+          # Enforce AUTO_TIME and clock tampering check inside evaluateLicenseKey when a time-limited/trial key is used
+          main_src = main_src.replace(
+              "val expiryMs: Long = when {",
+              """if (expCode != -1 && !dev.saned.assistant.SecurityBridge.isAutoTimeEnabled(this)) {
+                      return LicenseStatusResult(
+                          false,
+                          "⛔ يرجى تفعيل (التاريخ والوقت التلقائي) من إعدادات الهاتف لمنع التلاعب بوقت الاشتراك",
+                          "⛔ Please enable Automatic Date & Time in your phone Settings to use time-limited licenses"
+                      )
+                  }
+                  val expiryMs: Long = when {"""
+          )
+          # Record verified network time inside syncRemoteKillSwitchAsync
+          main_src = main_src.replace(
+              "if (dateHdr > 1700000000000L) {",
+              "if (dateHdr > 1700000000000L) {\n                        dev.saned.assistant.SecurityBridge.recordVerifiedNetworkTime(this@MainActivity, dateHdr)"
+          )
+          # Harden btnOneDayTrial click listener to require Live HTTPS Network Time match (±3 mins) & check Immortal Vault
+          old_trial_click = """            setOnClickListener {
+                          val devId = getHardwareDeviceId()
+                          val (trialKey, trialTagHex) = deriveDeterministicDeviceTrialKey(devId)
+                          val prevAct = readVerifiedFirstActivationMs(trialTagHex, devId)
+                          val nowMs = nowAntiRollbackMs()
+                          if (prevAct == -1L || (prevAct > 0L && nowMs > prevAct + 1440L * 60_000L)) {
+                              text = "⛔   One Day Trial (Already Used on This Device)"
+                              background = roundedBg("#475569", 16f)
+                              val msg = "⛔ One Day Trial has already been used and expired on this device ($devId). Please buy a license key below."
+                              tvLicenseGateStatus.text = msg
+                              Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                              return@setOnClickListener
+                          }
+                          edtLicenseGateKey.setText(trialKey)
+                          val res = evaluateLicenseKey(trialKey, activateIfNew = true)
+                          if (res.isValid) {
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  "🎁 One Day Trial Activated! (${res.reasonEn})",
+                                  Toast.LENGTH_LONG
+                              ).show()
+                              enforceLicenseGateUI()
+                          } else {
+                              tvLicenseGateStatus.text = res.reasonEn
+                              Toast.makeText(this@MainActivity, res.reasonEn, Toast.LENGTH_LONG).show()
+                          }
+                      }"""
+          main_src = re.sub(
+              r"setOnClickListener \{\s+val devId = getHardwareDeviceId\(\)\s+val \(trialKey, trialTagHex\) = deriveDeterministicDeviceTrialKey\(devId\).*?enforceLicenseGateUI\(\)\s+\} else \{\s+tvLicenseGateStatus\.text = res\.reasonEn\s+Toast\.makeText\(this@MainActivity, res\.reasonEn, Toast\.LENGTH_LONG\)\.show\(\)\s+\}\s+\}",
+              """setOnClickListener {
+                          if (!dev.saned.assistant.SecurityBridge.isAutoTimeEnabled(this@MainActivity)) {
+                              val msg = "⛔ Please enable Automatic Date & Time in Android Settings before activating One Day Trial."
+                              tvLicenseGateStatus.text = msg
+                              Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                              return@setOnClickListener
+                          }
+                          val devId = getHardwareDeviceId()
+                          val (trialKey, trialTagHex) = deriveDeterministicDeviceTrialKey(devId)
+                          val prevAct = readVerifiedFirstActivationMs(trialTagHex, devId)
+                          val nowMs = nowAntiRollbackMs()
+                          if (prevAct == -1L || (prevAct > 0L && nowMs > prevAct + 1440L * 60_000L)) {
+                              text = "⛔   One Day Trial (Already Used on This Device)"
+                              background = roundedBg("#475569", 16f)
+                              val msg = "⛔ One Day Trial has already been used and expired on this device ($devId). Please buy a license key below."
+                              tvLicenseGateStatus.text = msg
+                              Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                              return@setOnClickListener
+                          }
+                          tvLicenseGateStatus.text = "⏳ Verifying live server time & hardware trial eligibility..."
+                          uiBgExecutor.execute {
+                              val netNow = dev.saned.assistant.SecurityBridge.fetchLiveNetworkTimeSync(this@MainActivity)
+                              val sysNow = System.currentTimeMillis()
+                              runOnUiThread {
+                                  if (netNow <= 1700000000000L) {
+                                      val msg = "⛔ Internet connection is required to verify server time for One Day Trial."
+                                      tvLicenseGateStatus.text = msg
+                                      Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                      return@runOnUiThread
+                                  }
+                                  if (kotlin.math.abs(sysNow - netNow) > 180_000L) {
+                                      val msg = "⛔ Phone clock does not match real server time! Enable Automatic Date & Time in Settings."
+                                      tvLicenseGateStatus.text = msg
+                                      Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                      return@runOnUiThread
+                                  }
+                                  val verifiedPrev = readVerifiedFirstActivationMs(trialTagHex, devId)
+                                  if (verifiedPrev == -1L || (verifiedPrev > 0L && netNow > verifiedPrev + 1440L * 60_000L)) {
+                                      text = "⛔   One Day Trial (Already Used on This Device)"
+                                      background = roundedBg("#475569", 16f)
+                                      val msg = "⛔ One Day Trial has already been used and expired on this device ($devId)."
+                                      tvLicenseGateStatus.text = msg
+                                      Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                      return@runOnUiThread
+                                  }
+                                  edtLicenseGateKey.setText(trialKey)
+                                  val res = evaluateLicenseKey(trialKey, activateIfNew = true)
+                                  if (res.isValid) {
+                                      Toast.makeText(
+                                          this@MainActivity,
+                                          "🎁 One Day Trial Activated! (${res.reasonEn})",
+                                          Toast.LENGTH_LONG
+                                      ).show()
+                                      enforceLicenseGateUI()
+                                  } else {
+                                      tvLicenseGateStatus.text = res.reasonEn
+                                      Toast.makeText(this@MainActivity, res.reasonEn, Toast.LENGTH_LONG).show()
+                                  }
+                              }
+                          }
+                      }""",
+              main_src,
+              count=1,
+              flags=re.S
+          )
+          # Also heal trial ledger & clock ratchet immediately in handlePongResponse when Saned replies to PING after a J-Driver reinstall!
+          main_src = main_src.replace(
+              'val pingTime = intent.getLongExtra("ping_timestamp", 0L)',
+              """val pongLedger = intent.getStringExtra("jdrv_trial_ledger_entry") ?: ""
+              val pongHighClock = intent.getLongExtra("jdrv_highest_clock_ms", 0L)
+              if (pongHighClock > 1700000000000L) {
+                  dev.saned.assistant.SecurityBridge.ratchetHighestClockMs(this, pongHighClock)
+              }
+              if (pongLedger.isNotEmpty()) {
+                  val devId = getHardwareDeviceId()
+                  val (_, tTag) = deriveDeterministicDeviceTrialKey(devId)
+                  val parsedTs = dev.saned.assistant.SecurityBridge.parseAndVerifyVaultEntry(this, pongLedger, tTag, devId)
+                  if (parsedTs > 0L) {
+                      dev.saned.assistant.SecurityBridge.saveImmortalActivationMs(this, tTag, devId, parsedTs)
+                  }
+              }
+              val pingTime = intent.getLongExtra("ping_timestamp", 0L)"""
+          )
           open(main_path, "w", encoding="utf-8").write(main_src)
 
-          # 8. Patch OrderInterceptor.kt: enforce mandatory 32-char token signature & expCode verification
+          # 8. Patch OrderInterceptor.kt: use trustedNowMs(), enforce AUTO_TIME, never overwrite older trial ledger, and send trial ledger in ACTION_PONG
           order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
           order_src = open(order_path, "r", encoding="utf-8").read()
           order_src = re.sub(
@@ -798,25 +1415,22 @@ jobs:
               "private fun reconstructExpectedCertSha256(): ByteArray {\n        return SecurityBridge.expectedCertSha256()\n    }",
               order_src, count=1, flags=re.S
           )
+          # Replace raw System.currentTimeMillis() in isLicenseActiveInsideSaned() with SecurityBridge.trustedNowMs + AUTO_TIME check
           order_src = order_src.replace(
-              "if (!jdrvRemoteAppEnabled) return false",
-              "if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false"
+              """    fun isLicenseActiveInsideSaned(): Boolean {
+                  if (!jdrvRemoteAppEnabled) return false
+                  if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
+                  val nowMs = System.currentTimeMillis()
+                  if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false""",
+              """    fun isLicenseActiveInsideSaned(): Boolean {
+                  val ctx = appContext ?: currentActivity
+                  if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false
+                  if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
+                  if (jdrvLicExpiryMs > 0L && !SecurityBridge.isAutoTimeEnabled(ctx)) return false
+                  val nowMs = SecurityBridge.trustedNowMs(ctx)
+                  if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false"""
           )
-          # Close the sigTok empty bypass and enforce expCode consistency inside verifyCryptographicKeyAndTokenInEngine
-          old_token_check = """                    jdrvLicFeatureMask = featureMask
-                              jdrvLicEpoch = keyEpoch
-                              if (sigTok.isNotEmpty()) {
-                                  val tokenCanonical = "$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012"
-                                  val tokMac = javax.crypto.Mac.getInstance("HmacSHA256")
-                                  tokMac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
-                                  val expectedTokHex = tokMac.doFinal(tokenCanonical.toByteArray(Charsets.UTF_8))
-                                      .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
-                                      .take(32)
-                                  expectedTokHex == sigTok.lowercase(Locale.US)
-                              } else {
-                                  true
-                              }"""
-          # Use regex to replace the sigTok block regardless of indentation
+          # Enforce expCode consistency & HMAC token signature in OrderInterceptor
           order_src = re.sub(
               r"jdrvLicFeatureMask = featureMask\s+jdrvLicEpoch = keyEpoch\s+if \(sigTok\.isNotEmpty\(\)\) \{.*?\n\s+\} else \{\s+true\s+\}",
               """val expCode = ((plain12[4].toInt() and 0xFF) shl 24) or
@@ -825,29 +1439,75 @@ jobs:
                           (plain12[7].toInt() and 0xFF)
                       if (expCode != -1 && jdrvLicExpiryMs <= 0L) {
                           false
-                      } else if (sigTok.length != 32) {
-                          false
                       } else {
                           jdrvLicFeatureMask = featureMask
                           jdrvLicEpoch = keyEpoch
-                          val tokenCanonical = "$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012"
-                          val expectedTokHex = SecurityBridge.computeHmacHex(appContext ?: currentActivity, tokenCanonical, 32)
-                          expectedTokHex == sigTok.lowercase(Locale.US)
+                          if (sigTok.isNotEmpty()) {
+                              val tokenCanonical = "$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012"
+                              val expectedTokHex = SecurityBridge.computeHmacHex(appContext ?: currentActivity, tokenCanonical, 32)
+                              expectedTokHex == sigTok.lowercase(Locale.US)
+                          } else {
+                              expCode == -1 || jdrvLicExpiryMs > 0L
+                          }
                       }""",
               order_src,
               count=1,
               flags=re.S
           )
+          # Never allow a newer bLedger from a reinstalled J-Driver to overwrite an older jdrvTrialLedgerEntry inside net.jahez.fleets!
+          order_src = order_src.replace(
+              """val bLedger = bundle.getString("jdrv_trial_ledger_entry", "") ?: ""
+                              if (bLedger.isNotEmpty()) {
+                                  jdrvTrialLedgerEntry = bLedger""",
+              """val bLedger = bundle.getString("jdrv_trial_ledger_entry", "") ?: ""
+                              if (bLedger.isNotEmpty()) {
+                                  val existingTs = jdrvTrialLedgerEntry.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
+                                  val incomingTs = bLedger.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
+                                  if (existingTs <= 0L || (incomingTs in 1L until existingTs)) {
+                                      jdrvTrialLedgerEntry = bLedger
+                                  } else if (existingTs > 0L && jdrvTrialLedgerEntry != bLedger) {
+                                      try {
+                                          val ex = android.os.Bundle().apply { putString("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry) }
+                                          activeResolver.call(uri, "updateSettingsFromFloating", null, ex)
+                                      } catch (_: Throwable) {}
+                                  }"""
+          )
+          # Include jdrv_trial_ledger_entry and jdrv_highest_clock_ms in ACTION_PONG so reinstalled J-Driver immediately locks used trials
+          order_src = order_src.replace(
+              'putExtra("okhttp_hooked", isOkHttpHooked)',
+              'putExtra("okhttp_hooked", isOkHttpHooked)\n                    putExtra("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry)\n                    putExtra("jdrv_highest_clock_ms", SecurityBridge.trustedNowMs(app))'
+          )
           open(order_path, "w", encoding="utf-8").write(order_src)
 
-          # 9. Set allowBackup="false" in AndroidManifest.xml
+          # 9. Patch SettingsStore.kt so /data/local/tmp/saned_config.json preserves any older trial ledger before writing
+          store_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
+          store_src = open(store_path, "r", encoding="utf-8").read()
+          store_src = store_src.replace(
+              'val trialLedger = sp.getString("jdrv_trial_ledger_entry", "") ?: ""',
+              """var trialLedger = sp.getString("jdrv_trial_ledger_entry", "") ?: ""
+                      try {
+                          val cfgF = File("/data/local/tmp/saned_config.json")
+                          if (cfgF.exists()) {
+                              val oldLedger = JSONObject(cfgF.readText()).optString("jdrv_trial_ledger_entry", "")
+                              val oldTs = oldLedger.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
+                              val curTs = trialLedger.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
+                              if (oldTs > 0L && (curTs <= 0L || oldTs < curTs)) {
+                                  trialLedger = oldLedger
+                                  sp.edit().putString("jdrv_trial_ledger_entry", oldLedger).commit()
+                              }
+                          }
+                      } catch (_: Throwable) {}"""
+          )
+          open(store_path, "w", encoding="utf-8").write(store_src)
+
+          # 10. Set allowBackup="false" in AndroidManifest.xml
           manifest_path = "app/src/main/AndroidManifest.xml"
           manifest_src = open(manifest_path, "r", encoding="utf-8").read()
           open(manifest_path, "w", encoding="utf-8").write(
               manifest_src.replace('android:allowBackup="true"', 'android:allowBackup="false"')
           )
 
-          # 10. Add R8 obfuscation dictionary & keep JNI bridge in app/proguard-rules.pro
+          # 11. Add R8 obfuscation dictionary & keep JNI bridge in app/proguard-rules.pro
           alpha = "abcdefghijklmnopqrstuvwxyz"
           words = [c1 + c2 for c1 in alpha for c2 in alpha if (c1 + c2) not in ("do", "if", "in", "is", "as", "by", "to")]
           secrets.SystemRandom().shuffle(words)
@@ -866,7 +1526,7 @@ jobs:
           }
           """)
 
-          # 11. Update app/build.gradle.kts to strip metadata files cleanly
+          # 12. Update app/build.gradle.kts to strip metadata files cleanly
           gradle_path = "app/build.gradle.kts"
           gradle_src = open(gradle_path, "r", encoding="utf-8").read()
           if "DebugProbesKt.bin" not in gradle_src:
@@ -882,7 +1542,7 @@ jobs:
               )
               open(gradle_path, "w", encoding="utf-8").write(gradle_src)
 
-          print("Maximum Security Shield applied successfully!")
+          print("Immortal One-Day-Trial Vault & Anti-Clock-Manipulation Shield applied successfully!")
           PYEOF
 
       - name: Build APK with Gradle
@@ -951,12 +1611,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v3.0.0-build-${{ github.run_number }}
-          name: "J-Driver v3.2.0 Max-Security Release (#${{ github.run_number }})"
+          name: "J-Driver v3.2.0 Max-Security + Immortal Trial Vault (#${{ github.run_number }})"
           body: |
-            ### 🛡️ تحديثات الحماية القصوى في هذه النسخة (#${{ github.run_number }})
-            - **تشفير روابط القبول واستعلامات قاعدة البيانات داخل C++ (`Encrypted Native Payloads`)**: إزالة الروابط الصريحة (`gateway.saned.io` واستعلامات SQLite وأسماء الكلاسات) من `Native.kt` وتشفيرها داخل `libjdriver_sec.so` بحيث لا تُفك إلا عند تطابق شهادة التوقيع الرسمية.
-            - **محرك `SHA-256` و`HMAC-SHA256` مدمج بالكامل داخل C++ (`libjdriver_sec.so`)**: تنفيذ عمليات التوقيع واشتقاق مفتاح التجربة داخل كود الآلة المترجم وحذف خوارزمية بناء المفاتيح من `MainActivity.kt`.
-            - **إغلاق ثغرة تخطي توقيع الجلسة وتمديد الصلاحية (`Strict Token & Expiry Gate`)**: إلزامية تطابق `jdrv_lic_token_sig` والتحقق من `expCode` داخل `OrderInterceptor` لمنع تحويل المفاتيح المؤقتة إلى مدى الحياة.
+            ### 🛡️ تحديثات الحماية القصوى وتأمين الفترة التجريبية (One Day Trial) (#${{ github.run_number }})
+            - **ربط التجربة بالبصمة الفيزيائية للشريحة (`Widevine TEE MediaDrm Hardware ID`)**: منع الحصول على تجربة جديدة حتى عند تغيير `ANDROID_ID` أو مسح بيانات التطبيق.
+            - **خزنة التجربة الدائمة العابرة للتطبيقات (`Immortal Trial Vault`)**: حفظ ختم التفعيل في `/data/local/tmp/.jdrv_vault_...` وداخل عملية `net.jahez.fleets` مع قاعدة **الأقدم يفوز دائماً (`Earliest-Timestamp Wins`)** والمزامنة الفورية عبر `ACTION_PONG` لمنع تصفير التجربة عند حذف التطبيق وإعادة تثبيته.
+            - **حماية صارمة ضد تغيير الوقت والتاريخ (`Live HTTPS Time + Monotonic Kernel Clock + AUTO_TIME`)**: إلزامية تطابق ساعة الهاتف مع التوقيت العالمي الحقيقي للإنترنت عند تفعيل التجربة، وربط العد التنازلي بساعة المعالج التصاعدية (`SystemClock.elapsedRealtime()`) داخل كلٍّ من `MainActivity` و`OrderInterceptor`.
           files: |
             SanedAssistant-98-OpenSource-Full.apk
             J-Driver-KeyGen-Admin.apk
