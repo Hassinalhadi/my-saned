@@ -726,7 +726,7 @@ jobs:
                   for (i in 0 until 8) {{
                       chars[i] = LIC_ALPHABET[(digest[i].toInt() and 0xFF) % LIC_ALPHABET.length]
                   }}
-                  val hwId = "HW-${{String(chars, 0, 4)}}-${{String(chars, 4, 4)}}"
+                  val hwId = "HW-" + String(chars, 0, 4) + "-" + String(chars, 4, 4)
                   cachedHwTrialId = hwId
                   return hwId
               }}
@@ -800,31 +800,31 @@ jobs:
                   val hwId = getImmutableHardwareTrialId()
                   val list = mutableListOf<File>()
                   // 1. System-wide /data/local/tmp files (survive J-Driver uninstall & Clear Data 100%)
-                  try {{ list.add(File("/data/local/tmp/.jdrv_vault_${{hwId}}.dat")) }} catch (_: Throwable) {{}}
-                  try {{ list.add(File("/data/local/tmp/.jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
+                  try {{ list.add(File("/data/local/tmp/.jdrv_vault_" + hwId + ".dat")) }} catch (_: Throwable) {{}}
+                  try {{ list.add(File("/data/local/tmp/.jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
                   // 2. Shared external storage hidden markers (survive uninstall)
                   for (base in listOf("/sdcard/Android", "/sdcard/Download", "/storage/emulated/0/Android", "/storage/emulated/0/Download")) {{
                       try {{
                           val d = File(base)
                           if (d.exists() && d.canWrite()) {{
-                              list.add(File(d, ".jdrv_vault_${{hwId}}.dat"))
+                              list.add(File(d, ".jdrv_vault_" + hwId + ".dat"))
                           }}
                       }} catch (_: Throwable) {{}}
                   }}
                   // 3. App-local & External Media/Cache dirs
                   if (ctx != null) {{
-                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_vault_${{hwId}}.dat")) }} catch (_: Throwable) {{}}
-                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
-                      try {{ list.add(File(ctx.filesDir, ".jdrv_act_${{tagHex}}.dat")) }} catch (_: Throwable) {{}}
+                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_vault_" + hwId + ".dat")) }} catch (_: Throwable) {{}}
+                      try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
+                      try {{ list.add(File(ctx.filesDir, ".jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
                       try {{
                           ctx.externalCacheDirs?.forEach {{ dir ->
-                              if (dir != null) list.add(File(dir, ".jdrv_vault_${{hwId}}.dat"))
+                              if (dir != null) list.add(File(dir, ".jdrv_vault_" + hwId + ".dat"))
                           }}
                       }} catch (_: Throwable) {{}}
                       try {{
                           @Suppress("DEPRECATION")
                           ctx.externalMediaDirs?.forEach {{ dir ->
-                              if (dir != null) list.add(File(dir, ".jdrv_vault_${{hwId}}.dat"))
+                              if (dir != null) list.add(File(dir, ".jdrv_vault_" + hwId + ".dat"))
                           }}
                       }} catch (_: Throwable) {{}}
                   }}
