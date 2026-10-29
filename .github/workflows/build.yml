@@ -44,19 +44,8 @@ jobs:
           python3 - << 'PYEOF'
           import os, re, shutil, secrets, hashlib, subprocess, glob
 
-          # 1. Point Remote Control URLs in Client & KeyGen to the public Hassinalhadi/jdriver_control repository
-          for kt_file in [
-              "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt",
-              "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
-          ]:
-              if os.path.exists(kt_file):
-                  src_txt = open(kt_file, "r", encoding="utf-8").read()
-                  if "Hassinalhadi/jdriver_control" not in src_txt:
-                      src_txt = src_txt.replace(
-                          '"https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json"',
-                          '"https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",\n        "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/master/jdriver_control.json",\n        "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json"'
-                      )
-                      open(kt_file, "w", encoding="utf-8").write(src_txt)
+          # 1. Point KeyGen Admin default repository to Hassinalhadi/jdriver_control (Client URLs are C++ encrypted in Slots 9..14)
+          keygen_init = True
 
           keygen_path = "keygen/src/main/java/dev/jing/jdriver/keygen/KeyGenActivity.kt"
           if os.path.exists(keygen_path):
@@ -117,6 +106,16 @@ jobs:
               "LEFT JOIN location l ON l.dispatchId = di.dispatchId LEFT JOIN payment p ON p.dispatchId = di.dispatchId "
               "LEFT JOIN address a ON a.dispatchId = di.dispatchId",
               "AIzaSyDngGva2vOywyZGjSvoGQqnIr-IC3v4FVE",
+              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/master/jdriver_control.json",
+              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@main/jdriver_control.json",
+              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@master/jdriver_control.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control.json",
+              "githubusercontent.com",
+              "jsdelivr.net",
+              "jdriver_control",
+              "/system/etc/hosts",
           ]
 
           enc_slots = []
@@ -169,8 +168,8 @@ jobs:
           static const uint8_t kEncCert[32] = {{ {fmt_cpp(enc_cert)} }};
 
           {cpp_slots_defs_str}
-          static const uint8_t* const kSlots[9] = {{ {cpp_slots_ptr_str} }};
-          static const size_t kSlotLens[9] = {{ {cpp_slots_len_str} }};
+          static const uint8_t* const kSlots[19] = {{ {cpp_slots_ptr_str} }};
+          static const size_t kSlotLens[19] = {{ {cpp_slots_len_str} }};
 
           struct Sha256Ctx {{
               uint32_t state[8];
@@ -350,7 +349,7 @@ jobs:
           extern "C" JNIEXPORT jbyteArray JNICALL
           Java_dev_saned_assistant_SecurityBridge_nativeDecryptSlot(
                   JNIEnv* env, jclass, jbyteArray cert_sha256_arr, jboolean allow_embedded, jint slot_idx) {{
-              if (slot_idx < 0 || slot_idx >= 9) return nullptr;
+              if (slot_idx < 0 || slot_idx >= 19) return nullptr;
               uint8_t mk[32];
               unpack_mk(env, cert_sha256_arr, allow_embedded, mk);
 
@@ -626,7 +625,7 @@ jobs:
 
               @JvmStatic
               fun decryptSlot(slotIdx: Int, ctx: Context? = null): String {{
-                  if (slotIdx !in 0..8) return ""
+                  if (slotIdx !in 0..18) return ""
                   slotCache[slotIdx]?.let {{ return it }}
                   val loaded = tryLoadNative(ctx)
                   val (actualCert, isEmbedded) = extractCert(ctx)
@@ -1165,6 +1164,188 @@ jobs:
                   val tagHex = tag6.joinToString("") {{ String.format(Locale.US, "%02X", it.toInt() and 0xFF) }}
                   return encodeBase32(full20) to tagHex
               }}
+
+              // =========================================================================
+              // ENCRYPTED MULTI-CDN REMOTE KILL-SWITCH & ANTI-DNS/FIREWALL HEARTBEAT SHIELD
+              // =========================================================================
+              private val lastCtrlHandshakeElapsedMs = AtomicLong(0L)
+              private val consecutiveSelectiveBlocks = AtomicLong(0L)
+              @Volatile private var remoteSignatureSpoofDetected = false
+              private const val HEARTBEAT_MAX_ONLINE_TTL_MS = 12L * 3600_000L // 12 hours max without control handshake
+
+              @JvmStatic
+              fun getRemoteControlUrls(ctx: Context? = null): List<String> {{
+                  val out = ArrayList<String>(6)
+                  for (idx in 9..14) {{
+                      val u = decryptSlot(idx, ctx).trim()
+                      if (u.startsWith("https://")) out.add(u)
+                  }}
+                  return out
+              }}
+
+              @JvmStatic
+              fun isHostsOrFirewallTampered(ctx: Context? = null): Boolean {{
+                  if (remoteSignatureSpoofDetected) return true
+                  val d1 = decryptSlot(15, ctx).lowercase(Locale.US)
+                  val d2 = decryptSlot(16, ctx).lowercase(Locale.US)
+                  val d3 = decryptSlot(17, ctx).lowercase(Locale.US)
+                  val h1 = decryptSlot(18, ctx)
+                  val hostPaths = arrayOf(h1, "/etc/hosts", "/system/etc/hosts")
+                  for (hp in hostPaths) {{
+                      try {{
+                          val f = File(hp)
+                          if (f.exists() && f.canRead()) {{
+                              val lines = f.readLines(Charsets.UTF_8)
+                              for (rawLine in lines) {{
+                                  val line = rawLine.substringBefore("#").trim().lowercase(Locale.US)
+                                  if (line.isEmpty()) continue
+                                  if ((d1.isNotEmpty() && line.contains(d1)) ||
+                                      (d2.isNotEmpty() && line.contains(d2)) ||
+                                      (d3.isNotEmpty() && line.contains(d3))) {{
+                                      return true
+                                  }}
+                              }}
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  return false
+              }}
+
+              private fun getKillVaultFiles(ctx: Context?): List<File> {{
+                  val files = ArrayList<File>()
+                  files.add(File("/data/local/tmp/.jdrv_kill_vault.dat"))
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+                  if (activeCtx != null) {{
+                      try {{ files.add(File(activeCtx.filesDir, ".jdrv_kill_vault.dat")) }} catch (_: Throwable) {{}}
+                      try {{ activeCtx.externalCacheDir?.let {{ files.add(File(it, ".jdrv_kill_vault.dat")) }} }} catch (_: Throwable) {{}}
+                  }}
+                  return files
+              }}
+
+              @JvmStatic
+              fun saveImmortalKillState(
+                  ctx: Context?,
+                  appEnabled: Boolean,
+                  minEpoch: Int,
+                  blockedDevsCsv: String,
+                  blockedKeysCsv: String,
+                  msgAr: String,
+                  msgEn: String
+              ) {{
+                  val enBit = if (appEnabled) 1 else 0
+                  val normDevs = blockedDevsCsv.trim().uppercase(Locale.US)
+                  val normKeys = blockedKeysCsv.trim().uppercase(Locale.US)
+                  val payload = "KILL_V1|" + enBit + "|" + minEpoch + "|" + normDevs + "|" + normKeys
+                  val sig = computeHmacHex(ctx, payload, 32)
+                  val line = payload + "|" + sig
+                  for (f in getKillVaultFiles(ctx)) {{
+                      try {{
+                          f.parentFile?.mkdirs()
+                          f.writeText(line, Charsets.UTF_8)
+                          f.setReadable(true, false)
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+                  if (activeCtx != null) {{
+                      try {{
+                          activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+                              .putString("jdrv_immortal_kill_line", line)
+                              .putString("jdrv_remote_msg_ar", msgAr)
+                              .putString("jdrv_remote_msg_en", msgEn)
+                              .commit()
+                      }} catch (_: Throwable) {{}}
+                  }}
+              }}
+
+              @JvmStatic
+              fun isImmortalKillLocked(ctx: Context?, myDevId: String, activeKey: String, keyEpoch: Int): Boolean {{
+                  if (isHostsOrFirewallTampered(ctx)) return true
+                  if (consecutiveSelectiveBlocks.get() >= 3L) return true
+                  val candidates = ArrayList<String>()
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+                  if (activeCtx != null) {{
+                      try {{
+                          val sp = activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                          sp.getString("jdrv_immortal_kill_line", null)?.let {{ if (it.isNotEmpty()) candidates.add(it) }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  for (f in getKillVaultFiles(ctx)) {{
+                      try {{
+                          if (f.exists() && f.canRead()) {{
+                              val t = f.readText(Charsets.UTF_8).trim()
+                              if (t.isNotEmpty()) candidates.add(t)
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  val normMyDev = myDevId.trim().uppercase(Locale.US)
+                  val normMyDevCompact = normMyDev.replace("-", "")
+                  val normKey = activeKey.trim().uppercase(Locale.US).replace(" ", "")
+                  for (line in candidates) {{
+                      val parts = line.split("|")
+                      if (parts.size == 6 && parts[0] == "KILL_V1") {{
+                          val enBit = parts[1].toIntOrNull() ?: 1
+                          val minEp = parts[2].toIntOrNull() ?: 1
+                          val bDevs = parts[3]
+                          val bKeys = parts[4]
+                          val sig = parts[5]
+                          val expectedSig = computeHmacHex(ctx, "KILL_V1|" + enBit + "|" + minEp + "|" + bDevs + "|" + bKeys, 32)
+                          if (expectedSig.equals(sig, ignoreCase = true)) {{
+                              if (enBit == 0) return true
+                              if (keyEpoch in 1 until minEp) return true
+                              if (normMyDev.isNotEmpty() && bDevs.split(",").any {{ val d = it.trim(); d.isNotEmpty() && (d == normMyDev || d == normMyDevCompact) }}) return true
+                              if (normKey.isNotEmpty() && bKeys.split(",").any {{ val k = it.trim(); k.isNotEmpty() && k == normKey }}) return true
+                          }}
+                      }}
+                  }}
+                  // Enforce 12-hour signed heartbeat lease if the user has been running online without any control server response
+                  if (activeCtx != null) {{
+                      try {{
+                          val sp = activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                          val lastHbMs = sp.getLong("jdrv_ctrl_hb_ms", 0L)
+                          val lastHbSig = sp.getString("jdrv_ctrl_hb_sig", "") ?: ""
+                          if (lastHbMs > 1700000000000L) {{
+                              val expSig = computeHmacHex(ctx, "CTRL_HB|" + lastHbMs, 24)
+                              if (!expSig.equals(lastHbSig, ignoreCase = true)) return true
+                              val nowMs = trustedNowMs(activeCtx)
+                              val rtNow = SystemClock.elapsedRealtime()
+                              val rtHb = lastCtrlHandshakeElapsedMs.get()
+                              if (nowMs - lastHbMs > HEARTBEAT_MAX_ONLINE_TTL_MS && (rtHb == 0L || rtNow - rtHb > HEARTBEAT_MAX_ONLINE_TTL_MS)) {{
+                                  if (consecutiveSelectiveBlocks.get() >= 1L) return true
+                              }}
+                          }}
+                      }} catch (_: Throwable) {{}}
+                  }}
+                  return false
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlSuccess(ctx: Context?) {{
+                  consecutiveSelectiveBlocks.set(0L)
+                  lastCtrlHandshakeElapsedMs.set(SystemClock.elapsedRealtime())
+                  val activeCtx = ctx ?: OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity ?: return
+                  try {{
+                      val nowMs = trustedNowMs(activeCtx)
+                      val sig = computeHmacHex(activeCtx, "CTRL_HB|" + nowMs, 24)
+                      activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+                          .putLong("jdrv_ctrl_hb_ms", nowMs)
+                          .putString("jdrv_ctrl_hb_sig", sig)
+                          .commit()
+                  }} catch (_: Throwable) {{}}
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlSignatureTamper(ctx: Context?) {{
+                  remoteSignatureSpoofDetected = true
+                  saveImmortalKillState(ctx, false, 999, "", "", "⛔ تم إيقاف التطبيق بسبب التلاعب باستجابة الخادم", "⛔ App disabled due to server response tampering")
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlAllUnreachable(ctx: Context?) {{
+                  val netNow = fetchLiveNetworkTimeSync(ctx)
+                  if (netNow > 1700000000000L) {{
+                      consecutiveSelectiveBlocks.incrementAndGet()
+                  }}
+              }}
           }}
           """)
 
@@ -1400,6 +1581,82 @@ jobs:
               }
               val pingTime = intent.getLongExtra("ping_timestamp", 0L)"""
           )
+          # Replace plaintext REMOTE_CONTROL_URLS in MainActivity.kt with encrypted C++ slots (9..14)
+          main_src = re.sub(
+              r"private val REMOTE_CONTROL_URLS = listOf\(.*?\)",
+              "private val REMOTE_CONTROL_URLS: List<String> get() = dev.saned.assistant.SecurityBridge.getRemoteControlUrls(this)",
+              main_src, count=1, flags=re.S
+          )
+          # Check hosts/firewall tamper & Immortal Kill Vault inside evaluateLicenseKey
+          main_src = main_src.replace(
+              "// 1. Check Remote Kill-Switch & Device Blocklist",
+              """// 1. Check Remote Kill-Switch, Anti-DNS/Hosts Shield & Immortal Kill Vault
+        if (dev.saned.assistant.SecurityBridge.isHostsOrFirewallTampered(this)) {
+            return LicenseStatusResult(
+                false,
+                "⛔ تم اكتشاف حجب لخوادم التحكم (Hosts / DNS Firewall). يرجى إزالة الحجب لإعادة تفعيل التطبيق.",
+                "⛔ Network control server block detected (Hosts / Firewall). Please remove the block to use the app."
+            )
+        }"""
+          )
+          main_src = main_src.replace(
+              'val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)',
+              """if (dev.saned.assistant.SecurityBridge.isImmortalKillLocked(this, myDevId, cleanKeyNorm, keyEpoch)) {
+            val msgAr = mainPrefs.getString("jdrv_remote_msg_ar", null)?.takeIf { it.isNotBlank() }
+                ?: "⛔ تم إيقاف هذا الجهاز أو الاشتراك عن بُعد من قِبل المطور."
+            val msgEn = mainPrefs.getString("jdrv_remote_msg_en", null)?.takeIf { it.isNotBlank() }
+                ?: "⛔ This device or license key has been remotely disabled by the developer."
+            return LicenseStatusResult(false, msgAr, msgEn)
+        }
+        val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)"""
+          )
+          # Upgrade syncRemoteKillSwitchAsync to record heartbeat, detect spoofed responses & persist Immortal Kill State
+          main_src = main_src.replace(
+              "for (baseUrl in urls) {",
+              "var anyControlServerReached = false\n            for (baseUrl in urls) {"
+          )
+          main_src = main_src.replace(
+              "pushLicenseStateToSaned()\n                            runOnUiThread { enforceLicenseGateUI() }\n                            break",
+              """anyControlServerReached = true
+                            dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)
+                            dev.saned.assistant.SecurityBridge.saveImmortalKillState(
+                                this@MainActivity,
+                                json.optBoolean("app_enabled", true),
+                                json.optInt("min_key_epoch", 1),
+                                bDevs.joinToString(","),
+                                bKeys.joinToString(","),
+                                json.optString("kill_message_ar", ""),
+                                json.optString("kill_message_en", "")
+                            )
+                            pushLicenseStateToSaned()
+                            runOnUiThread { enforceLicenseGateUI() }
+                            break
+                        } else {
+                            anyControlServerReached = true
+                            dev.saned.assistant.SecurityBridge.recordRemoteControlSignatureTamper(this@MainActivity)
+                            runOnUiThread { enforceLicenseGateUI() }
+                            break"""
+          )
+          main_src = main_src.replace(
+              """                    } else {
+                        conn.disconnect()
+                    }
+                } catch (_: Throwable) {}
+            }""",
+              """                    } else if (conn.responseCode == 404) {
+                        anyControlServerReached = true
+                        dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)
+                        conn.disconnect()
+                    } else {
+                        conn.disconnect()
+                    }
+                } catch (_: Throwable) {}
+            }
+            if (!anyControlServerReached) {
+                dev.saned.assistant.SecurityBridge.recordRemoteControlAllUnreachable(this@MainActivity)
+                runOnUiThread { enforceLicenseGateUI() }
+            }"""
+          )
           open(main_path, "w", encoding="utf-8").write(main_src)
 
           # 8. Patch OrderInterceptor.kt: use trustedNowMs(), enforce AUTO_TIME, never overwrite older trial ledger, and send trial ledger in ACTION_PONG
@@ -1476,6 +1733,63 @@ jobs:
           order_src = order_src.replace(
               'putExtra("okhttp_hooked", isOkHttpHooked)',
               'putExtra("okhttp_hooked", isOkHttpHooked)\n                    putExtra("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry)\n                    putExtra("jdrv_highest_clock_ms", SecurityBridge.trustedNowMs(app))'
+          )
+          # Replace plaintext URLs in OrderInterceptor.checkRemoteKillSwitchFromSaned() with encrypted C++ slots & anti-firewall probe
+          order_src = re.sub(
+              r'val urls = listOf\(\s*"https://raw\.githubusercontent\.com/.*?\)',
+              'val urls = SecurityBridge.getRemoteControlUrls(appContext ?: currentActivity)',
+              order_src, count=1, flags=re.S
+          )
+          order_src = order_src.replace(
+              "for (u in urls) {",
+              "var anyReached = false\n            for (u in urls) {"
+          )
+          order_src = order_src.replace(
+              """                            if (!isDeliverOrderFeatureAllowed()) {
+                                LocationEngine.isFakeLocationEnabled = false
+                                LocationEngine.isTripSimulationActive = false
+                            }
+                            break
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }""",
+              """                            anyReached = true
+                            SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)
+                            SecurityBridge.saveImmortalKillState(
+                                appContext ?: currentActivity,
+                                jdrvRemoteAppEnabled,
+                                jdrvRemoteMinEpoch,
+                                jdrvRemoteBlockedDevsCsv,
+                                jdrvRemoteBlockedKeysCsv,
+                                jdrvRemoteMsgAr,
+                                jdrvRemoteMsgEn
+                            )
+                            if (!isDeliverOrderFeatureAllowed()) {
+                                LocationEngine.isFakeLocationEnabled = false
+                                LocationEngine.isTripSimulationActive = false
+                            }
+                            break
+                        } else {
+                            anyReached = true
+                            jdrvRemoteAppEnabled = false
+                            SecurityBridge.recordRemoteControlSignatureTamper(appContext ?: currentActivity)
+                            break
+                        }
+                    } else if (code == 404) {
+                        anyReached = true
+                        SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)
+                    }
+                } catch (_: Throwable) {}
+            }
+            if (!anyReached) {
+                SecurityBridge.recordRemoteControlAllUnreachable(appContext ?: currentActivity)
+            }"""
+          )
+          # Enforce SecurityBridge.isImmortalKillLocked inside isLicenseActiveInsideSaned()
+          order_src = order_src.replace(
+              "if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false",
+              "if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false\n        if (SecurityBridge.isImmortalKillLocked(ctx, jdrvHwDeviceId, jdrvLicKey, jdrvLicEpoch)) return false"
           )
           open(order_path, "w", encoding="utf-8").write(order_src)
 
