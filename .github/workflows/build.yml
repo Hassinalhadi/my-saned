@@ -1076,7 +1076,7 @@ jobs:
                   }}
                   mainEd.commit()
 
-                  val vaultPayload = if (isTrial) "$entryLine\n$hwEntryLine" else entryLine
+                  val vaultPayload = if (isTrial) entryLine + "\\n" + hwEntryLine else entryLine
                   for (f in getImmortalVaultFiles(ctx, tagHex)) {{
                       try {{
                           f.parentFile?.mkdirs()
