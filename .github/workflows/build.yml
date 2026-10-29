@@ -2770,6 +2770,450 @@ jobs:
           open(order_path, "w", encoding="utf-8").write(order_src)
 
 
+          # 14. Fix Orders Tab Restaurant Name, Customer Details, Call Customer & WhatsApp buttons (Images 20 & 21)
+          main_src = open(main_path, "r", encoding="utf-8").read()
+
+          # Always show Call Customer & WhatsApp buttons on active order cards (as in Image 20) and auto-refresh missing restaurant/phone details
+          old_call_wa_block = """        // 5. Call & WhatsApp Buttons Row
+                  val cleanPhone = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
+                  if (cleanPhone.isNotEmpty()) {
+                      val actionsRow = LinearLayout(this).apply {
+                          orientation = LinearLayout.HORIZONTAL
+                          gravity = Gravity.CENTER_VERTICAL
+                      }
+
+                      val btnCall = TextView(this).apply {
+                          text = tr("📞   اتصال بالعميل", "📞   Call Customer")
+                          textSize = 15f
+                          typeface = Typeface.DEFAULT_BOLD
+                          gravity = Gravity.CENTER
+                          setTextColor(Color.WHITE)
+                          background = roundedBg("#059669", 18f)
+                          setPadding(28, 30, 28, 30)
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                              setMargins(0, 0, 12, 0)
+                          }
+                          setOnClickListener {
+                              try {
+                                  startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanPhone")))
+                              } catch (_: Throwable) {
+                                  Toast.makeText(this@MainActivity, cleanPhone, Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                      }
+                      actionsRow.addView(btnCall)
+
+                      val btnWhatsApp = TextView(this).apply {
+                          text = tr("💬   واتساب", "💬   WhatsApp")
+                          textSize = 15f
+                          typeface = Typeface.DEFAULT_BOLD
+                          gravity = Gravity.CENTER
+                          setTextColor(Color.WHITE)
+                          background = roundedBg("#16A34A", 18f)
+                          setPadding(28, 30, 28, 30)
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                              setMargins(12, 0, 0, 0)
+                          }
+                          setOnClickListener {
+                              try {
+                                  val waUrl = "https://api.whatsapp.com/send?phone=$cleanPhone"
+                                  startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(waUrl)))
+                              } catch (_: Throwable) {
+                                  Toast.makeText(this@MainActivity, cleanPhone, Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                      }
+                      actionsRow.addView(btnWhatsApp)
+
+                      inner.addView(actionsRow)
+                  }"""
+
+          new_call_wa_block = """        // 5. Call & WhatsApp Buttons Row (Always visible on Active Order Cards as in Image 20, with auto-enrichment)
+                  val cleanPhone = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
+                  val rawPhoneDial = order.customerPhone.trim().ifEmpty { cleanPhone }
+                  if (cleanPhone.isEmpty() || order.restaurant.isBlank() || order.restaurant.equals("Restaurant", ignoreCase = true) || order.restaurant == "المطعم") {
+                      requestOrderDetailsRefresh(order)
+                  }
+                  val actionsRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          setMargins(0, 0, 0, 6)
+                      }
+                  }
+
+                  val btnCall = TextView(this).apply {
+                      text = tr("📞   اتصال بالعميل", "📞   Call Customer")
+                      textSize = 15f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.WHITE)
+                      background = roundedBg("#059669", 18f)
+                      setPadding(28, 30, 28, 30)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(0, 0, 12, 0)
+                      }
+                      setOnClickListener {
+                          val ph = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone).ifEmpty { order.customerPhone.trim() }
+                          if (ph.isNotEmpty()) {
+                              try {
+                                  val dialPhone = if (order.customerPhone.trim().startsWith("0") || order.customerPhone.trim().startsWith("+")) order.customerPhone.trim() else "+$ph"
+                                  startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$dialPhone")))
+                              } catch (_: Throwable) {
+                                  Toast.makeText(this@MainActivity, ph, Toast.LENGTH_SHORT).show()
+                              }
+                          } else {
+                              requestOrderDetailsRefresh(order)
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("🔄 جاري جلب رقم العميل وتفاصيل الطلب من ساند...", "🔄 Fetching customer phone & details from Saned..."),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      }
+                  }
+                  actionsRow.addView(btnCall)
+
+                  val btnWhatsApp = TextView(this).apply {
+                      text = tr("💬   واتساب", "💬   WhatsApp")
+                      textSize = 15f
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.WHITE)
+                      background = roundedBg("#16A34A", 18f)
+                      setPadding(28, 30, 28, 30)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                          setMargins(12, 0, 0, 0)
+                      }
+                      setOnClickListener {
+                          val ph = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
+                          if (ph.isNotEmpty()) {
+                              try {
+                                  val waUrl = "https://api.whatsapp.com/send?phone=$ph"
+                                  startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(waUrl)))
+                              } catch (_: Throwable) {
+                                  Toast.makeText(this@MainActivity, ph, Toast.LENGTH_SHORT).show()
+                              }
+                          } else {
+                              requestOrderDetailsRefresh(order)
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("🔄 جاري جلب رقم العميل لفتح واتساب...", "🔄 Fetching customer phone for WhatsApp..."),
+                                  Toast.LENGTH_SHORT
+                              ).show()
+                          }
+                      }
+                  }
+                  actionsRow.addView(btnWhatsApp)
+                  inner.addView(actionsRow)"""
+
+          assert old_call_wa_block in main_src, "old_call_wa_block not found"
+          main_src = main_src.replace(old_call_wa_block, new_call_wa_block, 1)
+
+          # Also show customer phone inside dropoffDetailTv when available
+          old_dropoff_parts = 'if (order.customerName.isNotEmpty() && order.customerName != "Customer") parts.add(order.customerName)'
+          new_dropoff_parts = (
+              'if (order.customerName.isNotEmpty() && order.customerName != "Customer") parts.add(order.customerName)\n'
+              '            if (order.customerPhone.isNotBlank()) parts.add("📞 " + order.customerPhone.trim())'
+          )
+          assert old_dropoff_parts in main_src, "old_dropoff_parts not found"
+          main_src = main_src.replace(old_dropoff_parts, new_dropoff_parts, 1)
+
+          open(main_path, "w", encoding="utf-8").write(main_src)
+
+          # Patch OrderInterceptor.kt to guarantee Restaurant Name (vendorName) & Customer Phone (clientPhone) extraction from SQLite & API
+          order_src = open(order_path, "r", encoding="utf-8").read()
+
+          # 1. Add vendorNameCache in OrderInterceptor
+          old_cust_cache_decl = "private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()"
+          new_cust_cache_decl = (
+              "private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()\n"
+              "    private val vendorNameCache = ConcurrentHashMap<String, String>()"
+          )
+          assert old_cust_cache_decl in order_src, "old_cust_cache_decl not found"
+          order_src = order_src.replace(old_cust_cache_decl, new_cust_cache_decl, 1)
+
+          # 2. In parseCursorRowWithLnzW, fallback to vendorNameCache and include restName & finalCustPhone in syncSignature
+          old_rest_calc = """        val restName = when {
+                      !posRestAr.isNullOrEmpty() && !posRestEn.isNullOrEmpty() && posRestAr != posRestEn -> "$posRestEn - $posRestAr"
+                      !posRestAr.isNullOrEmpty() -> posRestAr
+                      !posRestEn.isNullOrEmpty() -> posRestEn
+                      else -> ""
+                  }"""
+          new_rest_calc = """        val rawRestFromCols = when {
+                      !posRestAr.isNullOrEmpty() && !posRestEn.isNullOrEmpty() && posRestAr != posRestEn && !posRestEn.equals("Jahez APP", ignoreCase = true) -> "$posRestEn - $posRestAr"
+                      !posRestAr.isNullOrEmpty() -> posRestAr
+                      !posRestEn.isNullOrEmpty() && !posRestEn.equals("Jahez APP", ignoreCase = true) -> posRestEn
+                      else -> ""
+                  }
+                  val refStrTmp = if (!posRef.isNullOrEmpty()) posRef else idStr
+                  val restName = rawRestFromCols.ifEmpty { vendorNameCache[idStr] ?: vendorNameCache[refStrTmp] ?: "" }
+                  if (restName.isNotEmpty()) {
+                      vendorNameCache[idStr] = restName
+                      if (refStrTmp.isNotEmpty()) vendorNameCache[refStrTmp] = restName
+                  }"""
+          assert old_rest_calc in order_src, "old_rest_calc not found"
+          order_src = order_src.replace(old_rest_calc, new_rest_calc, 1)
+
+          old_pos_cust_name = 'val finalCustName = posCustName ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""'
+          new_pos_cust_name = 'val finalCustName = (posCustName ?: (if (posRestEn.equals("Jahez APP", ignoreCase = true)) posRestEn else null)) ?: cachedDetail?.first?.takeIf { it.isNotEmpty() } ?: syncedPrev?.optString("customerName", "") ?: ""'
+          assert old_pos_cust_name in order_src, "old_pos_cust_name not found"
+          order_src = order_src.replace(old_pos_cust_name, new_pos_cust_name, 1)
+
+          old_sync_sig = 'val syncSignature = "$idStr:$refStr:$normStatus:${finalCustPhone.isNotEmpty()}:${effectiveCash.toInt()}:${effectiveFoodPrice.toInt()}:$effectivePayMethod:$hasCoordFlag"'
+          new_sync_sig = 'val syncSignature = "$idStr:$refStr:$normStatus:$restName:$finalCustName:$finalCustPhone:${effectiveCash.toInt()}:${effectiveFoodPrice.toInt()}:$effectivePayMethod:$hasCoordFlag"'
+          assert old_sync_sig in order_src, "old_sync_sig not found"
+          order_src = order_src.replace(old_sync_sig, new_sync_sig, 1)
+
+          # 3. In scanJahezDatabases, add schema-independent SELECT * FROM vendor, SELECT * FROM client, and SELECT * FROM dispatch_info pre-scanners!
+          old_exact_sql_exec = """                val c = openedDb.rawQuery(exactSql, null)
+                          exactCursor = c
+                          while (c.moveToNext()) {
+                              parseCursorRowWithLnzW(c)
+                          }"""
+
+          new_exact_sql_exec = """                // Pre-scan vendor table (SELECT * FROM vendor) so restaurant name (e.g. ALBAIK - البيك) is ALWAYS extracted regardless of column renames!
+                          var venCursor: Cursor? = null
+                          try {
+                              venCursor = openedDb.rawQuery("SELECT * FROM vendor", null)
+                              val vCols = venCursor.columnNames ?: emptyArray()
+                              val vIdIdx = vCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) || it.equals("vendorId", ignoreCase = true) }
+                              if (vIdIdx >= 0) {
+                                  while (venCursor.moveToNext()) {
+                                      val dId = cursorStringOrNull(venCursor, vIdIdx) ?: cursorDoubleOrNull(venCursor, vIdIdx)?.toLong()?.toString() ?: continue
+                                      val nameParts = mutableListOf<String>()
+                                      for (ci in vCols.indices) {
+                                          if (ci == vIdIdx) continue
+                                          val cn = vCols[ci].lowercase(Locale.US)
+                                          if (cn.contains("name") || cn.contains("title") || cn.contains("vendor") || cn.contains("store") || cn.contains("branch") || cn.contains("rest")) {
+                                              val s = cursorStringOrNull(venCursor, ci)
+                                              if (!s.isNullOrEmpty() && !s.startsWith("http") && !s.all { it.isDigit() } && !nameParts.contains(s)) {
+                                                  nameParts.add(s)
+                                              }
+                                          }
+                                      }
+                                      if (nameParts.isNotEmpty()) {
+                                          val combinedRest = nameParts.take(2).joinToString(" - ")
+                                          vendorNameCache[dId] = combinedRest
+                                      }
+                                  }
+                              }
+                          } catch (_: Throwable) {
+                          } finally {
+                              try { venCursor?.close() } catch (_: Throwable) {}
+                          }
+
+                          // Pre-scan client table (SELECT * FROM client) so customer phone (Call Customer / WhatsApp) & subscriberName are ALWAYS extracted!
+                          var cliCursor: Cursor? = null
+                          try {
+                              cliCursor = openedDb.rawQuery("SELECT * FROM client", null)
+                              val cCols = cliCursor.columnNames ?: emptyArray()
+                              val cIdIdx = cCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) || it.equals("clientId", ignoreCase = true) }
+                              if (cIdIdx >= 0) {
+                                  while (cliCursor.moveToNext()) {
+                                      val dId = cursorStringOrNull(cliCursor, cIdIdx) ?: cursorDoubleOrNull(cliCursor, cIdIdx)?.toLong()?.toString() ?: continue
+                                      var cNameVal = ""
+                                      var cPhoneVal = ""
+                                      for (ci in cCols.indices) {
+                                          if (ci == cIdIdx) continue
+                                          val cn = cCols[ci].lowercase(Locale.US)
+                                          val s = cursorStringOrNull(cliCursor, ci) ?: continue
+                                          if (cn.contains("phone") || cn.contains("mobile") || cn.contains("contact") || cn.contains("tel")) {
+                                              if (cPhoneVal.isEmpty() && s.any { it.isDigit() }) cPhoneVal = s
+                                          } else if (cn.contains("name") || cn.contains("subscriber") || cn.contains("client") || cn.contains("customer")) {
+                                              if (cNameVal.isEmpty() && !s.startsWith("http")) cNameVal = s
+                                          }
+                                      }
+                                      if (cPhoneVal.isNotEmpty() || cNameVal.isNotEmpty()) {
+                                          val prev = customerDetailsCache[dId]
+                                          customerDetailsCache[dId] = Triple(
+                                              cNameVal.ifEmpty { prev?.first ?: "" },
+                                              cPhoneVal.ifEmpty { prev?.second ?: "" },
+                                              prev?.third ?: 0.0
+                                          )
+                                      }
+                                  }
+                              }
+                          } catch (_: Throwable) {
+                          } finally {
+                              try { cliCursor?.close() } catch (_: Throwable) {}
+                          }
+
+                          // Try exactSql first, and also scan dispatch_info directly so even if exactSql fails on a column rename, all active orders get enriched!
+                          try {
+                              val c = openedDb.rawQuery(exactSql, null)
+                              exactCursor = c
+                              while (c.moveToNext()) {
+                                  parseCursorRowWithLnzW(c)
+                              }
+                          } catch (_: Throwable) {}
+
+                          var diCursor: Cursor? = null
+                          try {
+                              diCursor = openedDb.rawQuery("SELECT * FROM dispatch_info", null)
+                              val dCols = diCursor.columnNames ?: emptyArray()
+                              val dIdIdx = dCols.indexOfFirst { it.equals("dispatchId", ignoreCase = true) || it.equals("id", ignoreCase = true) }
+                              val dRefIdx = dCols.indexOfFirst { it.contains("reference", ignoreCase = true) }
+                              val dStIdx = dCols.indexOfFirst { it.contains("status", ignoreCase = true) || it.contains("state", ignoreCase = true) }
+                              if (dIdIdx >= 0) {
+                                  while (diCursor.moveToNext()) {
+                                      val dId = cursorStringOrNull(diCursor, dIdIdx) ?: cursorDoubleOrNull(diCursor, dIdIdx)?.toLong()?.toString() ?: continue
+                                      val dRef = if (dRefIdx >= 0) (cursorStringOrNull(diCursor, dRefIdx) ?: dId) else dId
+                                      val dSt = if (dStIdx >= 0) (cursorStringOrNull(diCursor, dStIdx) ?: "Accepted ✅") else "Accepted ✅"
+                                      val vRest = vendorNameCache[dId] ?: vendorNameCache[dRef] ?: ""
+                                      val cDet = customerDetailsCache[dId] ?: customerDetailsCache[dRef]
+                                      if (vRest.isNotEmpty()) vendorNameCache[dRef] = vRest
+                                      if (cDet != null) customerDetailsCache[dRef] = cDet
+                                      val isAct = liveActiveOrderMap.containsKey(dId) || liveActiveOrderMap.containsKey(dRef) ||
+                                          synchronized(syncedOrdersCache) { syncedOrdersCache.containsKey(dId) || syncedOrdersCache.containsKey(dRef) }
+                                      if (isAct && (vRest.isNotEmpty() || cDet != null)) {
+                                          val existingObj = synchronized(syncedOrdersCache) { syncedOrdersCache[dRef] ?: syncedOrdersCache[dId] }
+                                          val prevM = if (existingObj != null) OrderModel.fromJson(existingObj) else null
+                                          val coords = getCachedCoords(dId) ?: getCachedCoords(dRef)
+                                          sendOrderToLog(
+                                              orderId = "#$dId",
+                                              price = prevM?.price ?: 0.0,
+                                              dist = prevM?.distanceKm ?: 0.0,
+                                              restaurant = vRest.ifEmpty { prevM?.restaurant ?: "" },
+                                              status = normalizeOrderStatusDisplay(dSt),
+                                              customerName = cDet?.first?.ifEmpty { prevM?.customerName ?: "" } ?: (prevM?.customerName ?: ""),
+                                              customerPhone = cDet?.second?.ifEmpty { prevM?.customerPhone ?: "" } ?: (prevM?.customerPhone ?: ""),
+                                              address = prevM?.address ?: "",
+                                              cashAmount = prevM?.cashAmount ?: 0.0,
+                                              foodPrice = if ((cDet?.third ?: 0.0) > 0.0) cDet!!.third else (prevM?.foodPrice ?: 0.0),
+                                              paymentMethod = paymentMethodCache[dId] ?: paymentMethodCache[dRef] ?: (prevM?.paymentMethod ?: ""),
+                                              currency = prevM?.currency ?: "SAR",
+                                              reference = dRef,
+                                              pickupLat = coords?.getOrNull(0) ?: (prevM?.pickupLat ?: 0.0),
+                                              pickupLng = coords?.getOrNull(1) ?: (prevM?.pickupLng ?: 0.0),
+                                              destLat = coords?.getOrNull(2) ?: (prevM?.destLat ?: 0.0),
+                                              destLng = coords?.getOrNull(3) ?: (prevM?.destLng ?: 0.0),
+                                              notifyUser = false
+                                          )
+                                      }
+                                  }
+                              }
+                          } catch (_: Throwable) {
+                          } finally {
+                              try { diCursor?.close() } catch (_: Throwable) {}
+                          }"""
+
+          assert old_exact_sql_exec in order_src, "old_exact_sql_exec not found"
+          order_src = order_src.replace(old_exact_sql_exec, new_exact_sql_exec, 1)
+
+          # 4. In fetchOrderCustomerDetailsAsync: resolve 10-digit referenceId to true 9-digit dispatchId, and extract restaurant name (vendorName) from API!
+          old_fetch_id_line = """        val cleanId = orderId.replace("#", "").trim()
+                  val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0"""
+
+          new_fetch_id_line = """        val cleanId = orderId.replace("#", "").trim()
+                  val mappedDispatchId = synchronized(syncedOrdersCache) {
+                      val byKey = syncedOrdersCache[cleanId]?.optInt("id", 0) ?: 0
+                      if (byKey > 0 && byKey.toString() != cleanId) byKey
+                      else {
+                          var foundId = 0
+                          for (obj in syncedOrdersCache.values) {
+                              val r = obj.optString("reference", "").replace("#", "").trim()
+                              val i = obj.optInt("id", 0)
+                              if (r == cleanId && i > 0) { foundId = i; break }
+                          }
+                          foundId
+                      }
+                  }
+                  val orderIdInt = if (mappedDispatchId > 0) mappedDispatchId else (cleanId.toIntOrNull() ?: cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0)"""
+
+          assert old_fetch_id_line in order_src, "old_fetch_id_line not found"
+          order_src = order_src.replace(old_fetch_id_line, new_fetch_id_line, 1)
+
+          old_fetch_vars = '            var cRef = ""'
+          new_fetch_vars = '            var cRef = ""\n            var cRest = vendorNameCache[cleanId] ?: vendorNameCache[orderIdInt.toString()] ?: ""'
+          assert old_fetch_vars in order_src, "old_fetch_vars not found"
+          order_src = order_src.replace(old_fetch_vars, new_fetch_vars, 1)
+
+          old_api_disp_parse = """                        val refVal = extractFirstString(dataObj, "referenceId", "reference", "order_number", "orderNumber")
+                                  if (refVal.isNotEmpty()) cRef = refVal"""
+          new_api_disp_parse = """                        val refVal = extractFirstString(dataObj, "referenceId", "reference", "order_number", "orderNumber")
+                                  if (refVal.isNotEmpty()) cRef = refVal
+                                  val venObj = dataObj.optJSONObject("vendor") ?: json.optJSONObject("vendor") ?: dataObj.optJSONObject("pickup") ?: dataObj.optJSONObject("store") ?: dataObj.optJSONObject("branch")
+                                  if (venObj != null) {
+                                      val vr = extractFirstString(venObj, "vendorName", "name", "nameAr", "nameEn", "store_name", "restaurant_name", "branchName")
+                                      if (vr.isNotEmpty() && !vr.equals("Jahez APP", ignoreCase = true)) cRest = vr
+                                  }
+                                  if (cRest.isEmpty()) {
+                                      val vr2 = extractFirstString(dataObj, "vendorName", "restaurantName", "storeName", "store_name", "restaurant_name", "branchName", "vendor_name")
+                                      if (vr2.isNotEmpty() && !vr2.equals("Jahez APP", ignoreCase = true)) cRest = vr2
+                                  }
+                                  if (cRest.isNotEmpty()) {
+                                      vendorNameCache[cleanId] = cRest
+                                      vendorNameCache[orderIdInt.toString()] = cRest
+                                      if (cRef.isNotEmpty()) vendorNameCache[cRef] = cRest
+                                  }"""
+          assert old_api_disp_parse in order_src, "old_api_disp_parse not found"
+          order_src = order_src.replace(old_api_disp_parse, new_api_disp_parse, 1)
+
+          old_fetch_cond = "if (cPhone.isNotEmpty() || cName.isNotEmpty() || cFoodPrice > 0.0 || cCash > 0.0 || cPayMethod.isNotEmpty() || cRef.isNotEmpty() || getCachedCoords(cleanId) != null) {"
+          new_fetch_cond = "if (cRest.isNotEmpty() || cPhone.isNotEmpty() || cName.isNotEmpty() || cFoodPrice > 0.0 || cCash > 0.0 || cPayMethod.isNotEmpty() || cRef.isNotEmpty() || getCachedCoords(cleanId) != null) {"
+          assert old_fetch_cond in order_src, "old_fetch_cond not found"
+          order_src = order_src.replace(old_fetch_cond, new_fetch_cond, 1)
+
+          old_fetch_send_rest = "restaurant = prevModel.restaurant,"
+          new_fetch_send_rest = "restaurant = cRest.ifEmpty { prevModel.restaurant },"
+          assert old_fetch_send_rest in order_src, "old_fetch_send_rest not found"
+          order_src = order_src.replace(old_fetch_send_rest, new_fetch_send_rest, 1)
+
+          # 5. In extractAndProcessOrderJson: prioritize vendorName/restaurantName/storeName BEFORE subscriberName ("Jahez APP") and check vendor object
+          old_json_rest = 'var restaurant = extractFirstString(json, "subscriberName", "vendorName", '
+          new_json_rest = 'var restaurant = extractFirstString(json, "vendorName", '
+          assert old_json_rest in order_src, "old_json_rest not found"
+          order_src = order_src.replace(old_json_rest, new_json_rest, 1)
+
+          old_data_rest = 'if (restaurant.isEmpty()) restaurant = extractFirstString(dataObj, "subscriberName", "store_name", '
+          new_data_rest = 'if (restaurant.isEmpty()) restaurant = extractFirstString(dataObj, "vendorName", "store_name", '
+          assert old_data_rest in order_src, "old_data_rest not found"
+          order_src = order_src.replace(old_data_rest, new_data_rest, 1)
+
+          old_dedup_key = 'val dedupKey = "${orderId.replace("#", "")}:$reference:$normStatus:${customerPhone.isNotEmpty()}:${cashAmount.toInt()}:${foodPrice.toInt()}:$hasCoords"'
+          new_dedup_key = 'val dedupKey = "${orderId.replace("#", "")}:$reference:$normStatus:$restaurant:$customerName:$customerPhone:${cashAmount.toInt()}:${foodPrice.toInt()}:$hasCoords"'
+          assert old_dedup_key in order_src, "old_dedup_key not found"
+          order_src = order_src.replace(old_dedup_key, new_dedup_key, 1)
+
+          # 6. In sendOrderToLog: check vendorNameCache for mergedRestaurant and include restaurant & customerName in isUnchangedExisting!
+          old_merged_rest = 'val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }'
+          new_merged_rest = 'val mergedRestaurant = restaurant.ifEmpty { vendorNameCache[idKey] ?: vendorNameCache[cacheKey] ?: vendorNameCache[cleanOrderId] ?: prevJson?.optString("restaurant", "") ?: "" }'
+          assert old_merged_rest in order_src, "old_merged_rest not found"
+          order_src = order_src.replace(old_merged_rest, new_merged_rest, 1)
+
+          old_unchanged = """        val isUnchangedExisting = prevJson != null &&
+                      prevJson.optString("status", "") == order.status &&
+                      prevJson.optString("customerPhone", "") == order.customerPhone &&"""
+          new_unchanged = """        val isUnchangedExisting = prevJson != null &&
+                      prevJson.optString("status", "") == order.status &&
+                      prevJson.optString("restaurant", "") == order.restaurant &&
+                      prevJson.optString("customerName", "") == order.customerName &&
+                      prevJson.optString("customerPhone", "") == order.customerPhone &&"""
+          assert old_unchanged in order_src, "old_unchanged not found"
+          order_src = order_src.replace(old_unchanged, new_unchanged, 1)
+
+          # 7. In respondToPing: scan active orders in dispatches_db so opening J-Driver immediately enriches restaurant name & customer phone
+          old_ping_comment = "// Do not scan historical SQLite DB on every ping so old orders never flood or reorder the active list"
+          new_ping_scan = "try { scanJahezDatabases(app) } catch (_: Throwable) {}"
+          assert old_ping_comment in order_src, "old_ping_comment not found"
+          order_src = order_src.replace(old_ping_comment, new_ping_scan, 1)
+
+          open(order_path, "w", encoding="utf-8").write(order_src)
+
+          # 8. In PackageCloaker.kt: exempt internal SecurityBridge / OrderInterceptor stack frames so native lib & cert checks inside net.jahez.fleets never hit NameNotFoundException
+          cloaker_path = "app/src/main/java/dev/saned/assistant/PackageCloaker.kt"
+          if os.path.exists(cloaker_path):
+              clk_src = open(cloaker_path, "r", encoding="utf-8").read()
+              clk_src = clk_src.replace(
+                  "if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg)) {",
+                  "if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg) && formatAppCallStack(4).isNotEmpty()) {"
+              )
+              open(cloaker_path, "w", encoding="utf-8").write(clk_src)
+
           print("Immortal One-Day-Trial Vault & Anti-Clock-Manipulation Shield applied successfully!")
           PYEOF
 
