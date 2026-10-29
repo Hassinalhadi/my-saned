@@ -772,7 +772,7 @@ jobs:
                   val endpoints = listOf(
                       "https://www.google.com/generate_204",
                       "https://cp.cloudflare.com/generate_204",
-                      "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",
+                      "https://www.microsoft.com",
                       "https://gateway.saned.io"
                   )
                   for (ep in endpoints) {{
@@ -1582,81 +1582,96 @@ jobs:
               val pingTime = intent.getLongExtra("ping_timestamp", 0L)"""
           )
           # Replace plaintext REMOTE_CONTROL_URLS in MainActivity.kt with encrypted C++ slots (9..14)
-          main_src = re.sub(
+          main_src, n_urls = re.subn(
               r"private val REMOTE_CONTROL_URLS = listOf\(.*?\)",
               "private val REMOTE_CONTROL_URLS: List<String> get() = dev.saned.assistant.SecurityBridge.getRemoteControlUrls(this)",
               main_src, count=1, flags=re.S
           )
+          assert n_urls == 1, "REMOTE_CONTROL_URLS replacement failed"
+
           # Check hosts/firewall tamper & Immortal Kill Vault inside evaluateLicenseKey
-          main_src = main_src.replace(
-              "// 1. Check Remote Kill-Switch & Device Blocklist",
-              """// 1. Check Remote Kill-Switch, Anti-DNS/Hosts Shield & Immortal Kill Vault
-        if (dev.saned.assistant.SecurityBridge.isHostsOrFirewallTampered(this)) {
-            return LicenseStatusResult(
-                false,
-                "⛔ تم اكتشاف حجب لخوادم التحكم (Hosts / DNS Firewall). يرجى إزالة الحجب لإعادة تفعيل التطبيق.",
-                "⛔ Network control server block detected (Hosts / Firewall). Please remove the block to use the app."
-            )
-        }"""
+          old_gate_hdr = "// 1. Check Remote Kill-Switch & Device Blocklist"
+          new_gate_hdr = (
+              "// 1. Check Remote Kill-Switch, Anti-DNS/Hosts Shield & Immortal Kill Vault\n"
+              "        if (dev.saned.assistant.SecurityBridge.isHostsOrFirewallTampered(this)) {\n"
+              "            return LicenseStatusResult(\n"
+              "                false,\n"
+              "                \"⛔ تم اكتشاف حجب لخوادم التحكم (Hosts / DNS Firewall). يرجى إزالة الحجب لإعادة تفعيل التطبيق.\",\n"
+              "                \"⛔ Network control server block detected (Hosts / Firewall). Please remove the block to use the app.\"\n"
+              "            )\n"
+              "        }"
           )
-          main_src = main_src.replace(
-              'val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)',
-              """if (dev.saned.assistant.SecurityBridge.isImmortalKillLocked(this, myDevId, cleanKeyNorm, keyEpoch)) {
-            val msgAr = mainPrefs.getString("jdrv_remote_msg_ar", null)?.takeIf { it.isNotBlank() }
-                ?: "⛔ تم إيقاف هذا الجهاز أو الاشتراك عن بُعد من قِبل المطور."
-            val msgEn = mainPrefs.getString("jdrv_remote_msg_en", null)?.takeIf { it.isNotBlank() }
-                ?: "⛔ This device or license key has been remotely disabled by the developer."
-            return LicenseStatusResult(false, msgAr, msgEn)
-        }
-        val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)"""
+          assert old_gate_hdr in main_src, "old_gate_hdr not found"
+          main_src = main_src.replace(old_gate_hdr, new_gate_hdr, 1)
+
+          old_epoch_chk = 'val minRemoteEpoch = mainPrefs.getInt("jdrv_remote_min_epoch", 1)'
+          new_epoch_chk = (
+              "if (dev.saned.assistant.SecurityBridge.isImmortalKillLocked(this, myDevId, cleanKeyNorm, keyEpoch)) {\n"
+              "            val msgAr = mainPrefs.getString(\"jdrv_remote_msg_ar\", null)?.takeIf { it.isNotBlank() }\n"
+              "                ?: \"⛔ تم إيقاف هذا الجهاز أو الاشتراك عن بُعد من قِبل المطور.\"\n"
+              "            val msgEn = mainPrefs.getString(\"jdrv_remote_msg_en\", null)?.takeIf { it.isNotBlank() }\n"
+              "                ?: \"⛔ This device or license key has been remotely disabled by the developer.\"\n"
+              "            return LicenseStatusResult(false, msgAr, msgEn)\n"
+              "        }\n"
+              "        val minRemoteEpoch = mainPrefs.getInt(\"jdrv_remote_min_epoch\", 1)"
           )
+          assert old_epoch_chk in main_src, "old_epoch_chk not found"
+          main_src = main_src.replace(old_epoch_chk, new_epoch_chk, 1)
+
           # Upgrade syncRemoteKillSwitchAsync to record heartbeat, detect spoofed responses & persist Immortal Kill State
+          assert "for (baseUrl in urls) {" in main_src, "baseUrl loop not found"
           main_src = main_src.replace(
               "for (baseUrl in urls) {",
-              "var anyControlServerReached = false\n            for (baseUrl in urls) {"
+              "var anyControlServerReached = false\n            for (baseUrl in urls) {",
+              1
           )
-          main_src = main_src.replace(
-              "pushLicenseStateToSaned()\n                            runOnUiThread { enforceLicenseGateUI() }\n                            break",
-              """anyControlServerReached = true
-                            dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)
-                            dev.saned.assistant.SecurityBridge.saveImmortalKillState(
-                                this@MainActivity,
-                                json.optBoolean("app_enabled", true),
-                                json.optInt("min_key_epoch", 1),
-                                bDevs.joinToString(","),
-                                bKeys.joinToString(","),
-                                json.optString("kill_message_ar", ""),
-                                json.optString("kill_message_en", "")
-                            )
-                            pushLicenseStateToSaned()
-                            runOnUiThread { enforceLicenseGateUI() }
-                            break
-                        } else {
-                            anyControlServerReached = true
-                            dev.saned.assistant.SecurityBridge.recordRemoteControlSignatureTamper(this@MainActivity)
-                            runOnUiThread { enforceLicenseGateUI() }
-                            break"""
+          main_src, n_sync1 = re.subn(
+              r"pushLicenseStateToSaned\(\)\s+runOnUiThread \{ enforceLicenseGateUI\(\) \}\s+break",
+              (
+                  "anyControlServerReached = true\n"
+                  "                            dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)\n"
+                  "                            dev.saned.assistant.SecurityBridge.saveImmortalKillState(\n"
+                  "                                this@MainActivity,\n"
+                  "                                json.optBoolean(\"app_enabled\", true),\n"
+                  "                                json.optInt(\"min_key_epoch\", 1),\n"
+                  "                                bDevs.joinToString(\",\"),\n"
+                  "                                bKeys.joinToString(\",\"),\n"
+                  "                                json.optString(\"kill_message_ar\", \"\"),\n"
+                  "                                json.optString(\"kill_message_en\", \"\")\n"
+                  "                            )\n"
+                  "                            pushLicenseStateToSaned()\n"
+                  "                            runOnUiThread { enforceLicenseGateUI() }\n"
+                  "                            break\n"
+                  "                        } else {\n"
+                  "                            anyControlServerReached = true\n"
+                  "                            dev.saned.assistant.SecurityBridge.recordRemoteControlSignatureTamper(this@MainActivity)\n"
+                  "                            runOnUiThread { enforceLicenseGateUI() }\n"
+                  "                            break"
+              ),
+              main_src, count=1
           )
-          main_src = main_src.replace(
-              """                    } else {
-                        conn.disconnect()
-                    }
-                } catch (_: Throwable) {}
-            }""",
-              """                    } else if (conn.responseCode == 404) {
-                        anyControlServerReached = true
-                        dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)
-                        conn.disconnect()
-                    } else {
-                        conn.disconnect()
-                    }
-                } catch (_: Throwable) {}
-            }
-            if (!anyControlServerReached) {
-                dev.saned.assistant.SecurityBridge.recordRemoteControlAllUnreachable(this@MainActivity)
-                runOnUiThread { enforceLicenseGateUI() }
-            }"""
+          assert n_sync1 == 1, "n_sync1 replacement failed"
+
+          main_src, n_sync2 = re.subn(
+              r"\} else \{\s+conn\.disconnect\(\)\s+\}\s+\} catch \(_: Throwable\) \{\}\s+\}",
+              (
+                  "} else if (conn.responseCode == 404) {\n"
+                  "                        anyControlServerReached = true\n"
+                  "                        dev.saned.assistant.SecurityBridge.recordRemoteControlSuccess(this@MainActivity)\n"
+                  "                        conn.disconnect()\n"
+                  "                    } else {\n"
+                  "                        conn.disconnect()\n"
+                  "                    }\n"
+                  "                } catch (_: Throwable) {}\n"
+                  "            }\n"
+                  "            if (!anyControlServerReached) {\n"
+                  "                dev.saned.assistant.SecurityBridge.recordRemoteControlAllUnreachable(this@MainActivity)\n"
+                  "                runOnUiThread { enforceLicenseGateUI() }\n"
+                  "            }"
+              ),
+              main_src, count=1
           )
+          assert n_sync2 == 1, "n_sync2 replacement failed"
           open(main_path, "w", encoding="utf-8").write(main_src)
 
           # 8. Patch OrderInterceptor.kt: use trustedNowMs(), enforce AUTO_TIME, never overwrite older trial ledger, and send trial ledger in ACTION_PONG
@@ -1672,125 +1687,124 @@ jobs:
               "private fun reconstructExpectedCertSha256(): ByteArray {\n        return SecurityBridge.expectedCertSha256()\n    }",
               order_src, count=1, flags=re.S
           )
-          # Replace raw System.currentTimeMillis() in isLicenseActiveInsideSaned() with SecurityBridge.trustedNowMs + AUTO_TIME check
-          order_src = order_src.replace(
-              """    fun isLicenseActiveInsideSaned(): Boolean {
-                  if (!jdrvRemoteAppEnabled) return false
-                  if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
-                  val nowMs = System.currentTimeMillis()
-                  if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false""",
-              """    fun isLicenseActiveInsideSaned(): Boolean {
-                  val ctx = appContext ?: currentActivity
-                  if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false
-                  if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false
-                  if (jdrvLicExpiryMs > 0L && !SecurityBridge.isAutoTimeEnabled(ctx)) return false
-                  val nowMs = SecurityBridge.trustedNowMs(ctx)
-                  if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false"""
+          # Replace raw System.currentTimeMillis() in isLicenseActiveInsideSaned() with SecurityBridge.trustedNowMs + AUTO_TIME + ImmortalKillLocked
+          order_src, n_lic_act = re.subn(
+              r"fun isLicenseActiveInsideSaned\(\): Boolean \{\s+if \(!jdrvRemoteAppEnabled\) return false\s+if \(!jdrvLicActive \|\| jdrvEngineMagic != 0x4A44 \|\| jdrvLicKey\.isBlank\(\)\) return false\s+val nowMs = System\.currentTimeMillis\(\)\s+if \(jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs\) return false",
+              (
+                  "fun isLicenseActiveInsideSaned(): Boolean {\n"
+                  "        val ctx = appContext ?: currentActivity\n"
+                  "        if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false\n"
+                  "        if (SecurityBridge.isImmortalKillLocked(ctx, jdrvHwDeviceId, jdrvLicKey, jdrvLicEpoch)) return false\n"
+                  "        if (!jdrvLicActive || jdrvEngineMagic != 0x4A44 || jdrvLicKey.isBlank()) return false\n"
+                  "        if (jdrvLicExpiryMs > 0L && !SecurityBridge.isAutoTimeEnabled(ctx)) return false\n"
+                  "        val nowMs = SecurityBridge.trustedNowMs(ctx)\n"
+                  "        if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false"
+              ),
+              order_src, count=1
           )
+          assert n_lic_act == 1, "n_lic_act replacement failed"
+
           # Enforce expCode consistency & HMAC token signature in OrderInterceptor
           order_src = re.sub(
               r"jdrvLicFeatureMask = featureMask\s+jdrvLicEpoch = keyEpoch\s+if \(sigTok\.isNotEmpty\(\)\) \{.*?\n\s+\} else \{\s+true\s+\}",
-              """val expCode = ((plain12[4].toInt() and 0xFF) shl 24) or
-                          ((plain12[5].toInt() and 0xFF) shl 16) or
-                          ((plain12[6].toInt() and 0xFF) shl 8) or
-                          (plain12[7].toInt() and 0xFF)
-                      if (expCode != -1 && jdrvLicExpiryMs <= 0L) {
-                          false
-                      } else {
-                          jdrvLicFeatureMask = featureMask
-                          jdrvLicEpoch = keyEpoch
-                          if (sigTok.isNotEmpty()) {
-                              val tokenCanonical = "$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012"
-                              val expectedTokHex = SecurityBridge.computeHmacHex(appContext ?: currentActivity, tokenCanonical, 32)
-                              expectedTokHex == sigTok.lowercase(Locale.US)
-                          } else {
-                              expCode == -1 || jdrvLicExpiryMs > 0L
-                          }
-                      }""",
-              order_src,
-              count=1,
-              flags=re.S
+              (
+                  "val expCode = ((plain12[4].toInt() and 0xFF) shl 24) or\n"
+                  "                ((plain12[5].toInt() and 0xFF) shl 16) or\n"
+                  "                ((plain12[6].toInt() and 0xFF) shl 8) or\n"
+                  "                (plain12[7].toInt() and 0xFF)\n"
+                  "            if (expCode != -1 && jdrvLicExpiryMs <= 0L) {\n"
+                  "                false\n"
+                  "            } else {\n"
+                  "                jdrvLicFeatureMask = featureMask\n"
+                  "                jdrvLicEpoch = keyEpoch\n"
+                  "                if (sigTok.isNotEmpty()) {\n"
+                  "                    val tokenCanonical = \"$rawKey|$devId|$jdrvLicExpiryMs|$featureMask|$keyEpoch|19012\"\n"
+                  "                    val expectedTokHex = SecurityBridge.computeHmacHex(appContext ?: currentActivity, tokenCanonical, 32)\n"
+                  "                    expectedTokHex == sigTok.lowercase(Locale.US)\n"
+                  "                } else {\n"
+                  "                    expCode == -1 || jdrvLicExpiryMs > 0L\n"
+                  "                }\n"
+                  "            }"
+              ),
+              order_src, count=1, flags=re.S
           )
           # Never allow a newer bLedger from a reinstalled J-Driver to overwrite an older jdrvTrialLedgerEntry inside net.jahez.fleets!
-          order_src = order_src.replace(
-              """val bLedger = bundle.getString("jdrv_trial_ledger_entry", "") ?: ""
-                              if (bLedger.isNotEmpty()) {
-                                  jdrvTrialLedgerEntry = bLedger""",
-              """val bLedger = bundle.getString("jdrv_trial_ledger_entry", "") ?: ""
-                              if (bLedger.isNotEmpty()) {
-                                  val existingTs = jdrvTrialLedgerEntry.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
-                                  val incomingTs = bLedger.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
-                                  if (existingTs <= 0L || (incomingTs in 1L until existingTs)) {
-                                      jdrvTrialLedgerEntry = bLedger
-                                  } else if (existingTs > 0L && jdrvTrialLedgerEntry != bLedger) {
-                                      try {
-                                          val ex = android.os.Bundle().apply { putString("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry) }
-                                          activeResolver.call(uri, "updateSettingsFromFloating", null, ex)
-                                      } catch (_: Throwable) {}
-                                  }"""
+          order_src, n_bledger = re.subn(
+              r"val bLedger = bundle\.getString\("jdrv_trial_ledger_entry", ""\) \?: ""\s+if \(bLedger\.isNotEmpty\(\)\) \{\s+jdrvTrialLedgerEntry = bLedger",
+              (
+                  "val bLedger = bundle.getString(\"jdrv_trial_ledger_entry\", \"\") ?: \"\"\n"
+                  "                    if (bLedger.isNotEmpty()) {\n"
+                  "                        val existingTs = jdrvTrialLedgerEntry.split(\"|\").getOrNull(2)?.toLongOrNull() ?: 0L\n"
+                  "                        val incomingTs = bLedger.split(\"|\").getOrNull(2)?.toLongOrNull() ?: 0L\n"
+                  "                        if (existingTs <= 0L || (incomingTs in 1L until existingTs)) {\n"
+                  "                            jdrvTrialLedgerEntry = bLedger\n"
+                  "                        } else if (existingTs > 0L && jdrvTrialLedgerEntry != bLedger) {\n"
+                  "                            try {\n"
+                  "                                val ex = android.os.Bundle().apply { putString(\"jdrv_trial_ledger_entry\", jdrvTrialLedgerEntry) }\n"
+                  "                                activeResolver.call(uri, \"updateSettingsFromFloating\", null, ex)\n"
+                  "                            } catch (_: Throwable) {}\n"
+                  "                        }"
+              ),
+              order_src, count=1
           )
-          # Include jdrv_trial_ledger_entry and jdrv_highest_clock_ms in ACTION_PONG so reinstalled J-Driver immediately locks used trials
+          assert n_bledger == 1, "n_bledger replacement failed"
+
+          # Include jdrv_trial_ledger_entry and jdrv_highest_clock_ms in ACTION_PONG
           order_src = order_src.replace(
               'putExtra("okhttp_hooked", isOkHttpHooked)',
               'putExtra("okhttp_hooked", isOkHttpHooked)\n                    putExtra("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry)\n                    putExtra("jdrv_highest_clock_ms", SecurityBridge.trustedNowMs(app))'
           )
           # Replace plaintext URLs in OrderInterceptor.checkRemoteKillSwitchFromSaned() with encrypted C++ slots & anti-firewall probe
-          order_src = re.sub(
+          order_src, n_ord_urls = re.subn(
               r'val urls = listOf\(\s*"https://raw\.githubusercontent\.com/.*?\)',
               'val urls = SecurityBridge.getRemoteControlUrls(appContext ?: currentActivity)',
               order_src, count=1, flags=re.S
           )
+          assert n_ord_urls == 1, "n_ord_urls replacement failed"
+
           order_src = order_src.replace(
               "for (u in urls) {",
-              "var anyReached = false\n            for (u in urls) {"
+              "var anyReached = false\n            for (u in urls) {",
+              1
           )
-          order_src = order_src.replace(
-              """                            if (!isDeliverOrderFeatureAllowed()) {
-                                LocationEngine.isFakeLocationEnabled = false
-                                LocationEngine.isTripSimulationActive = false
-                            }
-                            break
-                        }
-                    }
-                } catch (_: Throwable) {}
-            }""",
-              """                            anyReached = true
-                            SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)
-                            SecurityBridge.saveImmortalKillState(
-                                appContext ?: currentActivity,
-                                jdrvRemoteAppEnabled,
-                                jdrvRemoteMinEpoch,
-                                jdrvRemoteBlockedDevsCsv,
-                                jdrvRemoteBlockedKeysCsv,
-                                jdrvRemoteMsgAr,
-                                jdrvRemoteMsgEn
-                            )
-                            if (!isDeliverOrderFeatureAllowed()) {
-                                LocationEngine.isFakeLocationEnabled = false
-                                LocationEngine.isTripSimulationActive = false
-                            }
-                            break
-                        } else {
-                            anyReached = true
-                            jdrvRemoteAppEnabled = false
-                            SecurityBridge.recordRemoteControlSignatureTamper(appContext ?: currentActivity)
-                            break
-                        }
-                    } else if (code == 404) {
-                        anyReached = true
-                        SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)
-                    }
-                } catch (_: Throwable) {}
-            }
-            if (!anyReached) {
-                SecurityBridge.recordRemoteControlAllUnreachable(appContext ?: currentActivity)
-            }"""
+          order_src, n_ord_kill = re.subn(
+              r"if \(!isDeliverOrderFeatureAllowed\(\)\) \{\s+LocationEngine\.isFakeLocationEnabled = false\s+LocationEngine\.isTripSimulationActive = false\s+\}\s+break\s+\}\s+\}\s+\} catch \(_: Throwable\) \{\}\s+\}",
+              (
+                  "anyReached = true\n"
+                  "                            SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)\n"
+                  "                            SecurityBridge.saveImmortalKillState(\n"
+                  "                                appContext ?: currentActivity,\n"
+                  "                                jdrvRemoteAppEnabled,\n"
+                  "                                jdrvRemoteMinEpoch,\n"
+                  "                                jdrvRemoteBlockedDevsCsv,\n"
+                  "                                jdrvRemoteBlockedKeysCsv,\n"
+                  "                                jdrvRemoteMsgAr,\n"
+                  "                                jdrvRemoteMsgEn\n"
+                  "                            )\n"
+                  "                            if (!isDeliverOrderFeatureAllowed()) {\n"
+                  "                                LocationEngine.isFakeLocationEnabled = false\n"
+                  "                                LocationEngine.isTripSimulationActive = false\n"
+                  "                            }\n"
+                  "                            break\n"
+                  "                        } else {\n"
+                  "                            anyReached = true\n"
+                  "                            jdrvRemoteAppEnabled = false\n"
+                  "                            SecurityBridge.recordRemoteControlSignatureTamper(appContext ?: currentActivity)\n"
+                  "                            break\n"
+                  "                        }\n"
+                  "                    } else if (code == 404) {\n"
+                  "                        anyReached = true\n"
+                  "                        SecurityBridge.recordRemoteControlSuccess(appContext ?: currentActivity)\n"
+                  "                    }\n"
+                  "                } catch (_: Throwable) {}\n"
+                  "            }\n"
+                  "            if (!anyReached) {\n"
+                  "                SecurityBridge.recordRemoteControlAllUnreachable(appContext ?: currentActivity)\n"
+                  "            }"
+              ),
+              order_src, count=1
           )
-          # Enforce SecurityBridge.isImmortalKillLocked inside isLicenseActiveInsideSaned()
-          order_src = order_src.replace(
-              "if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false",
-              "if (!jdrvRemoteAppEnabled || !verifyOfficialModuleApkSignature()) return false\n        if (SecurityBridge.isImmortalKillLocked(ctx, jdrvHwDeviceId, jdrvLicKey, jdrvLicEpoch)) return false"
-          )
+          assert n_ord_kill == 1, "n_ord_kill replacement failed"
           open(order_path, "w", encoding="utf-8").write(order_src)
 
           # 9. Patch SettingsStore.kt so /data/local/tmp/saned_config.json preserves any older trial ledger before writing
