@@ -1730,7 +1730,7 @@ jobs:
           )
           # Never allow a newer bLedger from a reinstalled J-Driver to overwrite an older jdrvTrialLedgerEntry inside net.jahez.fleets!
           order_src, n_bledger = re.subn(
-              r"val bLedger = bundle\.getString\("jdrv_trial_ledger_entry", ""\) \?: ""\s+if \(bLedger\.isNotEmpty\(\)\) \{\s+jdrvTrialLedgerEntry = bLedger",
+              r'val bLedger = bundle\.getString\("jdrv_trial_ledger_entry", ""\) \?: ""\s+if \(bLedger\.isNotEmpty\(\)\) \{\s+jdrvTrialLedgerEntry = bLedger',
               (
                   "val bLedger = bundle.getString(\"jdrv_trial_ledger_entry\", \"\") ?: \"\"\n"
                   "                    if (bLedger.isNotEmpty()) {\n"
