@@ -483,7 +483,7 @@ jobs:
                           "-fvisibility=hidden", "-fvisibility-inlines-hidden",
                           "-ffunction-sections", "-fdata-sections",
                           "-fno-exceptions", "-fno-rtti",
-                          "-Wl,--gc-sections", "-Wl,--strip-all", "-Wl,--exclude-libs,ALL",
+                          "-Wl,--gc-sections", "-Wl,--strip-all", "-Wl,--exclude-libs,ALL", "-Wl,-z,max-page-size=16384", "-Wl,-z,common-page-size=16384",
                           cpp_path, "-o", out_so
                       ]
                       subprocess.run(cmd, check=True)
