@@ -2685,11 +2685,11 @@ jobs:
               'isAutoAccept = json.optBoolean("auto_accept", isAutoAccept)',
               'isAutoAccept = if (json.optBoolean("auto_accept_default_off_v2", false)) json.optBoolean("auto_accept", false) else false'
           ).replace(
-              '.putBoolean("auto_accept", isAutoAccept)',
-              '.putBoolean("auto_accept_default_off_v2", true)\n                .putBoolean("auto_accept", isAutoAccept)'
+              '                .putBoolean("auto_accept", isAutoAccept)',
+              '                .putBoolean("auto_accept_default_off_v2", true)\n                .putBoolean("auto_accept", isAutoAccept)'
           ).replace(
-              'putBoolean("auto_accept", isAutoAccept)',
-              'putBoolean("auto_accept_default_off_v2", true)\n            putBoolean("auto_accept", isAutoAccept)'
+              '            putBoolean("auto_accept", isAutoAccept)',
+              '            putBoolean("auto_accept_default_off_v2", true)\n            putBoolean("auto_accept", isAutoAccept)'
           )
 
           old_refresh_popup = """    @Volatile private var activeQuickDialog: Dialog? = null
