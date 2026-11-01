@@ -1807,9 +1807,40 @@ jobs:
           assert n_ord_kill == 1, "n_ord_kill replacement failed"
           open(order_path, "w", encoding="utf-8").write(order_src)
 
-          # 9. Patch SettingsStore.kt so /data/local/tmp/saned_config.json preserves any older trial ledger before writing
+          # 9. Patch SettingsStore.kt: auto_accept OFF (false) by default (user-controlled) & preserve older trial ledger
           store_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
           store_src = open(store_path, "r", encoding="utf-8").read()
+          old_store_auto = """    // Auto Accept & Filters - Default TRUE for auto_accept
+              fun isAutoAccept(context: Context): Boolean = getPrefs(context).getBoolean("auto_accept", true)
+              fun setAutoAccept(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("auto_accept", value).apply()
+                  broadcastSettings(context)
+              }"""
+          new_store_auto = """    // Auto Accept & Filters - Default FALSE (OFF) for auto_accept; strictly controlled by user
+              fun isAutoAccept(context: Context): Boolean {
+                  val sp = getPrefs(context)
+                  if (!sp.getBoolean("auto_accept_default_off_v2", false)) {
+                      sp.edit().putBoolean("auto_accept_default_off_v2", true).putBoolean("auto_accept", false).commit()
+                      return false
+                  }
+                  return sp.getBoolean("auto_accept", false)
+              }
+              fun setAutoAccept(context: Context, value: Boolean) {
+                  getPrefs(context).edit()
+                      .putBoolean("auto_accept_default_off_v2", true)
+                      .putBoolean("auto_accept", value)
+                      .apply()
+                  broadcastSettings(context)
+              }"""
+          assert old_store_auto in store_src, "old_store_auto not found in SettingsStore.kt"
+          store_src = store_src.replace(old_store_auto, new_store_auto, 1)
+          store_src = store_src.replace(
+              'putExtra("auto_accept", autoAccept)',
+              'putExtra("auto_accept", autoAccept)\n                    putExtra("auto_accept_default_off_v2", true)'
+          ).replace(
+              'put("auto_accept", autoAccept)',
+              'put("auto_accept", autoAccept)\n                    put("auto_accept_default_off_v2", true)'
+          )
           store_src = store_src.replace(
               'val trialLedger = sp.getString("jdrv_trial_ledger_entry", "") ?: ""',
               """var trialLedger = sp.getString("jdrv_trial_ledger_entry", "") ?: ""
@@ -1880,29 +1911,12 @@ jobs:
 
           main_src = open(main_path, "r", encoding="utf-8").read()
 
-          # Ensure Change Location / Direct Order Delivery starts OFF by default on app launch (Images 10 & 19)
+          # Ensure Change Location / Direct Order Delivery & Auto-Accept start OFF by default on app launch (without Current Location auto-overwrite)
           old_oncreate_pts = 'routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)'
           new_oncreate_pts = (
               'SettingsStore.setFakeLocation(this, false)\n'
               '        SettingsStore.setRouteSimActive(this, false)\n'
-              '        try {\n'
-              '            val lm = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager\n'
-              '            if (lm != null) {\n'
-              '                val providers = listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.PASSIVE_PROVIDER)\n'
-              '                for (prv in providers) {\n'
-              '                    try {\n'
-              '                        @Suppress("MissingPermission")\n'
-              '                        val loc = lm.getLastKnownLocation(prv)\n'
-              '                        if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0) {\n'
-              '                            SettingsStore.setFakeLat(this, loc.latitude)\n'
-              '                            SettingsStore.setFakeLng(this, loc.longitude)\n'
-              '                            SettingsStore.setPoint1(this, loc.latitude, loc.longitude)\n'
-              '                            break\n'
-              '                        }\n'
-              '                    } catch (_: Throwable) {}\n'
-              '                }\n'
-              '            }\n'
-              '        } catch (_: Throwable) {}\n'
+              '        SettingsStore.isAutoAccept(this)\n'
               '        routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)'
           )
           assert old_oncreate_pts in main_src, "old_oncreate_pts not found"
@@ -2109,31 +2123,7 @@ jobs:
           assert old_switch_tab_colors in main_src, "old_switch_tab_colors not found"
           main_src = main_src.replace(old_switch_tab_colors, new_switch_tab_colors, 1)
 
-          old_map_tab_open = 'if (tabIndex == 3 && ::mapWebView.isInitialized) {\n            mapWebView.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)\n        }'
-          new_map_tab_open = (
-              'if (tabIndex == 3 && ::mapWebView.isInitialized) {\n'
-              '            if (!chkFakeLoc.isChecked) {\n'
-              '                try {\n'
-              '                    val lm = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager\n'
-              '                    if (lm != null) {\n'
-              '                        for (prv in listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.PASSIVE_PROVIDER)) {\n'
-              '                            @Suppress("MissingPermission")\n'
-              '                            val loc = try { lm.getLastKnownLocation(prv) } catch (_: Throwable) { null }\n'
-              '                            if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0) {\n'
-              '                                point1Lat = loc.latitude\n'
-              '                                point1Lng = loc.longitude\n'
-              '                                mapWebView.evaluateJavascript("if(window.setDriverPin) window.setDriverPin(" + loc.latitude + ", " + loc.longitude + ", 0, true);", null)\n'
-              '                                break\n'
-              '                            }\n'
-              '                        }\n'
-              '                    }\n'
-              '                } catch (_: Throwable) {}\n'
-              '            }\n'
-              '            mapWebView.evaluateJavascript("if(window.invalidateMapSize) window.invalidateMapSize();", null)\n'
-              '        }'
-          )
-          assert old_map_tab_open in main_src, "old_map_tab_open not found"
-          main_src = main_src.replace(old_map_tab_open, new_map_tab_open, 1)
+          # Current Location function removed from Map section as requested by user
 
           # Fix #4 (Image 13): Replace Generate New ID & Copy ID with Paste IMEI & Force Stop Saned
           old_aid_btns = """        val btnGen = Button(this).apply {
@@ -2393,7 +2383,7 @@ jobs:
                               SettingsStore.setFakeLocation(this@MainActivity, false)
                               Toast.makeText(
                                   this@MainActivity,
-                                  tr("⚪ تم إغلاق تغيير الموقع والعودة للموقع الحقيقي (OFF)", "⚪ Change Location disabled (OFF)"),
+                                  tr("⚪ تم إيقاف تغيير الموقع (OFF)", "⚪ Change Location disabled (OFF)"),
                                   Toast.LENGTH_SHORT
                               ).show()
                           }
@@ -2673,9 +2663,180 @@ jobs:
 
           open(main_path, "w", encoding="utf-8").write(main_src)
 
-          # Fix #3 (Image 11) & Fix #4 (Force Stop Saned receiver) in OrderInterceptor.kt
+          # Fix #3 (Image 23):
+          # 1) Auto-Accept starts OFF (false) by default and is strictly controlled by the user
+          # 2) Remove GPS button from floating popup menu ONLY (keep GPS spoofing function intact)
+          # 3) Add "Show Recent Orders / إظهار آخر الطلبات" expandable feature inside the floating popup menu
           order_src = open(order_path, "r", encoding="utf-8").read()
-          old_deliver_box = """            val tvDeliverHdr = TextView(activity).apply {
+
+          assert "@Volatile var isAutoAccept: Boolean = true" in order_src, "isAutoAccept default not found in OrderInterceptor.kt"
+          order_src = order_src.replace(
+              "@Volatile var isAutoAccept: Boolean = true",
+              "@Volatile var isAutoAccept: Boolean = false\n    @Volatile private var isAutoAcceptUserInitDone: Boolean = false",
+              1
+          )
+          order_src = order_src.replace(
+              'isAutoAccept = p.getBoolean("auto_accept", isAutoAccept)',
+              'isAutoAccept = if (p.getBoolean("auto_accept_default_off_v2", false)) p.getBoolean("auto_accept", false) else false'
+          ).replace(
+              'isAutoAccept = bundle.getBoolean("auto_accept", isAutoAccept)',
+              'isAutoAccept = if (bundle.getBoolean("auto_accept_default_off_v2", false)) bundle.getBoolean("auto_accept", false) else false'
+          ).replace(
+              'isAutoAccept = json.optBoolean("auto_accept", isAutoAccept)',
+              'isAutoAccept = if (json.optBoolean("auto_accept_default_off_v2", false)) json.optBoolean("auto_accept", false) else false'
+          ).replace(
+              '.putBoolean("auto_accept", isAutoAccept)',
+              '.putBoolean("auto_accept_default_off_v2", true)\n                .putBoolean("auto_accept", isAutoAccept)'
+          ).replace(
+              'putBoolean("auto_accept", isAutoAccept)',
+              'putBoolean("auto_accept_default_off_v2", true)\n            putBoolean("auto_accept", isAutoAccept)'
+          )
+
+          old_refresh_popup = """    @Volatile private var activeQuickDialog: Dialog? = null
+              @Volatile private var lastQuickDialogOpenUptime: Long = 0L
+
+              private fun refreshFloatingAppOrdersIfVisible() {
+                  // No-op: using compact single Quick Control Dialog
+              }"""
+
+          new_refresh_popup = """    @Volatile private var activeQuickDialog: Dialog? = null
+              @Volatile private var lastQuickDialogOpenUptime: Long = 0L
+              @Volatile private var isPopupRecentOrdersExpanded: Boolean = false
+              @Volatile private var activePopupOrdersRefreshCallback: (() -> Unit)? = null
+              private val popupRecentOrdersHistory = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+
+              private fun recordOrderForPopupHistory(orderJson: JSONObject) {
+                  try {
+                      val newId = orderJson.optString("id", "").replace("#", "").trim()
+                      val newRef = orderJson.optString("reference", "").replace("#", "").trim()
+                      synchronized(popupRecentOrdersHistory) {
+                          val existingIdx = popupRecentOrdersHistory.indexOfFirst { old ->
+                              val oldId = old.optString("id", "").replace("#", "").trim()
+                              val oldRef = old.optString("reference", "").replace("#", "").trim()
+                              (newRef.isNotEmpty() && (oldRef == newRef || oldId == newRef)) ||
+                                  (newId.isNotEmpty() && newId != "0" && (oldId == newId || oldRef == newId))
+                          }
+                          if (existingIdx >= 0) {
+                              popupRecentOrdersHistory[existingIdx] = orderJson
+                          } else {
+                              popupRecentOrdersHistory.add(0, orderJson)
+                              if (popupRecentOrdersHistory.size > 25) {
+                                  popupRecentOrdersHistory.removeAt(popupRecentOrdersHistory.size - 1)
+                              }
+                          }
+                      }
+                      val ctx = appContext ?: currentActivity
+                      if (ctx != null) {
+                          val arr = JSONArray()
+                          synchronized(popupRecentOrdersHistory) {
+                              for (item in popupRecentOrdersHistory) arr.put(item)
+                          }
+                          ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                              .edit()
+                              .putString("popup_recent_orders_json", arr.toString())
+                              .apply()
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              private fun collectRecentOrdersForPopup(context: Context): List<OrderModel> {
+                  val result = ArrayList<OrderModel>()
+                  fun addIfUnique(m: OrderModel) {
+                      val mId = if (m.id != 0) m.id.toString() else ""
+                      val mRef = m.reference.replace("#", "").trim()
+                      if (mId.isEmpty() && mRef.isEmpty()) return
+                      if ((mId.isNotEmpty() && deletedOrderIds.contains(mId)) || (mRef.isNotEmpty() && deletedOrderIds.contains(mRef))) return
+                      val exists = result.any { old ->
+                          val oId = if (old.id != 0) old.id.toString() else ""
+                          val oRef = old.reference.replace("#", "").trim()
+                          (mRef.isNotEmpty() && (oRef == mRef || oId == mRef)) ||
+                              (mId.isNotEmpty() && mId != "0" && (oId == mId || oRef == mId))
+                      }
+                      if (!exists) result.add(m)
+                  }
+                  try {
+                      synchronized(syncedOrdersCache) {
+                          for (obj in syncedOrdersCache.values.toList().asReversed()) {
+                              addIfUnique(OrderModel.fromJson(obj))
+                          }
+                      }
+                  } catch (_: Throwable) {}
+                  try {
+                      synchronized(popupRecentOrdersHistory) {
+                          for (obj in popupRecentOrdersHistory) {
+                              addIfUnique(OrderModel.fromJson(obj))
+                          }
+                      }
+                  } catch (_: Throwable) {}
+                  try {
+                      val spStr = context.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                          .getString("popup_recent_orders_json", "[]") ?: "[]"
+                      val arr = JSONArray(spStr)
+                      for (i in 0 until arr.length()) {
+                          val obj = arr.optJSONObject(i) ?: continue
+                          addIfUnique(OrderModel.fromJson(obj))
+                      }
+                  } catch (_: Throwable) {}
+                  try {
+                      val b = context.contentResolver.call(
+                          android.net.Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                          "getSettings",
+                          null,
+                          null
+                      )
+                      val pStr = b?.getString("orders_log_json", "[]") ?: "[]"
+                      val arr = JSONArray(pStr)
+                      for (i in 0 until arr.length()) {
+                          val obj = arr.optJSONObject(i) ?: continue
+                          addIfUnique(OrderModel.fromJson(obj))
+                      }
+                  } catch (_: Throwable) {}
+                  try {
+                      val f = File("/data/local/tmp/saned_orders.json")
+                      if (f.exists() && f.canRead()) {
+                          val arr = JSONArray(f.readText())
+                          for (i in 0 until arr.length()) {
+                              val obj = arr.optJSONObject(i) ?: continue
+                              addIfUnique(OrderModel.fromJson(obj))
+                          }
+                      }
+                  } catch (_: Throwable) {}
+                  return result.take(12)
+              }
+
+              private fun refreshFloatingAppOrdersIfVisible() {
+                  val cb = activePopupOrdersRefreshCallback ?: return
+                  mainHandler.post {
+                      try { cb.invoke() } catch (_: Throwable) {}
+                  }
+              }"""
+          assert old_refresh_popup in order_src, "old_refresh_popup not found"
+          order_src = order_src.replace(old_refresh_popup, new_refresh_popup, 1)
+
+          order_src = order_src.replace(
+              "refreshFloatingAppOrdersIfVisible()",
+              "recordOrderForPopupHistory(order.toJson())\n        refreshFloatingAppOrdersIfVisible()",
+              1
+          )
+
+          old_deliver_box = """            // 5. DELIVER ORDER Section (Compact)
+                      val deliverBox = android.widget.LinearLayout(activity).apply {
+                          orientation = android.widget.LinearLayout.VERTICAL
+                          setPadding(dp(9f), dp(7f), dp(9f), dp(5f))
+                          background = android.graphics.drawable.GradientDrawable().apply {
+                              cornerRadius = 11f * density
+                              setColor(android.graphics.Color.parseColor("#172554"))
+                              setStroke(dp(1f), android.graphics.Color.parseColor("#2563EB"))
+                          }
+                          val lp = android.widget.LinearLayout.LayoutParams(
+                              android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                              android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                          )
+                          lp.setMargins(0, dp(1f), 0, dp(7f))
+                          layoutParams = lp
+                      }
+
+                      val tvDeliverHdr = TextView(activity).apply {
                           text = if (isAr) "📦 DELIVER ORDER (توصيل الطلب)" else "📦 DELIVER ORDER"
                           textSize = 11f
                           typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -2722,31 +2883,224 @@ jobs:
                           LocationEngine.isTripSimulationActive = next
                           SettingsStore.setRouteSimActive(activity, next)
                           pushQuickSettingsUpdateToProvider(activity)
-                      })"""
+                      })
+                      card.addView(deliverBox)"""
 
-          new_deliver_box = """            deliverBox.addView(makeToggleBtn(
-                          labelProvider = {
-                              val mockOn = LocationEngine.isFakeLocationEnabled
-                              if (isAr) {
-                                  "📍 GPS : " + (if (mockOn) "مفعل ✅" else "متوقف ❌")
-                              } else {
-                                  "📍 GPS : " + (if (mockOn) "ON ✅" else "OFF ❌")
-                              }
-                          },
-                          stateProvider = { LocationEngine.isFakeLocationEnabled },
-                          activeColor = "#2563EB"
-                      ) {
-                          val next = !LocationEngine.isFakeLocationEnabled
-                          LocationEngine.isFakeLocationEnabled = next
-                          if (!next) {
-                              LocationEngine.isTripSimulationActive = false
-                              SettingsStore.setRouteSimActive(activity, false)
+          new_deliver_box = """            // 5. Recent Orders Section in Floating Popup Menu (GPS button removed from popup menu; GPS function remains active in app)
+                      val recentOrdersBox = android.widget.LinearLayout(activity).apply {
+                          orientation = android.widget.LinearLayout.VERTICAL
+                          val lp = android.widget.LinearLayout.LayoutParams(
+                              android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                              android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                          )
+                          lp.setMargins(0, 0, 0, dp(6f))
+                          layoutParams = lp
+                      }
+
+                      val recentOrdersListContainer = android.widget.LinearLayout(activity).apply {
+                          orientation = android.widget.LinearLayout.VERTICAL
+                          setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+                          background = android.graphics.drawable.GradientDrawable().apply {
+                              cornerRadius = 10f * density
+                              setColor(android.graphics.Color.parseColor("#0F172A"))
+                              setStroke(dp(1f), android.graphics.Color.parseColor("#334155"))
                           }
-                          SettingsStore.setFakeLocation(activity, next)
-                          pushQuickSettingsUpdateToProvider(activity)
-                      })"""
+                          val lp = android.widget.LinearLayout.LayoutParams(
+                              android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                              android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                          )
+                          lp.setMargins(0, 0, 0, dp(4f))
+                          layoutParams = lp
+                          visibility = if (isPopupRecentOrdersExpanded) View.VISIBLE else View.GONE
+                      }
+
+                      val btnToggleRecentOrders = TextView(activity).apply {
+                          textSize = 12f
+                          typeface = android.graphics.Typeface.DEFAULT_BOLD
+                          gravity = android.view.Gravity.CENTER_VERTICAL
+                          setPadding(dp(11f), dp(8.5f), dp(11f), dp(8.5f))
+                          setTextColor(android.graphics.Color.WHITE)
+                          val lp = android.widget.LinearLayout.LayoutParams(
+                              android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                              android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                          )
+                          lp.setMargins(0, 0, 0, dp(5f))
+                          layoutParams = lp
+                      }
+
+                      fun renderPopupRecentOrders() {
+                          val recentList = collectRecentOrdersForPopup(activity)
+                          val count = recentList.size
+                          btnToggleRecentOrders.text = if (isAr) {
+                              if (isPopupRecentOrdersExpanded) "📋 إخفاء آخر الطلبات ($count) ▲" else "📋 إظهار آخر الطلبات ($count) ▼"
+                          } else {
+                              if (isPopupRecentOrdersExpanded) "📋 Hide Recent Orders ($count) ▲" else "📋 Show Recent Orders ($count) ▼"
+                          }
+                          btnToggleRecentOrders.background = android.graphics.drawable.GradientDrawable().apply {
+                              cornerRadius = 10f * density
+                              setColor(android.graphics.Color.parseColor(if (isPopupRecentOrdersExpanded) "#0284C7" else "#1E293B"))
+                              setStroke(dp(1f), android.graphics.Color.parseColor(if (isPopupRecentOrdersExpanded) "#38BDF8" else "#334155"))
+                          }
+                          recentOrdersListContainer.visibility = if (isPopupRecentOrdersExpanded) View.VISIBLE else View.GONE
+                          if (!isPopupRecentOrdersExpanded) return
+
+                          recentOrdersListContainer.removeAllViews()
+                          if (recentList.isEmpty()) {
+                              val emptyTv = TextView(activity).apply {
+                                  text = if (isAr) "📭 لا توجد طلبات مسجلة حتى الآن" else "📭 No recent orders recorded yet"
+                                  textSize = 11f
+                                  gravity = android.view.Gravity.CENTER
+                                  setTextColor(android.graphics.Color.parseColor("#94A3B8"))
+                                  setPadding(dp(6f), dp(10f), dp(6f), dp(10f))
+                              }
+                              recentOrdersListContainer.addView(emptyTv)
+                              return
+                          }
+
+                          for ((idx, ord) in recentList.withIndex()) {
+                              val itemCard = android.widget.LinearLayout(activity).apply {
+                                  orientation = android.widget.LinearLayout.VERTICAL
+                                  setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+                                  background = android.graphics.drawable.GradientDrawable().apply {
+                                      cornerRadius = 8f * density
+                                      setColor(android.graphics.Color.parseColor("#1E293B"))
+                                      setStroke(dp(1f), android.graphics.Color.parseColor(if (ord.isMissedOrRejected) "#7F1D1D" else "#065F46"))
+                                  }
+                                  val itemLp = android.widget.LinearLayout.LayoutParams(
+                                      android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                                      android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                                  )
+                                  if (idx < recentList.size - 1) itemLp.setMargins(0, 0, 0, dp(5f))
+                                  layoutParams = itemLp
+                              }
+
+                              val refDisplay = if (ord.reference.isNotBlank()) "#${ord.reference.replace("#", "").trim()}" else "#${ord.id}"
+                              val topRow = android.widget.LinearLayout(activity).apply {
+                                  orientation = android.widget.LinearLayout.HORIZONTAL
+                                  gravity = android.view.Gravity.CENTER_VERTICAL
+                              }
+                              val tvRef = TextView(activity).apply {
+                                  text = refDisplay + (if (ord.time.isNotBlank()) " • ${ord.time}" else "")
+                                  textSize = 11f
+                                  typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                  setTextColor(android.graphics.Color.parseColor("#F8FAFC"))
+                                  layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                              }
+                              val tvSt = TextView(activity).apply {
+                                  text = ord.status.ifBlank { if (isAr) "تم الرصد" else "Caught" }
+                                  textSize = 10f
+                                  typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                  setTextColor(android.graphics.Color.parseColor(if (ord.isMissedOrRejected) "#FCA5A5" else "#6EE7B7"))
+                              }
+                              topRow.addView(tvRef)
+                              topRow.addView(tvSt)
+                              itemCard.addView(topRow)
+
+                              val restName = ord.restaurant.trim().ifEmpty { if (isAr) "مطعم" else "Restaurant" }
+                              val tvRest = TextView(activity).apply {
+                                  text = "🏪 $restName" + (if (ord.customerName.isNotBlank() && ord.customerName != "Customer") "  •  👤 ${ord.customerName}" else "")
+                                  textSize = 10.5f
+                                  setTextColor(android.graphics.Color.parseColor("#CBD5E1"))
+                                  setPadding(0, dp(2f), 0, dp(2f))
+                              }
+                              itemCard.addView(tvRest)
+
+                              val metricsParts = mutableListOf<String>()
+                              val currLbl = if (isAr) "ر.س" else ord.currency.ifBlank { "SAR" }
+                              metricsParts.add(String.format(Locale.US, "💰 %.1f %s", ord.price, currLbl))
+                              val effFood = if (ord.foodPrice > 0.0) ord.foodPrice else ord.cashAmount
+                              if (effFood > 0.0) {
+                                  metricsParts.add(String.format(Locale.US, "🍔 %.1f %s", effFood, currLbl))
+                              }
+                              if (ord.distanceKm > 0.0) {
+                                  metricsParts.add(String.format(Locale.US, "🏪 %.1f km", ord.distanceKm))
+                              }
+                              if (ord.customerDistanceKm > 0.0) {
+                                  metricsParts.add(String.format(Locale.US, "🏠 %.1f km", ord.customerDistanceKm))
+                              }
+                              val tvMetrics = TextView(activity).apply {
+                                  text = metricsParts.joinToString("  •  ")
+                                  textSize = 10f
+                                  typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                  setTextColor(android.graphics.Color.parseColor("#93C5FD"))
+                              }
+                              itemCard.addView(tvMetrics)
+
+                              val cleanPh = NotificationHelper.formatPhoneForWhatsApp(ord.customerPhone)
+                              if (cleanPh.isNotEmpty()) {
+                                  val phRow = android.widget.LinearLayout(activity).apply {
+                                      orientation = android.widget.LinearLayout.HORIZONTAL
+                                      setPadding(0, dp(4f), 0, 0)
+                                  }
+                                  val btnCallMini = TextView(activity).apply {
+                                      text = if (isAr) "📞 اتصال" else "📞 Call"
+                                      textSize = 10f
+                                      typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                      gravity = android.view.Gravity.CENTER
+                                      setTextColor(android.graphics.Color.WHITE)
+                                      setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                                      background = android.graphics.drawable.GradientDrawable().apply {
+                                          cornerRadius = 6f * density
+                                          setColor(android.graphics.Color.parseColor("#059669"))
+                                      }
+                                      layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                          setMargins(0, 0, dp(4f), 0)
+                                      }
+                                      setOnClickListener {
+                                          try {
+                                              val dialPh = if (ord.customerPhone.trim().startsWith("0") || ord.customerPhone.trim().startsWith("+")) ord.customerPhone.trim() else "+$cleanPh"
+                                              activity.startActivity(Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$dialPh")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                          } catch (_: Throwable) {}
+                                      }
+                                  }
+                                  val btnWaMini = TextView(activity).apply {
+                                      text = if (isAr) "💬 واتساب" else "💬 WhatsApp"
+                                      textSize = 10f
+                                      typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                      gravity = android.view.Gravity.CENTER
+                                      setTextColor(android.graphics.Color.WHITE)
+                                      setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+                                      background = android.graphics.drawable.GradientDrawable().apply {
+                                          cornerRadius = 6f * density
+                                          setColor(android.graphics.Color.parseColor("#16A34A"))
+                                      }
+                                      layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                          setMargins(dp(4f), 0, 0, 0)
+                                      }
+                                      setOnClickListener {
+                                          try {
+                                              val waUrl = "https://api.whatsapp.com/send?phone=$cleanPh"
+                                              activity.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(waUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                          } catch (_: Throwable) {}
+                                      }
+                                  }
+                                  phRow.addView(btnCallMini)
+                                  phRow.addView(btnWaMini)
+                                  itemCard.addView(phRow)
+                              }
+
+                              recentOrdersListContainer.addView(itemCard)
+                          }
+                      }
+
+                      btnToggleRecentOrders.setOnClickListener {
+                          isPopupRecentOrdersExpanded = !isPopupRecentOrdersExpanded
+                          renderPopupRecentOrders()
+                      }
+                      activePopupOrdersRefreshCallback = { renderPopupRecentOrders() }
+                      renderPopupRecentOrders()
+
+                      recentOrdersBox.addView(btnToggleRecentOrders)
+                      recentOrdersBox.addView(recentOrdersListContainer)
+                      card.addView(recentOrdersBox)"""
           assert old_deliver_box in order_src, "old_deliver_box not found"
           order_src = order_src.replace(old_deliver_box, new_deliver_box, 1)
+
+          order_src = order_src.replace(
+              "if (activeQuickDialog === dialog) activeQuickDialog = null",
+              "if (activeQuickDialog === dialog) { activeQuickDialog = null; activePopupOrdersRefreshCallback = null }",
+              1
+          )
 
           # Wire ACTION_FORCE_STOP_SANED inside OrderInterceptor.kt so Force Stop Saned works even without root!
           old_rcv_when = '"dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {'
