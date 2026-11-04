@@ -1418,6 +1418,9 @@ jobs:
                   mf_src = open(manifest_path, "r", encoding="utf-8").read()
                   if 'android:launchMode="singleTop"' not in mf_src:
                       mf_src = mf_src.replace(
+                          '<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
+                          '<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />'
+                      ).replace(
                           'android:name=".ui.MainActivity"\n            android:exported="true"',
                           'android:name=".ui.MainActivity"\n            android:launchMode="singleTop"\n            android:exported="true"'
                       )
@@ -1523,6 +1526,38 @@ jobs:
                       assert old_push_step in store_src, "old_push_step not found in SettingsStore.kt"
                       store_src = store_src.replace(old_push_step, new_push_step, 1)
 
+                      old_route_brg_fn = """    fun getRouteSimBearing(context: Context): Float = getPrefs(context).getFloat("route_sim_bearing", 0.0f)
+              fun setRouteSimBearing(context: Context, value: Float) {
+                  getPrefs(context).edit().putFloat("route_sim_bearing", value).apply()
+              }"""
+                      new_route_brg_fn = """    fun getRouteSimBearing(context: Context): Float = getPrefs(context).getFloat("route_sim_bearing", 0.0f)
+              fun setRouteSimBearing(context: Context, value: Float) {
+                  getPrefs(context).edit().putFloat("route_sim_bearing", value).apply()
+              }
+
+              fun getRouteWaypointsJson(context: Context): String = getPrefs(context).getString("route_waypoints_json", "[]") ?: "[]"
+              fun setRouteWaypointsJson(context: Context, jsonStr: String) {
+                  getPrefs(context).edit().putString("route_waypoints_json", jsonStr).commit()
+              }
+
+              fun isRouteSimLoopOnce(context: Context): Boolean = getPrefs(context).getBoolean("route_loop_once", false)
+              fun setRouteSimLoopOnce(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("route_loop_once", value).commit()
+              }"""
+                      assert old_route_brg_fn in store_src, "old_route_brg_fn not found in SettingsStore.kt"
+                      store_src = store_src.replace(old_route_brg_fn, new_route_brg_fn, 1)
+
+                      store_src = store_src.replace(
+                          "val rSimBrg = getRouteSimBearing(appCtx)",
+                          "val rSimBrg = getRouteSimBearing(appCtx)\n            val rWaypointsJson = getRouteWaypointsJson(appCtx)\n            val rLoopOnce = isRouteSimLoopOnce(appCtx)\n            val rVarSpd = isVariableSpeedEnabled(appCtx)\n            val rMinSpd = getRouteSimMinSpeedKmh(appCtx)\n            val rMaxSpd = getRouteSimMaxSpeedKmh(appCtx)"
+                      ).replace(
+                          'putExtra("route_sim_bearing", rSimBrg)',
+                          'putExtra("route_sim_bearing", rSimBrg)\n                    putExtra("route_waypoints_json", rWaypointsJson)\n                    putExtra("route_loop_once", rLoopOnce)\n                    putExtra("route_var_speed", rVarSpd)\n                    putExtra("route_min_spd", rMinSpd)\n                    putExtra("route_max_spd", rMaxSpd)'
+                      ).replace(
+                          'put("route_sim_bearing", rSimBrg.toDouble())',
+                          'put("route_sim_bearing", rSimBrg.toDouble())\n                    put("route_waypoints_json", rWaypointsJson)\n                    put("route_loop_once", rLoopOnce)\n                    put("route_var_speed", rVarSpd)\n                    put("route_min_spd", rMinSpd.toDouble())\n                    put("route_max_spd", rMaxSpd.toDouble())'
+                      )
+
                       # Ensure broadcastSettings never drops an update and includes last_settings_mod_ms & android_17_mode
                       store_src = store_src.replace(
                           "if (!syncPending.compareAndSet(false, true)) return",
@@ -1545,20 +1580,205 @@ jobs:
                       )
                       open(store_path, "w", encoding="utf-8").write(store_src)
 
-              # --- B. Patch LocationEngine.kt so turning off Change Location immediately stops route sim & restores real GPS ---
-              if os.path.exists(loc_path):
+              # --- B. Patch LocationEngine.kt:
+              #     1) Turning off Change Location immediately stops route sim & restores real GPS
+              #     2) Autonomous in-Saned route stepper continues moving along routeWaypoints when J-Driver is minimized in background!
+              if os.path.exists(loc_path) and "configureAutonomousRoute" not in open(loc_path, "r", encoding="utf-8").read():
                   loc_src = open(loc_path, "r", encoding="utf-8").read()
+                  old_loc_vars = """    @Volatile var lastRealLat: Double = 0.0
+              @Volatile var lastRealLng: Double = 0.0"""
+                  new_loc_vars = """    @Volatile var lastRealLat: Double = 0.0
+              @Volatile var lastRealLng: Double = 0.0
+              @Volatile var lastExternalStepRealtime: Long = 0L
+              @Volatile var bgRouteLoopOnce: Boolean = false
+              @Volatile var bgRouteVarSpeed: Boolean = true
+              @Volatile var bgRouteMinSpdKmh: Float = 30.0f
+              @Volatile var bgRouteMaxSpdKmh: Float = 75.0f
+              @Volatile private var bgRouteDynSpdKmh: Float = 45.0f
+              @Volatile private var bgRouteTickCounter: Int = 0
+              @Volatile private var bgRouteForward: Boolean = true
+              @Volatile private var bgRouteTraveledM: Double = 0.0
+              @Volatile private var bgRouteTotalM: Double = 0.0
+              private val bgRouteWaypoints = java.util.concurrent.CopyOnWriteArrayList<Pair<Double, Double>>()
+              @Volatile private var bgRouteCumMeters: DoubleArray = DoubleArray(0)
+              @Volatile private var lastLoadedWaypointsSig: String = ""
+
+              fun configureAutonomousRoute(
+                  waypointsJson: String?,
+                  loopOnce: Boolean,
+                  varSpeed: Boolean,
+                  minSpd: Float,
+                  maxSpd: Float
+              ) {
+                  bgRouteLoopOnce = loopOnce
+                  bgRouteVarSpeed = varSpeed
+                  if (!minSpd.isNaN() && minSpd > 0f) bgRouteMinSpdKmh = minSpd
+                  if (!maxSpd.isNaN() && maxSpd >= bgRouteMinSpdKmh) bgRouteMaxSpdKmh = maxSpd
+                  if (waypointsJson.isNullOrBlank() || waypointsJson == "[]" || waypointsJson == lastLoadedWaypointsSig) return
+                  try {
+                      val arr = org.json.JSONArray(waypointsJson)
+                      if (arr.length() < 2) return
+                      val pts = ArrayList<Pair<Double, Double>>(arr.length())
+                      for (i in 0 until arr.length()) {
+                          val pt = arr.optJSONArray(i) ?: continue
+                          val lt = pt.optDouble(0, 0.0)
+                          val lg = pt.optDouble(1, 0.0)
+                          if (lt != 0.0 && lg != 0.0) pts.add(lt to lg)
+                      }
+                      if (pts.size < 2) return
+                      val cum = DoubleArray(pts.size)
+                      var total = 0.0
+                      cum[0] = 0.0
+                      for (i in 1 until pts.size) {
+                          val a = pts[i - 1]
+                          val b = pts[i]
+                          total += calculateDistance(a.first, a.second, b.first, b.second) * 1000.0
+                          cum[i] = total
+                      }
+                      bgRouteWaypoints.clear()
+                      bgRouteWaypoints.addAll(pts)
+                      bgRouteCumMeters = cum
+                      bgRouteTotalM = total
+                      bgRouteTraveledM = 0.0
+                      bgRouteForward = true
+                      lastLoadedWaypointsSig = waypointsJson
+                  } catch (_: Throwable) {}
+              }
+
+              private fun stepAutonomousRouteIfAppMinimized() {
+                  if (!isSpoofingActive() || !isTripSimulationActive) return
+                  val nowRt = SystemClock.elapsedRealtime()
+                  // Only step autonomously inside Saned if J-Driver is minimized/throttled and hasn't pushed a step in the last 900ms
+                  if (lastExternalStepRealtime > 0L && (nowRt - lastExternalStepRealtime) < 900L) return
+                  val pts = bgRouteWaypoints
+                  val cum = bgRouteCumMeters
+                  val totalM = bgRouteTotalM
+                  if (pts.size < 2 || cum.size < 2 || totalM <= 0.5) return
+
+                  bgRouteTickCounter++
+                  var preIdx = 0
+                  while (preIdx < cum.size - 2 && cum[preIdx + 1] < bgRouteTraveledM) preIdx++
+
+                  val spdKmh = if (!bgRouteVarSpeed) {
+                      simulatedSpeedKmh.coerceIn(2.0f, 240.0f)
+                  } else {
+                      val minS = bgRouteMinSpdKmh.coerceIn(2.0f, 220.0f)
+                      val maxS = bgRouteMaxSpdKmh.coerceIn(minS, 240.0f)
+                      val wave = (kotlin.math.sin(bgRouteTickCounter * 0.18) + 1.0) * 0.5
+                      val target = (minS + (maxS - minS) * wave).toFloat()
+                      bgRouteDynSpdKmh = (bgRouteDynSpdKmh * 0.65f + target * 0.35f).coerceIn(minS, maxS)
+                      bgRouteDynSpdKmh
+                  }
+                  simulatedSpeedKmh = spdKmh
+                  val stepM = (spdKmh / 3.6) * 0.5
+
+                  if (bgRouteForward) {
+                      bgRouteTraveledM += stepM
+                      if (bgRouteTraveledM >= totalM) {
+                          if (bgRouteLoopOnce) {
+                              bgRouteTraveledM = totalM
+                              bgRouteForward = false
+                          } else {
+                              bgRouteTraveledM = totalM
+                              val lastPt = pts.last()
+                              val prevPt = pts[pts.size - 2]
+                              currentLat = lastPt.first
+                              currentLng = lastPt.second
+                              currentBearing = calculateBearing(prevPt.first, prevPt.second, lastPt.first, lastPt.second)
+                              isTripSimulationActive = false
+                              persistAutonomousPosition(currentLat, currentLng, false)
+                              return
+                          }
+                      }
+                  } else {
+                      bgRouteTraveledM -= stepM
+                      if (bgRouteTraveledM <= 0.0) {
+                          bgRouteTraveledM = 0.0
+                          bgRouteForward = true
+                          val firstPt = pts.first()
+                          val secondPt = pts[1]
+                          currentLat = firstPt.first
+                          currentLng = firstPt.second
+                          currentBearing = calculateBearing(secondPt.first, secondPt.second, firstPt.first, firstPt.second)
+                          isTripSimulationActive = false
+                          persistAutonomousPosition(currentLat, currentLng, false)
+                          return
+                      }
+                  }
+
+                  var segIdx = 0
+                  while (segIdx < cum.size - 2 && cum[segIdx + 1] < bgRouteTraveledM) segIdx++
+                  val segStart = cum[segIdx]
+                  val segEnd = cum[segIdx + 1]
+                  val segLen = (segEnd - segStart).coerceAtLeast(0.001)
+                  val frac = ((bgRouteTraveledM - segStart) / segLen).coerceIn(0.0, 1.0)
+                  val p1 = pts[segIdx]
+                  val p2 = pts[segIdx + 1]
+                  currentLat = p1.first + (p2.first - p1.first) * frac
+                  currentLng = p1.second + (p2.second - p1.second) * frac
+                  currentBearing = if (bgRouteForward) {
+                      calculateBearing(p1.first, p1.second, p2.first, p2.second)
+                  } else {
+                      calculateBearing(p2.first, p2.second, p1.first, p1.second)
+                  }
+              }
+
+              private fun persistAutonomousPosition(lat: Double, lng: Double, simActive: Boolean) {
+                  try {
+                      val ctx = OrderInterceptor.appContext ?: OrderInterceptor.currentActivity ?: return
+                      ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+                          .putString("fake_lat", lat.toString())
+                          .putString("fake_lng", lng.toString())
+                          .putBoolean("route_sim_active", simActive)
+                          .apply()
+                      val ex = Bundle().apply {
+                          putString("fake_lat", lat.toString())
+                          putString("fake_lng", lng.toString())
+                          putBoolean("route_sim_active", simActive)
+                      }
+                      ctx.contentResolver.call(Uri.parse("content://dev.jing.sanedhook.XposedService"), "updateSettingsFromFloating", null, ex)
+                  } catch (_: Throwable) {}
+              }"""
+                  assert old_loc_vars in loc_src, "old_loc_vars not found in LocationEngine.kt"
+                  loc_src = loc_src.replace(old_loc_vars, new_loc_vars, 1)
+
                   old_update_live = """        isTripSimulationActive = simActive
                   if (simActive) isFakeLocationEnabled = true
                   pushSpoofedLocationToAllCallbacks()"""
-                  new_update_live = """        isTripSimulationActive = simActive && isFakeLocationEnabled
+                  new_update_live = """        lastExternalStepRealtime = SystemClock.elapsedRealtime()
+                  isTripSimulationActive = simActive && isFakeLocationEnabled
                   if (isFakeLocationEnabled) {
+                      // Sync bgRouteTraveledM approximately to external progress so handover on minimize is seamless
+                      val pts = bgRouteWaypoints
+                      val cum = bgRouteCumMeters
+                      if (pts.size >= 2 && cum.size == pts.size && lat != 0.0 && lng != 0.0) {
+                          var bestIdx = 0
+                          var bestDist = Double.MAX_VALUE
+                          for (i in pts.indices) {
+                              val d = calculateDistance(lat, lng, pts[i].first, pts[i].second)
+                              if (d < bestDist) {
+                                  bestDist = d
+                                  bestIdx = i
+                              }
+                          }
+                          bgRouteTraveledM = cum[bestIdx]
+                      }
                       pushSpoofedLocationToAllCallbacks()
                   } else {
                       pushRealLocationToAllCallbacksOnce()
                   }"""
-                  if old_update_live in loc_src:
-                      loc_src = loc_src.replace(old_update_live, new_update_live, 1)
+                  assert old_update_live in loc_src, "old_update_live not found in LocationEngine.kt"
+                  loc_src = loc_src.replace(old_update_live, new_update_live, 1)
+
+                  old_pusher_tick = """                    if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
+                                  pushSpoofedLocationToAllCallbacks()
+                              }"""
+                  new_pusher_tick = """                    if (isSpoofingActive() && currentLat != 0.0 && currentLng != 0.0) {
+                                  stepAutonomousRouteIfAppMinimized()
+                                  pushSpoofedLocationToAllCallbacks()
+                              }"""
+                  assert old_pusher_tick in loc_src, "old_pusher_tick not found in LocationEngine.kt"
+                  loc_src = loc_src.replace(old_pusher_tick, new_pusher_tick, 1)
 
                   old_push_spoof_hdr = """    fun pushSpoofedLocationToAllCallbacks() {
                   if (!isSpoofingActive() || currentLat == 0.0 || currentLng == 0.0) return"""
@@ -1756,15 +1976,86 @@ jobs:
                           updateRouteSimBannerUI()
                       }"""
                       new_chk_fake_listener = """            setOnCheckedChangeListener { _, isChecked ->
+                          if (isChecked) {
+                              if (point1Lat != 0.0 && point1Lng != 0.0) {
+                                  SettingsStore.setFakeLat(this@MainActivity, point1Lat)
+                                  SettingsStore.setFakeLng(this@MainActivity, point1Lng)
+                              }
+                              acquireLocationWakeLock()
+                          } else {
+                              releaseLocationWakeLock()
+                          }
                           SettingsStore.setFakeLocation(this@MainActivity, isChecked)
                           if (!isChecked) {
                               stopRouteSimulation()
+                          } else if (point1Lat != 0.0 && point1Lng != 0.0) {
+                              SettingsStore.pushLiveLocationStep(
+                                  this@MainActivity,
+                                  point1Lat,
+                                  point1Lng,
+                                  if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
+                                  SettingsStore.getRouteSimBearing(this@MainActivity),
+                                  isRouteSimRunning && !isRouteSimPaused
+                              )
                           }
                           syncDeliverAndChangeBtns?.invoke(isChecked)
                           updateRouteSimBannerUI()
                       }"""
                       assert old_chk_fake_listener in main_src, "old_chk_fake_listener not found in MainActivity.kt"
                       main_src = main_src.replace(old_chk_fake_listener, new_chk_fake_listener, 1)
+
+                      # Add PARTIAL_WAKE_LOCK helpers in MainActivity so minimizing J-Driver never suspends location spoofing
+                      main_src = main_src.replace(
+                          "private var refreshAndroidModeBtnCallback: (() -> Unit)? = null",
+                          """private var refreshAndroidModeBtnCallback: (() -> Unit)? = null
+              private var locationWakeLock: android.os.PowerManager.WakeLock? = null
+
+              private fun acquireLocationWakeLock() {
+                  try {
+                      if (locationWakeLock == null) {
+                          val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                          locationWakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "JDriver:LocationKeepAlive")?.apply {
+                              setReferenceCounted(false)
+                          }
+                      }
+                      if (locationWakeLock?.isHeld == false) {
+                          locationWakeLock?.acquire(4 * 60 * 60 * 1000L)
+                      }
+                  } catch (_: Throwable) {}
+              }
+
+              private fun releaseLocationWakeLock() {
+                  try {
+                      if (locationWakeLock?.isHeld == true) {
+                          locationWakeLock?.release()
+                      }
+                  } catch (_: Throwable) {}
+              }""",
+                          1
+                      )
+
+                      # Persist route_waypoints_json in onRoutePathReady and route_loop_once in showRouteSpeedCustomizationDialog
+                      main_src = main_src.replace(
+                          "val arr = JSONArray(coordsJson)\n                    if (arr.length() < 2) return@runOnUiThread",
+                          "val arr = JSONArray(coordsJson)\n                    if (arr.length() < 2) return@runOnUiThread\n                    SettingsStore.setRouteWaypointsJson(this@MainActivity, coordsJson)",
+                          1
+                      ).replace(
+                          "isRouteSimLooping = chkLoop.isChecked",
+                          "isRouteSimLooping = chkLoop.isChecked\n                SettingsStore.setRouteSimLoopOnce(this, isRouteSimLooping)",
+                          1
+                      )
+
+                      # Fix saveAllSettings() in onPause() so minimizing J-Driver NEVER overwrites fake_lat/fake_lng with 0.0 or stops active simulation!
+                      old_save_all_loc = """        val fixLoc = chkFixLoc.isChecked
+                  val fakeLoc = chkFakeLoc.isChecked
+                  val lat = edtLat.text.toString().toDoubleOrNull() ?: 0.0
+                  val lng = edtLng.text.toString().toDoubleOrNull() ?: 0.0"""
+                      new_save_all_loc = """        val fixLoc = chkFixLoc.isChecked
+                  val fakeLoc = chkFakeLoc.isChecked
+                  val lat = edtLat.text.toString().toDoubleOrNull()?.takeIf { it != 0.0 } ?: point1Lat.takeIf { it != 0.0 } ?: SettingsStore.getFakeLat(this)
+                  val lng = edtLng.text.toString().toDoubleOrNull()?.takeIf { it != 0.0 } ?: point1Lng.takeIf { it != 0.0 } ?: SettingsStore.getFakeLng(this)"""
+                      assert old_save_all_loc in main_src, "old_save_all_loc not found in MainActivity.kt"
+                      main_src = main_src.replace(old_save_all_loc, new_save_all_loc, 1)
 
                       # 5. Fix applyImmediateSpoofLocation so selecting/tapping a location NEVER turns on Change Location automatically!
                       old_apply_spoof_fn = """        point1Lat = lat
@@ -2057,6 +2348,13 @@ jobs:
                   val simAct = intent.getBooleanExtra("route_sim_active", false) && newFakeLoc
                   val simSpd = intent.getFloatExtra("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
                   val simBrg = intent.getFloatExtra("route_sim_bearing", LocationEngine.currentBearing)
+                  LocationEngine.configureAutonomousRoute(
+                      intent.getStringExtra("route_waypoints_json"),
+                      intent.getBooleanExtra("route_loop_once", LocationEngine.bgRouteLoopOnce),
+                      intent.getBooleanExtra("route_var_speed", LocationEngine.bgRouteVarSpeed),
+                      intent.getFloatExtra("route_min_spd", LocationEngine.bgRouteMinSpdKmh),
+                      intent.getFloatExtra("route_max_spd", LocationEngine.bgRouteMaxSpdKmh)
+                  )
                   LocationEngine.updateLiveRouteState(lat, lng, simSpd, simBrg, simAct)
                   try {
                       (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)?.edit()
@@ -2065,13 +2363,51 @@ jobs:
                           ?.putBoolean("route_sim_active", simAct)
                           ?.putString("fake_lat", lat.toString())
                           ?.putString("fake_lng", lng.toString())
+                          ?.putFloat("route_sim_speed_kmh", simSpd)
+                          ?.putFloat("route_sim_bearing", simBrg)
                           ?.putBoolean("android_17_mode", isAndroid17Mode)
-                          ?.apply()
+                          ?.commit()
                   } catch (_: Throwable) {}"""
                       assert old_apply_intent_loc in order_src, "old_apply_intent_loc not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_apply_intent_loc, new_apply_intent_loc, 1)
 
-                      # In syncSettings(): make XposedProvider authoritative for LocationEngine & isAndroid17Mode unconditionally
+                      # Also read fake_lat & fake_lng in localSp block of syncSettings() and in loadFallbackConfigFile() so if J-Driver is frozen when minimized, Saned keeps full location state!
+                      old_local_sp_loc = """                    LocationEngine.isMasterRunning = isMasterRunning
+                              LocationEngine.isFakeLocationEnabled = localSp.getBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                              LocationEngine.isTripSimulationActive = localSp.getBoolean("route_sim_active", LocationEngine.isTripSimulationActive)"""
+                      new_local_sp_loc = """                    LocationEngine.isMasterRunning = isMasterRunning
+                              LocationEngine.isFakeLocationEnabled = localSp.getBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                              LocationEngine.isTripSimulationActive = localSp.getBoolean("route_sim_active", LocationEngine.isTripSimulationActive) && LocationEngine.isFakeLocationEnabled
+                              val lLat = localSp.getString("fake_lat", null)?.toDoubleOrNull()
+                              val lLng = localSp.getString("fake_lng", null)?.toDoubleOrNull()
+                              if (lLat != null && !lLat.isNaN() && lLat != 0.0) LocationEngine.currentLat = lLat
+                              if (lLng != null && !lLng.isNaN() && lLng != 0.0) LocationEngine.currentLng = lLng"""
+                      assert old_local_sp_loc in order_src, "old_local_sp_loc not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_local_sp_loc, new_local_sp_loc, 1)
+
+                      old_fallback_cfg_end = 'if (json.has("jdrv_engine_magic")) jdrvEngineMagic = json.optInt("jdrv_engine_magic", jdrvEngineMagic)'
+                      new_fallback_cfg_end = """if (json.has("jdrv_engine_magic")) jdrvEngineMagic = json.optInt("jdrv_engine_magic", jdrvEngineMagic)
+                          if (json.has("fake_location_enabled")) {
+                              LocationEngine.isFakeLocationEnabled = json.optBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                          }
+                          if (json.has("route_sim_active")) {
+                              LocationEngine.isTripSimulationActive = json.optBoolean("route_sim_active", false) && LocationEngine.isFakeLocationEnabled
+                          }
+                          val fLat = json.optDouble("fake_lat", LocationEngine.currentLat)
+                          val fLng = json.optDouble("fake_lng", LocationEngine.currentLng)
+                          if (!fLat.isNaN() && fLat != 0.0) LocationEngine.currentLat = fLat
+                          if (!fLng.isNaN() && fLng != 0.0) LocationEngine.currentLng = fLng
+                          LocationEngine.configureAutonomousRoute(
+                              json.optString("route_waypoints_json", ""),
+                              json.optBoolean("route_loop_once", LocationEngine.bgRouteLoopOnce),
+                              json.optBoolean("route_var_speed", LocationEngine.bgRouteVarSpeed),
+                              json.optDouble("route_min_spd", LocationEngine.bgRouteMinSpdKmh.toDouble()).toFloat(),
+                              json.optDouble("route_max_spd", LocationEngine.bgRouteMaxSpdKmh.toDouble()).toFloat()
+                          )"""
+                      assert old_fallback_cfg_end in order_src, "old_fallback_cfg_end not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_fallback_cfg_end, new_fallback_cfg_end, 1)
+
+                      # In syncSettings(): make XposedProvider authoritative when reachable, and persist into localSp so minimizing J-Driver never drops Change Location!
                       old_sync_bundle_loc = """                    persistLicenseFieldsLocally(appContext ?: currentActivity)
 
                               val bMod = bundle.getLong("last_settings_mod_ms", 0L)"""
@@ -2079,20 +2415,30 @@ jobs:
                               if (bundle.containsKey("android_17_mode")) {
                                   isAndroid17Mode = bundle.getBoolean("android_17_mode", isAndroid17Mode)
                               }
-                              // Always sync LocationEngine state unconditionally from J-Driver's XposedProvider so turning OFF Change Location in J-Driver is never ignored!
-                              LocationEngine.isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
-                              LocationEngine.isFakeLocationEnabled = bundle.getBoolean("fake_location_enabled", false)
-                              LocationEngine.isTripSimulationActive = bundle.getBoolean("route_sim_active", false) && LocationEngine.isFakeLocationEnabled
-                              val bLat = bundle.getString("fake_lat", null)?.toDoubleOrNull()
-                              val bLng = bundle.getString("fake_lng", null)?.toDoubleOrNull()
-                              if (bLat != null && !bLat.isNaN() && bLat != 0.0) LocationEngine.currentLat = bLat
-                              if (bLng != null && !bLng.isNaN() && bLng != 0.0) LocationEngine.currentLng = bLng
-                              try {
-                                  (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)?.edit()
-                                      ?.putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
-                                      ?.putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
-                                      ?.apply()
-                              } catch (_: Throwable) {}
+                              if (bundle.containsKey("fake_location_enabled")) {
+                                  LocationEngine.isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
+                                  LocationEngine.isFakeLocationEnabled = bundle.getBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                                  LocationEngine.isTripSimulationActive = bundle.getBoolean("route_sim_active", LocationEngine.isTripSimulationActive) && LocationEngine.isFakeLocationEnabled
+                                  val bLat = bundle.getString("fake_lat", null)?.toDoubleOrNull()
+                                  val bLng = bundle.getString("fake_lng", null)?.toDoubleOrNull()
+                                  if (bLat != null && !bLat.isNaN() && bLat != 0.0) LocationEngine.currentLat = bLat
+                                  if (bLng != null && !bLng.isNaN() && bLng != 0.0) LocationEngine.currentLng = bLng
+                                  LocationEngine.configureAutonomousRoute(
+                                      bundle.getString("route_waypoints_json", null),
+                                      bundle.getBoolean("route_loop_once", LocationEngine.bgRouteLoopOnce),
+                                      bundle.getBoolean("variable_speed_enabled", LocationEngine.bgRouteVarSpeed),
+                                      bundle.getFloat("route_sim_min_speed_kmh", LocationEngine.bgRouteMinSpdKmh),
+                                      bundle.getFloat("route_sim_max_speed_kmh", LocationEngine.bgRouteMaxSpdKmh)
+                                  )
+                                  try {
+                                      (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)?.edit()
+                                          ?.putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                                          ?.putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                                          ?.putString("fake_lat", LocationEngine.currentLat.toString())
+                                          ?.putString("fake_lng", LocationEngine.currentLng.toString())
+                                          ?.apply()
+                                  } catch (_: Throwable) {}
+                              }
 
                               val bMod = bundle.getLong("last_settings_mod_ms", 0L)"""
                       assert old_sync_bundle_loc in order_src, "old_sync_bundle_loc not found in OrderInterceptor.kt"
