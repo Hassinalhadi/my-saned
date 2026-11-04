@@ -1393,20 +1393,35 @@ jobs:
           # - Eliminates concurrent 0ms/60ms UI+API collisions and throttles background polling to 2400ms
           # =========================================================================
           # =========================================================================
-          # STAGE 4 UPGRADE (UNIFIED ANDROID 17 V8 + ANDROID 16 & BELOW MODE SWITCHER + IMAGE 23 UI):
+          # STAGE 4 UPGRADE (UNIFIED ANDROID 17 V8 + ANDROID 16 & BELOW + IMAGES 23, 25, 26, 27 & VIDEO 1 FIXES):
           # 1. Auto-Accept OFF (false) by default, strictly user-controlled
           # 2. Remove Current Location auto-overwrite from Map section
-          # 3. Remove GPS button from Floating Popup Menu ONLY (keep GPS spoofing active)
+          # 3. Remove GPS button & System Mode button from Floating Popup Menu (System Mode switcher stays in Main Settings)
           # 4. Add "Show Recent Orders / إظهار آخر الطلبات" in Floating Popup Menu
-          # 5. Add Mode Switcher Button ("زر تحويل بين أندرويد 17 وأندرويد 16 فما تحت") in both
-          #    Floating Popup Menu and Main Settings, switching live between:
-          #    - Android 17 Mode (DEEP_LOG_A17_V8: 1 clean stream, +600/+1250/+2100ms zero-collision UI fallback, 1500ms anti-429 polling)
-          #    - Android 16 & Below Mode (4 parallel streams 0/6/14/24ms, 0..1700ms UI+API burst, 560ms fast polling, 80ms screen watcher)
+          # 5. Image 25: Hide "MISSED & REJECTED" section in Orders Tab so only Accepted orders appear
+          # 6. Image 26: Default filter inputs to empty ("") instead of "0" when value <= 0.0
+          # 7. Image 27 & Video 1:
+          #    - Single tap (1 tap) on Map to set location pin (instead of 3 taps)
+          #    - Change Location NEVER turns on automatically; strictly controlled by user ON/OFF
+          #    - Turning Change Location OFF immediately stops route simulation and never re-enables from Saned or background ticks
+          #    - Round-Trip (ذهاب وإياب) runs ONCE (Restaurant -> Customer -> Restaurant) and stops at Restaurant while keeping Change Location ON
           # =========================================================================
           def apply_unified_ui_and_mode_switcher():
+              manifest_path = "app/src/main/AndroidManifest.xml"
               store_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
+              loc_path = "app/src/main/java/dev/saned/assistant/LocationEngine.kt"
               main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
+
+              # --- 0. Patch AndroidManifest.xml so MainActivity is singleTop (prevents duplicate MainActivity instances & zombie route timers) ---
+              if os.path.exists(manifest_path):
+                  mf_src = open(manifest_path, "r", encoding="utf-8").read()
+                  if 'android:launchMode="singleTop"' not in mf_src:
+                      mf_src = mf_src.replace(
+                          'android:name=".ui.MainActivity"\n            android:exported="true"',
+                          'android:name=".ui.MainActivity"\n            android:launchMode="singleTop"\n            android:exported="true"'
+                      )
+                      open(manifest_path, "w", encoding="utf-8").write(mf_src)
 
               # --- A. Patch SettingsStore.kt ---
               if os.path.exists(store_path):
@@ -1450,19 +1465,169 @@ jobs:
               }"""
                       assert old_store_auto_4 in store_src, "old_store_auto_4 not found in SettingsStore.kt"
                       store_src = store_src.replace(old_store_auto_4, new_store_auto_4, 1)
+
+                      # Fix setFakeLocation, setRouteSimActive, and pushLiveLocationStep so Change Location NEVER turns on automatically!
+                      old_fake_loc_fns = """    fun isFakeLocation(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
+              fun setFakeLocation(context: Context, value: Boolean) {
+                  getPrefs(context).edit().putBoolean("fake_location_enabled", value).apply()
+                  broadcastSettings(context)
+              }"""
+                      new_fake_loc_fns = """    fun isFakeLocation(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
+              fun setFakeLocation(context: Context, value: Boolean) {
+                  val ed = getPrefs(context).edit().putBoolean("fake_location_enabled", value)
+                  if (!value) {
+                      ed.putBoolean("route_sim_active", false)
+                  }
+                  ed.commit()
+                  broadcastSettings(context)
+              }"""
+                      assert old_fake_loc_fns in store_src, "old_fake_loc_fns not found in SettingsStore.kt"
+                      store_src = store_src.replace(old_fake_loc_fns, new_fake_loc_fns, 1)
+
+                      old_push_step = """    fun pushLiveLocationStep(
+                  context: Context,
+                  lat: Double,
+                  lng: Double,
+                  speedKmh: Float,
+                  bearing: Float,
+                  simActive: Boolean
+              ) {
+                  getPrefs(context).edit()
+                      .putBoolean("fake_location_enabled", true)
+                      .putString("fake_lat", lat.toString())
+                      .putString("fake_lng", lng.toString())
+                      .putBoolean("route_sim_active", simActive)
+                      .putFloat("route_sim_speed_kmh", speedKmh.coerceIn(1.0f, 220.0f))
+                      .putFloat("route_sim_bearing", bearing)
+                      .apply()
+                  broadcastSettings(context)
+              }"""
+                      new_push_step = """    fun pushLiveLocationStep(
+                  context: Context,
+                  lat: Double,
+                  lng: Double,
+                  speedKmh: Float,
+                  bearing: Float,
+                  simActive: Boolean
+              ) {
+                  val isFakeOn = isFakeLocation(context)
+                  getPrefs(context).edit()
+                      .putString("fake_lat", lat.toString())
+                      .putString("fake_lng", lng.toString())
+                      .putBoolean("route_sim_active", simActive && isFakeOn)
+                      .putFloat("route_sim_speed_kmh", speedKmh.coerceIn(1.0f, 220.0f))
+                      .putFloat("route_sim_bearing", bearing)
+                      .commit()
+                  broadcastSettings(context)
+              }"""
+                      assert old_push_step in store_src, "old_push_step not found in SettingsStore.kt"
+                      store_src = store_src.replace(old_push_step, new_push_step, 1)
+
+                      # Ensure broadcastSettings never drops an update and includes last_settings_mod_ms & android_17_mode
                       store_src = store_src.replace(
+                          "if (!syncPending.compareAndSet(false, true)) return",
+                          "// Execute every settings broadcast in order on single-thread bgSyncExecutor so OFF toggles are never dropped"
+                      ).replace(
                           "val autoAccept = isAutoAccept(appCtx)",
                           "val autoAccept = isAutoAccept(appCtx)\n            val android17Mode = isAndroid17Mode(appCtx)"
                       ).replace(
+                          'putExtra("master_running", master)',
+                          'putExtra("last_settings_mod_ms", modNow)\n                    putExtra("master_running", master)'
+                      ).replace(
                           'putExtra("auto_accept", autoAccept)',
                           'putExtra("auto_accept", autoAccept)\n                    putExtra("auto_accept_default_off_v2", true)\n                    putExtra("android_17_mode", android17Mode)'
+                      ).replace(
+                          'put("master_running", master)',
+                          'put("last_settings_mod_ms", modNow)\n                    put("master_running", master)'
                       ).replace(
                           'put("auto_accept", autoAccept)',
                           'put("auto_accept", autoAccept)\n                    put("auto_accept_default_off_v2", true)\n                    put("android_17_mode", android17Mode)'
                       )
                       open(store_path, "w", encoding="utf-8").write(store_src)
 
-              # --- B. Patch MainActivity.kt ---
+              # --- B. Patch LocationEngine.kt so turning off Change Location immediately stops route sim & restores real GPS ---
+              if os.path.exists(loc_path):
+                  loc_src = open(loc_path, "r", encoding="utf-8").read()
+                  old_update_live = """        isTripSimulationActive = simActive
+                  if (simActive) isFakeLocationEnabled = true
+                  pushSpoofedLocationToAllCallbacks()"""
+                  new_update_live = """        isTripSimulationActive = simActive && isFakeLocationEnabled
+                  if (isFakeLocationEnabled) {
+                      pushSpoofedLocationToAllCallbacks()
+                  } else {
+                      pushRealLocationToAllCallbacksOnce()
+                  }"""
+                  if old_update_live in loc_src:
+                      loc_src = loc_src.replace(old_update_live, new_update_live, 1)
+
+                  old_push_spoof_hdr = """    fun pushSpoofedLocationToAllCallbacks() {
+                  if (!isSpoofingActive() || currentLat == 0.0 || currentLng == 0.0) return"""
+                  new_push_spoof_hdr = """    fun pushRealLocationToAllCallbacksOnce() {
+                  if (lastRealLat == 0.0 || lastRealLng == 0.0) return
+                  if (capturedLocationListeners.isEmpty() && capturedGmsLocationListeners.isEmpty() && capturedGmsLocationCallbacks.isEmpty()) return
+                  mainHandler.post {
+                      val depth = reentrancyDepth.get() ?: 0
+                      reentrancyDepth.set(depth + 1)
+                      try {
+                          val realGps = Location("gps").apply {
+                              latitude = lastRealLat
+                              longitude = lastRealLng
+                              accuracy = 6.5f
+                              speed = 0.0f
+                              bearing = 0.0f
+                              time = System.currentTimeMillis()
+                              elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                          }
+                          val realFused = Location("fused").apply {
+                              latitude = lastRealLat
+                              longitude = lastRealLng
+                              accuracy = 6.5f
+                              speed = 0.0f
+                              bearing = 0.0f
+                              time = System.currentTimeMillis()
+                              elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                          }
+                          for (listener in capturedLocationListeners) {
+                              try { listener.onLocationChanged(realGps) } catch (_: Throwable) {}
+                          }
+                          for (gmsListener in capturedGmsLocationListeners) {
+                              try {
+                                  val cls = gmsListener.javaClass
+                                  val m = gmsListenerMethodCache[cls] ?: cls.getMethod("onLocationChanged", Location::class.java).also { gmsListenerMethodCache[cls] = it }
+                                  m.invoke(gmsListener, realFused)
+                              } catch (_: Throwable) {}
+                          }
+                          if (capturedGmsLocationCallbacks.isNotEmpty()) {
+                              for (cb in capturedGmsLocationCallbacks) {
+                                  try {
+                                      val createMethod = gmsLocationResultCreateMethod ?: run {
+                                          val lrCls = Class.forName("com.google.android.gms.location.LocationResult", false, cb.javaClass.classLoader)
+                                          lrCls.getMethod("create", List::class.java).also { gmsLocationResultCreateMethod = it }
+                                      }
+                                      val locResult = createMethod.invoke(null, listOf(realFused))
+                                      if (locResult != null) {
+                                          val cbCls = cb.javaClass
+                                          val mOnRes = gmsCallbackMethodCache[cbCls] ?: cbCls.getMethod("onLocationResult", locResult.javaClass).also { gmsCallbackMethodCache[cbCls] = it }
+                                          mOnRes.invoke(cb, locResult)
+                                      }
+                                  } catch (_: Throwable) {}
+                              }
+                          }
+                      } catch (_: Throwable) {
+                      } finally {
+                          reentrancyDepth.set(depth)
+                      }
+                  }
+              }
+
+              fun pushSpoofedLocationToAllCallbacks() {
+                  if (!isSpoofingActive() || currentLat == 0.0 || currentLng == 0.0) return"""
+                  if "fun pushRealLocationToAllCallbacksOnce()" not in loc_src and old_push_spoof_hdr in loc_src:
+                      loc_src = loc_src.replace(old_push_spoof_hdr, new_push_spoof_hdr, 1)
+
+                  open(loc_path, "w", encoding="utf-8").write(loc_src)
+
+              # --- C. Patch MainActivity.kt ---
               if os.path.exists(main_path):
                   main_src = open(main_path, "r", encoding="utf-8").read()
                   if "refreshAndroidModeBtnCallback" not in main_src:
@@ -1475,7 +1640,7 @@ jobs:
                           "            SettingsStore.setFakeLocation(this, false)\n"
                           "            SettingsStore.setRouteSimActive(this, false)\n"
                           "        }\n"
-                          "        SettingsStore.isAutoAccept(this)" ,
+                          "        SettingsStore.isAutoAccept(this)",
                           main_src,
                           count=1,
                           flags=re.S
@@ -1484,7 +1649,7 @@ jobs:
                           r'if \(tabIndex == 3 && ::mapWebView\.isInitialized\) \{\s*if \(!chkFakeLoc\.isChecked\) \{.*?\n            \}\s*mapWebView\.evaluateJavascript\("if\(window\.invalidateMapSize\) window\.invalidateMapSize\(\);", null\)\s*\}',
                           "if (tabIndex == 3 && ::mapWebView.isInitialized) {\n"
                           "            mapWebView.evaluateJavascript(\"if(window.invalidateMapSize) window.invalidateMapSize();\", null)\n"
-                          "        }" ,
+                          "        }",
                           main_src,
                           count=1,
                           flags=re.S
@@ -1494,7 +1659,34 @@ jobs:
                           'tr("⚪ تم إيقاف تغيير الموقع (OFF)", "⚪ Change Location disabled (OFF)")'
                       )
 
-                      # 2. Add Android 17 vs Android 16 & Below Mode Switcher Button in Master Control Card
+                      # 2. Image 25: Hide "MISSED & REJECTED" section in Orders Tab so ONLY Accepted orders are shown
+                      old_orders_render = """        for (order in activeList) {
+                      activeOrdersContainer.addView(buildActiveOrderCard(order))
+                  }
+
+                  if (missedList.isNotEmpty()) {
+                      missedSectionHeader.visibility = View.VISIBLE
+                      tvMissedCountBadge.text = missedList.size.toString()
+                      for (order in missedList) {
+                          missedOrdersContainer.addView(buildMissedOrderCard(order))
+                      }
+                  } else {
+                      missedSectionHeader.visibility = View.GONE
+                  }"""
+                      new_orders_render = """        if (activeList.isEmpty()) {
+                      tvOrdersEmptyState.visibility = View.VISIBLE
+                  } else {
+                      tvOrdersEmptyState.visibility = View.GONE
+                      for (order in activeList) {
+                          activeOrdersContainer.addView(buildActiveOrderCard(order))
+                      }
+                  }
+                  missedSectionHeader.visibility = View.GONE
+                  missedOrdersContainer.visibility = View.GONE"""
+                      assert old_orders_render in main_src, "old_orders_render not found in MainActivity.kt"
+                      main_src = main_src.replace(old_orders_render, new_orders_render, 1)
+
+                      # 3. Add Android 17 vs Android 16 & Below Mode Switcher Button in Master Control Card
                       main_src = main_src.replace(
                           "private lateinit var tvMasterStatus: TextView",
                           "private lateinit var tvMasterStatus: TextView\n    private var refreshAndroidModeBtnCallback: (() -> Unit)? = null",
@@ -1553,9 +1745,264 @@ jobs:
                           "updateMasterStatusUI(m)\n                refreshAndroidModeBtnCallback?.invoke()",
                           1
                       )
+
+                      # 4. Fix chkFakeLoc listener so turning OFF Change Location ALWAYS stops route simulation unconditionally
+                      old_chk_fake_listener = """            setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFakeLocation(this@MainActivity, isChecked)
+                          if (!isChecked && isRouteSimRunning) {
+                              stopRouteSimulation()
+                          }
+                          syncDeliverAndChangeBtns?.invoke(isChecked)
+                          updateRouteSimBannerUI()
+                      }"""
+                      new_chk_fake_listener = """            setOnCheckedChangeListener { _, isChecked ->
+                          SettingsStore.setFakeLocation(this@MainActivity, isChecked)
+                          if (!isChecked) {
+                              stopRouteSimulation()
+                          }
+                          syncDeliverAndChangeBtns?.invoke(isChecked)
+                          updateRouteSimBannerUI()
+                      }"""
+                      assert old_chk_fake_listener in main_src, "old_chk_fake_listener not found in MainActivity.kt"
+                      main_src = main_src.replace(old_chk_fake_listener, new_chk_fake_listener, 1)
+
+                      # 5. Fix applyImmediateSpoofLocation so selecting/tapping a location NEVER turns on Change Location automatically!
+                      old_apply_spoof_fn = """        point1Lat = lat
+                  point1Lng = lng
+                  SettingsStore.setFakeLat(this, lat)
+                  SettingsStore.setFakeLng(this, lng)
+                  SettingsStore.setPoint1(this, lat, lng)
+                  if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
+                      chkFakeLoc.isChecked = true
+                  }
+                  SettingsStore.pushLiveLocationStep(
+                      this,
+                      lat = lat,
+                      lng = lng,
+                      speedKmh = if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
+                      bearing = SettingsStore.getRouteSimBearing(this),
+                      simActive = isRouteSimRunning && !isRouteSimPaused
+                  )"""
+                      new_apply_spoof_fn = """        point1Lat = lat
+                  point1Lng = lng
+                  SettingsStore.setFakeLat(this, lat)
+                  SettingsStore.setFakeLng(this, lng)
+                  SettingsStore.setPoint1(this, lat, lng)
+                  if (::chkFakeLoc.isInitialized && chkFakeLoc.isChecked) {
+                      SettingsStore.pushLiveLocationStep(
+                          this,
+                          lat = lat,
+                          lng = lng,
+                          speedKmh = if (isRouteSimRunning) routeSimCurrentDynamicSpeedKmh else 0.0f,
+                          bearing = SettingsStore.getRouteSimBearing(this),
+                          simActive = isRouteSimRunning && !isRouteSimPaused
+                      )
+                  }"""
+                      assert old_apply_spoof_fn in main_src, "old_apply_spoof_fn not found in MainActivity.kt"
+                      main_src = main_src.replace(old_apply_spoof_fn, new_apply_spoof_fn, 1)
+
+                      # 6. Fix Round-Trip (ذهاب وإياب) so it runs ONCE (Restaurant -> Customer -> Restaurant) and stops at the Restaurant without turning off Change Location!
+                      main_src = main_src.replace(
+                          '"🔄 تكرار مسار التوصيل ذهاباً وإياباً تلقائياً"',
+                          '"🔄 ذهاب وإياب لمرة واحدة (توصيل للعميل ثم العودة للمطعم والتوقف عنده)"'
+                      ).replace(
+                          '"🔄 Automatically repeat delivery path back and forth"',
+                          '"🔄 Single Round-Trip (Deliver to Customer then Return to Restaurant & Stop)"'
+                      )
+
+                      old_return_leg = """            } else {
+                          routeTraveledMeters -= stepMeters
+                          if (routeTraveledMeters <= 0.0) {
+                              routeTraveledMeters = 0.0
+                              isRouteSimForward = true
+                          }
+                      }"""
+                      new_return_leg = """            } else {
+                          routeTraveledMeters -= stepMeters
+                          if (routeTraveledMeters <= 0.0) {
+                              routeTraveledMeters = 0.0
+                              isRouteSimForward = true
+                              val firstPt = routeWaypoints.first()
+                              val secondPt = routeWaypoints[1]
+                              val returnBrg = computeCompassBearing(secondPt.first, secondPt.second, firstPt.first, firstPt.second)
+                              point1Lat = firstPt.first
+                              point1Lng = firstPt.second
+                              SettingsStore.setFakeLat(this@MainActivity, firstPt.first)
+                              SettingsStore.setFakeLng(this@MainActivity, firstPt.second)
+                              SettingsStore.setPoint1(this@MainActivity, firstPt.first, firstPt.second)
+                              SettingsStore.setRouteSimActive(this@MainActivity, false)
+                              if (SettingsStore.isFakeLocation(this@MainActivity)) {
+                                  SettingsStore.pushLiveLocationStep(
+                                      this@MainActivity,
+                                      lat = firstPt.first,
+                                      lng = firstPt.second,
+                                      speedKmh = 0.0f,
+                                      bearing = returnBrg,
+                                      simActive = false
+                                  )
+                              }
+                              isRouteSimRunning = false
+                              isRouteSimPaused = false
+                              if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
+                              if (::btnStartRouteSim.isInitialized) {
+                                  btnStartRouteSim.text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+                              }
+                              updateSimCoordinateInputs(firstPt.first, firstPt.second, returnBrg)
+                              updateRouteSimBannerUI()
+                              updateRouteMetricsUI()
+                              Toast.makeText(
+                                  this@MainActivity,
+                                  tr("🏁 اكتملت رحلة الذهاب والإياب وتم التوقف عند المطعم!", "🏁 Round-trip completed and stopped at restaurant!"),
+                                  Toast.LENGTH_LONG
+                              ).show()
+                              return
+                          }
+                      }"""
+                      assert old_return_leg in main_src, "old_return_leg not found in MainActivity.kt"
+                      main_src = main_src.replace(old_return_leg, new_return_leg, 1)
+
+                      # 7. Guard routeSimTickRunnable against zombie instances or disabled Change Location, and do NOT force chkFakeLoc = true in startOrResumeRouteSimulation
+                      old_tick_guard = """    private val routeSimTickRunnable = object : Runnable {
+                  override fun run() {
+                      if (!isRouteSimRunning || isRouteSimPaused || routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
+                          return
+                      }"""
+                      new_tick_guard = """    private val routeSimTickRunnable = object : Runnable {
+                  override fun run() {
+                      if (isFinishing || isDestroyed || !isRouteSimRunning || isRouteSimPaused || !SettingsStore.isFakeLocation(this@MainActivity) || routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
+                          if (!SettingsStore.isFakeLocation(this@MainActivity)) {
+                              isRouteSimRunning = false
+                              isRouteSimPaused = false
+                              if (::btnPauseRouteSim.isInitialized) btnPauseRouteSim.visibility = View.GONE
+                              if (::btnStartRouteSim.isInitialized) {
+                                  btnStartRouteSim.text = tr("🚗 توصيل الطلب", "🚗 DELIVER ORDER")
+                              }
+                              updateRouteSimBannerUI()
+                          }
+                          return
+                      }"""
+                      assert old_tick_guard in main_src, "old_tick_guard not found in MainActivity.kt"
+                      main_src = main_src.replace(old_tick_guard, new_tick_guard, 1)
+
+                      old_start_sim_force_fake = """        if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
+                      chkFakeLoc.isChecked = true
+                  }"""
+                      new_start_sim_check_fake = """        if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
+                      Toast.makeText(
+                          this,
+                          tr("⚠️ يرجى تشغيل زر (تغيير الموقع / توصيل الطلب المباشر) أولاً لتفعيل التحرك", "⚠️ Please turn ON (Change Location / Direct Order Delivery) first"),
+                          Toast.LENGTH_LONG
+                      ).show()
+                      return
+                  }"""
+                      assert old_start_sim_force_fake in main_src, "old_start_sim_force_fake not found in MainActivity.kt"
+                      main_src = main_src.replace(old_start_sim_force_fake, new_start_sim_check_fake, 1)
+
+                      # 8. Add onDestroy() in MainActivity so any destroyed instance cleans up its handlers
+                      old_onpause_end = """        saveAllSettings()
+              }
+          }"""
+                      new_onpause_end = """        saveAllSettings()
+              }
+
+              override fun onDestroy() {
+                  mainHandler.removeCallbacks(routeSimTickRunnable)
+                  mainHandler.removeCallbacks(pingRunnable)
+                  super.onDestroy()
+              }
+          }"""
+                      assert old_onpause_end in main_src, "old_onpause_end not found in MainActivity.kt"
+                      main_src = main_src.replace(old_onpause_end, new_onpause_end, 1)
+
+                      # 9. Change Map from 3 taps to Single Tap (1 tap) to set/pin location!
+                      main_src = main_src.replace(
+                          'val hudDefault = tr("خريطة المسار • اضغط 3 مرات لتثبيت الموقع 📍", "Route Map • Tap 3 times to pin location 📍")',
+                          'val hudDefault = tr("خريطة المسار • اضغط ضغطة واحدة لتحديد الموقع 📍", "Route Map • Single tap to set location 📍")'
+                      ).replace(
+                          'val hudPoint1 = tr("خريطة التوصيل • اضغط 3 مرات لتحديد موقع الاستلام 1️⃣", "Delivery Map • Tap 3 times to set pickup location 1️⃣")',
+                          'val hudPoint1 = tr("خريطة التوصيل • اضغط ضغطة واحدة لتحديد موقع الاستلام 1️⃣", "Delivery Map • Single tap to set pickup location 1️⃣")'
+                      ).replace(
+                          'val hudPoint2 = tr("خريطة التوصيل • اضغط 3 مرات لتحديد موقع التسليم 2️⃣", "Delivery Map • Tap 3 times to set drop-off location 2️⃣")',
+                          'val hudPoint2 = tr("خريطة التوصيل • اضغط ضغطة واحدة لتحديد موقع التسليم 2️⃣", "Delivery Map • Single tap to set drop-off location 2️⃣")'
+                      ).replace(
+                          'val hudTeleport = tr("خريطة المسار • اضغط 3 مرات لتثبيت الموقع 📍", "Route Map • Tap 3 times to pin location 📍")',
+                          'val hudTeleport = tr("خريطة المسار • اضغط ضغطة واحدة لتحديد الموقع 📍", "Route Map • Single tap to set location 📍")'
+                      )
+
+                      old_3tap_js = """                    map.on('click', function(e) {
+                                  var now = Date.now();
+                                  if (now - lastMapTapTime <= 900) {
+                                      mapTapCount += 1;
+                                  } else {
+                                      mapTapCount = 1;
+                                  }
+                                  lastMapTapTime = now;
+
+                                  if (mapTapResetTimer) {
+                                      clearTimeout(mapTapResetTimer);
+                                      mapTapResetTimer = null;
+                                  }
+
+                                  var badge = document.getElementById('hudBadge');
+                                  if (mapTapCount < 3) {
+                                      if (badge) {
+                                          badge.innerText = '$hudTapProgressPrefix(' + mapTapCount + '/3)';
+                                      }
+                                      mapTapResetTimer = setTimeout(function() {
+                                          mapTapCount = 0;
+                                          restoreDefaultHudBadge();
+                                      }, 950);
+                                      return;
+                                  }
+
+                                  // 3rd rapid tap reached -> Pin location!
+                                  mapTapCount = 0;
+                                  lastMapTapTime = 0;
+                                  if (badge) {
+                                      badge.innerText = '$hudTapPinnedMsg';
+                                      mapTapResetTimer = setTimeout(function() {
+                                          restoreDefaultHudBadge();
+                                      }, 1400);
+                                  }"""
+                      new_1tap_js = """                    map.on('click', function(e) {
+                                  if (mapTapResetTimer) {
+                                      clearTimeout(mapTapResetTimer);
+                                      mapTapResetTimer = null;
+                                  }
+                                  var badge = document.getElementById('hudBadge');
+                                  if (badge) {
+                                      badge.innerText = '$hudTapPinnedMsg';
+                                      mapTapResetTimer = setTimeout(function() {
+                                          restoreDefaultHudBadge();
+                                      }, 1400);
+                                  }"""
+                      assert old_3tap_js in main_src, "old_3tap_js not found in MainActivity.kt"
+                      main_src = main_src.replace(old_3tap_js, new_1tap_js, 1)
+
+                      # 10. Make filter inputs in MainActivity show empty ("") when value <= 0.0
+                      main_src = main_src.replace(
+                          'edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())',
+                          'edtMinPrice = createInput(SettingsStore.getMinPrice(this).let { if (it <= 0.0) "" else it.toString() })'
+                      ).replace(
+                          'edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).toString())',
+                          'edtMaxDistRest = createInput(SettingsStore.getMaxDistRest(this).let { if (it <= 0.0) "" else it.toString() })'
+                      ).replace(
+                          'edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).toString())',
+                          'edtMaxDistCust = createInput(SettingsStore.getMaxDistCust(this).let { if (it <= 0.0) "" else it.toString() })'
+                      ).replace(
+                          'val mpStr = if (mp == 0.0) "0" else if (mp == mp.toInt().toDouble()) mp.toInt().toString() else mp.toString()',
+                          'val mpStr = if (mp <= 0.0) "" else if (mp == mp.toInt().toDouble()) mp.toInt().toString() else mp.toString()'
+                      ).replace(
+                          'val mrStr = if (mr == 0.0) "0" else if (mr == mr.toInt().toDouble()) mr.toInt().toString() else mr.toString()',
+                          'val mrStr = if (mr <= 0.0) "" else if (mr == mr.toInt().toDouble()) mr.toInt().toString() else mr.toString()'
+                      ).replace(
+                          'val mcStr = if (mc == 0.0) "0" else if (mc == mc.toInt().toDouble()) mc.toInt().toString() else mc.toString()',
+                          'val mcStr = if (mc <= 0.0) "" else if (mc == mc.toInt().toDouble()) mc.toInt().toString() else mc.toString()'
+                      )
+
                       open(main_path, "w", encoding="utf-8").write(main_src)
 
-              # --- C. Patch OrderInterceptor.kt ---
+              # --- D. Patch OrderInterceptor.kt ---
               if os.path.exists(order_path):
                   order_src = open(order_path, "r", encoding="utf-8").read()
                   if "isAndroid17Mode" not in order_src:
@@ -1585,6 +2032,123 @@ jobs:
                           '            putBoolean("auto_accept", isAutoAccept)',
                           '            putBoolean("auto_accept_default_off_v2", true)\n            putBoolean("auto_accept", isAutoAccept)\n            putBoolean("android_17_mode", isAndroid17Mode)'
                       )
+
+                      # 1b. CRITICAL FIX FOR VIDEO 1:
+                      # - In applySettingsFromIntent, persist fake_location_enabled & route_sim_active to localSp so localSp NEVER holds a stale ON state!
+                      # - In syncSettings(), ALWAYS apply LocationEngine.applySettingsBundle(bundle) from XposedProvider unconditionally!
+                      # - In pushQuickSettingsUpdateToProvider, NEVER write fake_location_enabled or route_sim_active from Saned back to XposedProvider!
+                      # - In btnOpenFullApp ("Go to app"), do NOT call applyTypedFiltersImmediately() and add FLAG_ACTIVITY_SINGLE_TOP!
+                      old_apply_intent_loc = """        LocationEngine.isMasterRunning = isMasterRunning
+                  LocationEngine.isFakeLocationEnabled = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                  LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", true)
+                  val lat = intent.getDoubleExtra("fake_lat", LocationEngine.currentLat)
+                  val lng = intent.getDoubleExtra("fake_lng", LocationEngine.currentLng)
+                  val simAct = intent.getBooleanExtra("route_sim_active", LocationEngine.isTripSimulationActive)
+                  val simSpd = intent.getFloatExtra("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                  val simBrg = intent.getFloatExtra("route_sim_bearing", LocationEngine.currentBearing)
+                  LocationEngine.updateLiveRouteState(lat, lng, simSpd, simBrg, simAct)"""
+
+                      new_apply_intent_loc = """        LocationEngine.isMasterRunning = isMasterRunning
+                  val newFakeLoc = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                  LocationEngine.isFakeLocationEnabled = newFakeLoc
+                  LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", true)
+                  val lat = intent.getDoubleExtra("fake_lat", LocationEngine.currentLat)
+                  val lng = intent.getDoubleExtra("fake_lng", LocationEngine.currentLng)
+                  val simAct = intent.getBooleanExtra("route_sim_active", false) && newFakeLoc
+                  val simSpd = intent.getFloatExtra("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                  val simBrg = intent.getFloatExtra("route_sim_bearing", LocationEngine.currentBearing)
+                  LocationEngine.updateLiveRouteState(lat, lng, simSpd, simBrg, simAct)
+                  try {
+                      (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)?.edit()
+                          ?.putLong("last_settings_mod_ms", intentMod)
+                          ?.putBoolean("fake_location_enabled", newFakeLoc)
+                          ?.putBoolean("route_sim_active", simAct)
+                          ?.putString("fake_lat", lat.toString())
+                          ?.putString("fake_lng", lng.toString())
+                          ?.putBoolean("android_17_mode", isAndroid17Mode)
+                          ?.apply()
+                  } catch (_: Throwable) {}"""
+                      assert old_apply_intent_loc in order_src, "old_apply_intent_loc not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_apply_intent_loc, new_apply_intent_loc, 1)
+
+                      # In syncSettings(): make XposedProvider authoritative for LocationEngine & isAndroid17Mode unconditionally
+                      old_sync_bundle_loc = """                    persistLicenseFieldsLocally(appContext ?: currentActivity)
+
+                              val bMod = bundle.getLong("last_settings_mod_ms", 0L)"""
+                      new_sync_bundle_loc = """                    persistLicenseFieldsLocally(appContext ?: currentActivity)
+                              if (bundle.containsKey("android_17_mode")) {
+                                  isAndroid17Mode = bundle.getBoolean("android_17_mode", isAndroid17Mode)
+                              }
+                              // Always sync LocationEngine state unconditionally from J-Driver's XposedProvider so turning OFF Change Location in J-Driver is never ignored!
+                              LocationEngine.isMasterRunning = bundle.getBoolean("master_running", bundle.getBoolean("enabled", isMasterRunning))
+                              LocationEngine.isFakeLocationEnabled = bundle.getBoolean("fake_location_enabled", false)
+                              LocationEngine.isTripSimulationActive = bundle.getBoolean("route_sim_active", false) && LocationEngine.isFakeLocationEnabled
+                              val bLat = bundle.getString("fake_lat", null)?.toDoubleOrNull()
+                              val bLng = bundle.getString("fake_lng", null)?.toDoubleOrNull()
+                              if (bLat != null && !bLat.isNaN() && bLat != 0.0) LocationEngine.currentLat = bLat
+                              if (bLng != null && !bLng.isNaN() && bLng != 0.0) LocationEngine.currentLng = bLng
+                              try {
+                                  (appContext ?: currentActivity)?.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)?.edit()
+                                      ?.putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                                      ?.putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                                      ?.apply()
+                              } catch (_: Throwable) {}
+
+                              val bMod = bundle.getLong("last_settings_mod_ms", 0L)"""
+                      assert old_sync_bundle_loc in order_src, "old_sync_bundle_loc not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_sync_bundle_loc, new_sync_bundle_loc, 1)
+
+                      # Remove fake_location_enabled / route_sim_active from pushQuickSettingsUpdateToProvider so Saned overlay never overwrites J-Driver's Location state
+                      old_push_loc_sp = """                .putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                          .putString("fake_lat", LocationEngine.currentLat.toString())
+                          .putString("fake_lng", LocationEngine.currentLng.toString())
+                          .putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                          .putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                          .putFloat("route_sim_bearing", LocationEngine.currentBearing)"""
+                      assert old_push_loc_sp in order_src, "old_push_loc_sp not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_push_loc_sp, "", 1)
+
+                      old_push_loc_bundle = """            putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
+                      putString("fake_lat", LocationEngine.currentLat.toString())
+                      putString("fake_lng", LocationEngine.currentLng.toString())
+                      putBoolean("route_sim_active", LocationEngine.isTripSimulationActive)
+                      putFloat("route_sim_speed_kmh", LocationEngine.simulatedSpeedKmh)
+                      putFloat("route_sim_bearing", LocationEngine.currentBearing)"""
+                      assert old_push_loc_bundle in order_src, "old_push_loc_bundle not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_push_loc_bundle, "", 1)
+
+                      # In btnOpenFullApp ("Go to app"), do not call applyTypedFiltersImmediately() and add FLAG_ACTIVITY_SINGLE_TOP
+                      old_goto_app = """                setOnClickListener {
+                              applyTypedFiltersImmediately()
+                              dialog.dismiss()
+                              try {
+                                  val launchIntent = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
+                                      ?: Intent().apply {
+                                          component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.ui.MainActivity")
+                                      }
+                                  launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                  activity.startActivity(launchIntent)
+                              } catch (_: Throwable) {}
+                          }"""
+                      new_goto_app = """                setOnClickListener {
+                              dialog.dismiss()
+                              try {
+                                  val launchIntent = activity.packageManager.getLaunchIntentForPackage("dev.jing.sanedhook")
+                                      ?: Intent().apply {
+                                          component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.ui.MainActivity")
+                                      }
+                                  launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                  activity.startActivity(launchIntent)
+                              } catch (_: Throwable) {}
+                          }"""
+                      assert old_goto_app in order_src, "old_goto_app not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_goto_app, new_goto_app, 1)
+
+                      # Image 26: Make Quick Filter inputs default to empty ("") instead of "0" when currentVal <= 0.0
+                      old_filter_fmt = 'val formatted = if (currentVal <= 0.0) "0" else if (currentVal == currentVal.toInt().toDouble()) currentVal.toInt().toString() else currentVal.toString()'
+                      new_filter_fmt = 'val formatted = if (currentVal <= 0.0) "" else if (currentVal == currentVal.toInt().toDouble()) currentVal.toInt().toString() else currentVal.toString()'
+                      assert old_filter_fmt in order_src, "old_filter_fmt not found in OrderInterceptor.kt"
+                      order_src = order_src.replace(old_filter_fmt, new_filter_fmt, 1)
 
                       # 2. Dual-mode branching in handlePostOrderActivityCreate (Android 17 V8 vs Android 16 & Below)
                       old_post_a17 = """            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt screen opened (hasToken=${cachedAuthToken.isNotEmpty()}, inFlight=${apiInFlightIds.contains(orderIdInt)}, hasAppClient=${capturedRawAppHttpClient != null}) -> waiting for 0.0ms API call before UI fallback")
@@ -1775,7 +2339,7 @@ jobs:
                       assert old_exec_tail_a17 in order_src, "old_exec_tail_a17 not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_exec_tail_a17, new_exec_tail_dual, 1)
 
-                      # 6. Popup Recent Orders History + Mode Switcher Button in Floating Popup Menu (Image 23)
+                      # 6. Popup Recent Orders History (WITHOUT System Mode button in Floating Popup as requested in Image 26!)
                       old_refresh_popup = """    @Volatile private var activeQuickDialog: Dialog? = null
               @Volatile private var lastQuickDialogOpenUptime: Long = 0L
 
@@ -1942,24 +2506,7 @@ jobs:
                       })
                       card.addView(deliverBox)"""
 
-                      new_popup_mode_and_orders = """            // 4b. Mode Switcher Button (Android 17 V8 vs Android 16 & Below)
-                      card.addView(makeToggleBtn(
-                          labelProvider = {
-                              if (isAr) {
-                                  if (isAndroid17Mode) "📲 وضع النظام: أندرويد 17 (A17 V8) ⚡" else "📲 وضع النظام: أندرويد 16 فما تحت 🚀"
-                              } else {
-                                  if (isAndroid17Mode) "📲 System Mode: Android 17 (A17 V8) ⚡" else "📲 System Mode: Android 16 & Below 🚀"
-                              }
-                          },
-                          stateProvider = { isAndroid17Mode },
-                          activeColor = "#0284C7"
-                      ) {
-                          isAndroid17Mode = !isAndroid17Mode
-                          SettingsStore.setAndroid17Mode(activity, isAndroid17Mode)
-                          pushQuickSettingsUpdateToProvider(activity)
-                      })
-
-                      // 5. Recent Orders Section in Floating Popup Menu (GPS button removed from popup menu; GPS function remains active in app)
+                      new_popup_orders_only = """            // 5. Recent Orders Section in Floating Popup Menu (GPS & System Mode buttons omitted from popup as requested in Images 23 & 26)
                       val recentOrdersBox = android.widget.LinearLayout(activity).apply {
                           orientation = android.widget.LinearLayout.VERTICAL
                           val lp = android.widget.LinearLayout.LayoutParams(
@@ -2167,7 +2714,7 @@ jobs:
                       recentOrdersBox.addView(recentOrdersListContainer)
                       card.addView(recentOrdersBox)"""
                       assert old_popup_deliver in order_src, "old_popup_deliver not found in OrderInterceptor.kt"
-                      order_src = order_src.replace(old_popup_deliver, new_popup_mode_and_orders, 1)
+                      order_src = order_src.replace(old_popup_deliver, new_popup_orders_only, 1)
 
                       order_src = order_src.replace(
                           "if (activeQuickDialog === dialog) activeQuickDialog = null",
@@ -2175,7 +2722,7 @@ jobs:
                           1
                       )
                       open(order_path, "w", encoding="utf-8").write(order_src)
-                      print("Applied Unified Android 17 V8 + Android 16 & Below Mode Switcher + Image 23 UI successfully!")
+                      print("Applied Unified Android 17 V8 + Android 16 & Below + Images 23/25/26/27 & Video 1 Location Fixes successfully!")
 
           def apply_deep_logger_v3():
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
