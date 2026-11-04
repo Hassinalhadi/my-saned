@@ -2293,6 +2293,32 @@ jobs:
 
                       open(main_path, "w", encoding="utf-8").write(main_src)
 
+                  # 11. Image 28 & 29: Unconditionally remove red "Delete & Clear Orders List" bar, top-right clear-all trash icon, top logs icon, and bottom logs tab
+                  main_src = open(main_path, "r", encoding="utf-8").read()
+                  main_src = main_src.replace(
+                      "container.addView(btnClearOrdersBar)",
+                      "btnClearOrdersBar.visibility = View.GONE"
+                  ).replace(
+                      "topBar.addView(btnClearTop)",
+                      "btnClearTop.visibility = View.GONE"
+                  ).replace(
+                      "topBar.addView(btnTopLogs)",
+                      "btnTopLogs.visibility = View.GONE"
+                  ).replace(
+                      "bottomNav.addView(navLogsBtn)",
+                      "navLogsBtn.visibility = View.GONE"
+                  ).replace(
+                      "btnTopLogs.visibility = View.VISIBLE",
+                      "btnTopLogs.visibility = View.GONE"
+                  ).replace(
+                      "navLogsBtn.visibility = View.VISIBLE",
+                      "navLogsBtn.visibility = View.GONE"
+                  ).replace(
+                      "btnClearTop.visibility = View.VISIBLE",
+                      "btnClearTop.visibility = View.GONE"
+                  )
+                  open(main_path, "w", encoding="utf-8").write(main_src)
+
               # --- D. Patch OrderInterceptor.kt ---
               if os.path.exists(order_path):
                   order_src = open(order_path, "r", encoding="utf-8").read()
@@ -3067,8 +3093,71 @@ jobs:
                           "if (activeQuickDialog === dialog) { activeQuickDialog = null; activePopupOrdersRefreshCallback = null }",
                           1
                       )
+                      order_src = order_src.replace(
+                          'putExtra("diag_logs_batch", DiagnosticLogger.getRecentLogsBatchText(280))',
+                          '// diag_logs_batch disabled in production'
+                      )
                       open(order_path, "w", encoding="utf-8").write(order_src)
-                      print("Applied Unified Android 17 V8 + Android 16 & Below + Images 23/25/26/27 & Video 1 Location Fixes successfully!")
+
+              # --- E. Disable Diagnostic Log Capturing in DiagnosticLogger.kt (Zero Disk/IPC/RAM Overhead in Production) ---
+              diag_path = "app/src/main/java/dev/saned/assistant/DiagnosticLogger.kt"
+              if os.path.exists(diag_path):
+                  with open(diag_path, "w", encoding="utf-8") as df:
+                      df.write(
+                          "package dev.saned.assistant\n\n"
+                          "import android.content.Context\n"
+                          "import android.content.SharedPreferences\n"
+                          "import io.github.libxposed.api.XposedModule\n"
+                          "import java.util.concurrent.atomic.AtomicBoolean\n\n"
+                          "object DiagnosticLogger {\n"
+                          "    @Volatile var xposedModule: XposedModule? = null\n"
+                          "    @Volatile var cachedContext: Context? = null\n"
+                          "    @Volatile var hookEarlyCloaker: Boolean = true\n"
+                          "    @Volatile var hookSecCloaker: Boolean = true\n"
+                          "    @Volatile var hookLocation: Boolean = true\n"
+                          "    @Volatile var hookDeviceSpoofer: Boolean = true\n"
+                          "    @Volatile var hookOrders: Boolean = true\n"
+                          "    @Volatile var hookBootstrapLoop: Boolean = true\n"
+                          "    private val crashHandlerInstalled = AtomicBoolean(false)\n\n"
+                          "    @JvmStatic fun getRecentLogsBatchText(maxLines: Int = 320): String = \"\"\n"
+                          "    @JvmStatic fun clearRamLogs() {}\n\n"
+                          "    fun resolveAnyContext(): Context? {\n"
+                          "        cachedContext?.let { return it }\n"
+                          "        OrderInterceptor.resolveApplicationContext()?.let {\n"
+                          "            cachedContext = it\n"
+                          "            return it\n"
+                          "        }\n"
+                          "        return try {\n"
+                          "            val atClass = Class.forName(\"android.app.ActivityThread\")\n"
+                          "            val currentAt = atClass.getMethod(\"currentActivityThread\").invoke(null)\n"
+                          "            (atClass.getMethod(\"getSystemContext\").invoke(currentAt) as? Context)?.also { cachedContext = it }\n"
+                          "        } catch (_: Throwable) { null }\n"
+                          "    }\n\n"
+                          "    fun syncHookToggles(module: XposedModule? = null, prefs: SharedPreferences? = null) {\n"
+                          "        if (module != null) xposedModule = module\n"
+                          "    }\n\n"
+                          "    fun installCrashHandler(module: XposedModule? = null, phase: String = \"init\") {\n"
+                          "        if (module != null) xposedModule = module\n"
+                          "        if (!crashHandlerInstalled.compareAndSet(false, true)) return\n"
+                          "        try {\n"
+                          "            val prevHandler = Thread.getDefaultUncaughtExceptionHandler()\n"
+                          "            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->\n"
+                          "                try {\n"
+                          "                    if (PackageCloaker.isPromonThrowable(throwable) && thread.name != \"main\") {\n"
+                          "                        return@setDefaultUncaughtExceptionHandler\n"
+                          "                    }\n"
+                          "                } catch (_: Throwable) {}\n"
+                          "                prevHandler?.uncaughtException(thread, throwable)\n"
+                          "            }\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "    }\n\n"
+                          "    fun logStep(section: String, message: String) {}\n"
+                          "    fun logWarn(section: String, message: String) {}\n"
+                          "    fun logError(section: String, message: String, t: Throwable? = null) {}\n"
+                          "    fun logCrash(threadName: String, t: Throwable) {}\n"
+                          "}\n"
+                      )
+              print("Applied Unified Android 17 V8 + Android 16 & Below + Images 23/25/26/27/28 & Production No-Log Fixes successfully!")
 
           def apply_deep_logger_v3():
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
