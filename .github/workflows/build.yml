@@ -3159,6 +3159,2236 @@ jobs:
                       )
               print("Applied Unified Android 17 V8 + Android 16 & Below + Images 23/25/26/27/28 & Production No-Log Fixes successfully!")
 
+              # --- F. Apply Ultra Security Shield V10 (Zero-Export JNI_OnLoad, 16-Round Branchless Key Schedule, C++ APK V2 Block Cert Check, Anti-Frida/SignatureKill, 36 Encrypted Slots, Full Class Obfuscation) ---
+              apply_ultra_security_shield_v10()
+
+          def apply_ultra_security_shield_v10():
+              import struct
+              orig_seeds = [
+                  0x4A445256, 0x53414E45, 0x44393850, 0x524F5345,
+                  0x43555245, 0x39363635, 0x30353831, 0x32313431
+              ]
+              raw_master = bytearray(32)
+              for idx, s in enumerate(orig_seeds):
+                  mixed = (s ^ ((0x5A3C96A5 + idx * 0x13579BDF) & 0xFFFFFFFF)) & 0xFFFFFFFF
+                  off = idx * 4
+                  raw_master[off]     = (mixed >> 24) & 0xFF
+                  raw_master[off + 1] = (mixed >> 16) & 0xFF
+                  raw_master[off + 2] = (mixed >> 8) & 0xFF
+                  raw_master[off + 3] = mixed & 0xFF
+
+              expected_mk = hashlib.sha256(raw_master).digest()
+              cert_bytes = bytes.fromhex("3884b766498a974598f523351f43cc4a7e0dadb405d3e88218a81693efb3420f")
+
+              shards = [secrets.token_bytes(32) for _ in range(4)]
+              state = cert_bytes
+              for r in range(16):
+                  sh = shards[r & 3]
+                  rc = bytes([(r * 0x37 + 0xA5) & 0xFF, ((r ^ 0x5A) * 0x19) & 0xFF])
+                  state = hashlib.sha256(state + sh + rc).digest()
+
+              sealed_mk = bytes(expected_mk[i] ^ state[i] for i in range(32))
+              cert_mask = secrets.token_bytes(32)
+              enc_cert = bytes(cert_bytes[i] ^ cert_mask[i] ^ ((0xA5 + (i * 9)) & 0xFF) for i in range(32))
+
+              plain_slots = [
+                  "https://gateway.saned.io/api/v1/dispatch/accept-dispatch/",
+                  "https://gateway.saned.io/api/v1/dispatch/reject/",
+                  "https://gateway.saned.io/api/v1/dispatch/active",
+                  "https://gateway.saned.io/api/v1/dispatch-location/contact-number/",
+                  "net.saned.core.SanedFCMNotificationHandler",
+                  "net.jahez.fleets.dispatch.accept.IncomingDispatchActivity",
+                  "dispatches_db",
+                  "SELECT di.dispatchId, di.referenceId, di.status, v.vendorName, c.subscriberName, NULL, c.clientPhone, "
+                  "l.pickupLatitude, l.pickupLongitude, l.destinationLatitude, l.destinationLongitude, l.distance, "
+                  "p.deliveryPrice, p.collectionAmount, p.currencyCode, p.paymentMethod, a.buildingName, a.buildingNumber, "
+                  "a.houseNumber, a.streetName, a.roadNumber, a.blockNumber, a.apartmentNumber, a.floor, a.lane, "
+                  "a.officeName, a.region, a.additionalInformation FROM dispatch_info di "
+                  "LEFT JOIN vendor v ON v.dispatchId = di.dispatchId LEFT JOIN client c ON c.dispatchId = di.dispatchId "
+                  "LEFT JOIN location l ON l.dispatchId = di.dispatchId LEFT JOIN payment p ON p.dispatchId = di.dispatchId "
+                  "LEFT JOIN address a ON a.dispatchId = di.dispatchId",
+                  "AIzaSyDngGva2vOywyZGjSvoGQqnIr-IC3v4FVE",
+                  "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",
+                  "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/master/jdriver_control.json",
+                  "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@main/jdriver_control.json",
+                  "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@master/jdriver_control.json",
+                  "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json",
+                  "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control.json",
+                  "githubusercontent.com",
+                  "jsdelivr.net",
+                  "jdriver_control",
+                  "/system/etc/hosts",
+                  "jdrv_lic_key",
+                  "jdrv_lic_token_sig",
+                  "jdrv_lic_active",
+                  "jdrv_lic_expiry_ms",
+                  "jdrv_lic_feature_mask",
+                  "jdrv_lic_epoch",
+                  "jdrv_engine_magic",
+                  "jdrv_hw_device_id",
+                  "jdrv_trial_ledger_entry",
+                  "jdrv_hw_trial_ledger",
+                  "jdrv_remote_app_enabled",
+                  "jdrv_remote_min_epoch",
+                  "jdrv_remote_blocked_devs",
+                  "jdrv_remote_blocked_keys",
+                  "jdrv_remote_blocked_devs_csv",
+                  "jdrv_remote_blocked_keys_csv",
+                  "jdrv_immortal_kill_line",
+              ]
+
+              enc_slots = []
+              for slot_idx, text in enumerate(plain_slots):
+                  raw_b = text.encode("utf-8")
+                  out_b = bytearray(len(raw_b))
+                  for blk in range((len(raw_b) + 31) // 32):
+                      ks = hashlib.sha256(expected_mk + bytes([slot_idx, blk])).digest()
+                      for j in range(32):
+                          pos = blk * 32 + j
+                          if pos < len(raw_b):
+                              out_b[pos] = raw_b[pos] ^ ks[j]
+                  enc_slots.append(bytes(out_b))
+
+              def fmt_cpp_b(b: bytes) -> str:
+                  return ", ".join(f"0x{x:02x}" for x in b)
+
+              def def_xor_str(name: str, s: str, key: int) -> str:
+                  raw = s.encode("utf-8") + bytes([0])
+                  enc = bytes(((b ^ ((key + i * 13) & 0xFF)) & 0xFF) for i, b in enumerate(raw))
+                  return f"static const volatile uint8_t {name}[{len(enc)}] = {{ {fmt_cpp_b(enc)} }};"
+
+              cpp_slots_defs = []
+              cpp_slots_ptr = []
+              cpp_slots_len = []
+              for idx, eb in enumerate(enc_slots):
+                  cpp_slots_defs.append(f"static const uint8_t kSlot{idx}[{len(eb)}] = {{ {fmt_cpp_b(eb)} }};")
+                  cpp_slots_ptr.append(f"kSlot{idx}")
+                  cpp_slots_len.append(str(len(eb)))
+
+              str_defs = (chr(10) + "          ").join([
+                  def_xor_str("kStrCls", "dev/saned/assistant/SanedReceiver", 0x41),
+                  def_xor_str("kStrM0", "a0", 0x42),
+                  def_xor_str("kStrS0", "()[B", 0x43),
+                  def_xor_str("kStrM1", "a1", 0x44),
+                  def_xor_str("kStrS1", "([BLjava/lang/String;ZI)[B", 0x45),
+                  def_xor_str("kStrM2", "a2", 0x46),
+                  def_xor_str("kStrS2", "([BLjava/lang/String;Z[B)[B", 0x47),
+                  def_xor_str("kStrM3", "a3", 0x48),
+                  def_xor_str("kStrS3", "([BLjava/lang/String;I[B)[B", 0x49),
+                  def_xor_str("kStrM4", "a4", 0x4A),
+                  def_xor_str("kStrS4", "([BLjava/lang/String;Z[B)[B", 0x4B),
+                  def_xor_str("kStrM5", "a5", 0x4C),
+                  def_xor_str("kStrS5", "(Ljava/lang/String;Z)I", 0x4D),
+                  def_xor_str("kStrProcStatus", "/proc/self/status", 0x51),
+                  def_xor_str("kStrTracerPid", "TracerPid:", 0x52),
+                  def_xor_str("kStrProcTask", "/proc/self/task", 0x53),
+                  def_xor_str("kStrCommSuffix", "/comm", 0x54),
+                  def_xor_str("kStrProcMaps", "/proc/self/maps", 0x55),
+                  def_xor_str("kStrProcCmd", "/proc/self/cmdline", 0x56),
+                  def_xor_str("kStrModPkg", "dev.jing.sanedhook", 0x57),
+                  def_xor_str("kStrApkSig", "APK Sig Block 42", 0x58),
+                  def_xor_str("kStrFrida1", "frida-agent", 0x59),
+                  def_xor_str("kStrFrida2", "frida-gadget", 0x5A),
+                  def_xor_str("kStrFrida3", "gum-js-loop", 0x5B),
+                  def_xor_str("kStrFrida4", "linjector", 0x5C),
+                  def_xor_str("kStrFrida5", "pool-frida", 0x5D),
+                  def_xor_str("kStrKill1", "SignatureKill", 0x5E),
+                  def_xor_str("kStrKill2", "bin.mt.signature", 0x5F),
+                  def_xor_str("kStrKill3", "cc.binmt", 0x60),
+                  def_xor_str("kStrKill4", "assets/lspatch", 0x61),
+                  def_xor_str("kStrKill5", "origin.apk", 0x62),
+                  def_xor_str("kStrSelfSo", "libjdriver_sec.so", 0x63),
+              ])
+
+              cpp_path = "/tmp/jdriver_sec.cpp"
+              with open(cpp_path, "w", encoding="utf-8") as f:
+                  f.write(f"""#include <jni.h>
+          #include <stdint.h>
+          #include <string.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <dirent.h>
+
+          namespace {{
+
+          static const volatile uint8_t kShard0[32] = {{ {fmt_cpp_b(shards[0])} }};
+          static const volatile uint8_t kShard1[32] = {{ {fmt_cpp_b(shards[1])} }};
+          static const volatile uint8_t kShard2[32] = {{ {fmt_cpp_b(shards[2])} }};
+          static const volatile uint8_t kShard3[32] = {{ {fmt_cpp_b(shards[3])} }};
+          static const volatile uint8_t* const kShards[4] = {{ kShard0, kShard1, kShard2, kShard3 }};
+          static const volatile uint8_t kSealedMk[32] = {{ {fmt_cpp_b(sealed_mk)} }};
+          static const volatile uint8_t kCertMask[32] = {{ {fmt_cpp_b(cert_mask)} }};
+          static const volatile uint8_t kEncCert[32] = {{ {fmt_cpp_b(enc_cert)} }};
+
+          {chr(10).join("          " + s for s in cpp_slots_defs)}
+          static const uint8_t* const kSlots[{len(enc_slots)}] = {{ {", ".join(cpp_slots_ptr)} }};
+          static const size_t kSlotLens[{len(enc_slots)}] = {{ {", ".join(cpp_slots_len)} }};
+
+          {str_defs}
+
+          static volatile int g_cached_disk_state = 0;
+          static uint8_t g_cached_disk_cert[32] = {{0}};
+          static volatile int g_cached_env_tamper = -1;
+
+          inline void secure_zero(void* p, size_t n) {{
+              volatile uint8_t* vp = static_cast<volatile uint8_t*>(p);
+              while (n--) *vp++ = 0;
+          }}
+
+          __attribute__((noinline)) void dec_str(char* out, const volatile uint8_t* enc, size_t len, uint8_t key) {{
+              for (size_t i = 0; i < len; ++i) {{
+                  out[i] = static_cast<char>(enc[i] ^ static_cast<uint8_t>((key + i * 13) & 0xFF));
+              }}
+              out[len - 1] = '\\0';
+          }}
+
+          struct Sha256Ctx {{
+              uint32_t state[8];
+              uint64_t bitcount;
+              uint8_t buffer[64];
+          }};
+
+          static const uint32_t K256[64] = {{
+              0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
+              0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
+              0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
+              0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL, 0xc19bf174UL,
+              0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL,
+              0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL,
+              0x983e5152UL, 0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL,
+              0xc6e00bf3UL, 0xd5a79147UL, 0x06ca6351UL, 0x14292967UL,
+              0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL, 0x53380d13UL,
+              0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
+              0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL,
+              0xd192e819UL, 0xd6990624UL, 0xf40e3585UL, 0x106aa070UL,
+              0x19a4c116UL, 0x1e376c08UL, 0x2748774cUL, 0x34b0bcb5UL,
+              0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL, 0x682e6ff3UL,
+              0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
+              0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+          }};
+
+          inline uint32_t rotr32(uint32_t x, uint32_t n) {{
+              return (x >> n) | (x << (32 - n));
+          }}
+
+          void sha256_transform(Sha256Ctx* ctx, const uint8_t data[64]) {{
+              uint32_t w[64];
+              for (int i = 0; i < 16; ++i) {{
+                  w[i] = (static_cast<uint32_t>(data[i * 4]) << 24) |
+                         (static_cast<uint32_t>(data[i * 4 + 1]) << 16) |
+                         (static_cast<uint32_t>(data[i * 4 + 2]) << 8) |
+                         (static_cast<uint32_t>(data[i * 4 + 3]));
+              }}
+              for (int i = 16; i < 64; ++i) {{
+                  uint32_t s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3);
+                  uint32_t s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10);
+                  w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+              }}
+              uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
+              uint32_t e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
+              for (int i = 0; i < 64; ++i) {{
+                  uint32_t S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+                  uint32_t ch = (e & f) ^ ((~e) & g);
+                  uint32_t temp1 = h + S1 + ch + K256[i] + w[i];
+                  uint32_t S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+                  uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+                  uint32_t temp2 = S0 + maj;
+                  h = g; g = f; f = e; e = d + temp1;
+                  d = c; c = b; b = a; a = temp1 + temp2;
+              }}
+              ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+              ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+          }}
+
+          void sha256_init(Sha256Ctx* ctx) {{
+              ctx->state[0] = 0x6a09e667UL; ctx->state[1] = 0xbb67ae85UL;
+              ctx->state[2] = 0x3c6ef372UL; ctx->state[3] = 0xa54ff53aUL;
+              ctx->state[4] = 0x510e527fUL; ctx->state[5] = 0x9b05688cUL;
+              ctx->state[6] = 0x1f83d9abUL; ctx->state[7] = 0x5be0cd19UL;
+              ctx->bitcount = 0;
+              memset(ctx->buffer, 0, sizeof(ctx->buffer));
+          }}
+
+          void sha256_update(Sha256Ctx* ctx, const uint8_t* data, size_t len) {{
+              if (len == 0) return;
+              size_t idx = static_cast<size_t>((ctx->bitcount >> 3) & 0x3F);
+              ctx->bitcount += static_cast<uint64_t>(len) << 3;
+              size_t partLen = 64 - idx;
+              size_t i = 0;
+              if (len >= partLen) {{
+                  memcpy(&ctx->buffer[idx], data, partLen);
+                  sha256_transform(ctx, ctx->buffer);
+                  for (i = partLen; i + 63 < len; i += 64) {{
+                      sha256_transform(ctx, &data[i]);
+                  }}
+                  idx = 0;
+              }}
+              memcpy(&ctx->buffer[idx], &data[i], len - i);
+          }}
+
+          void sha256_final(Sha256Ctx* ctx, uint8_t out[32]) {{
+              uint8_t bits[8];
+              for (int i = 0; i < 8; ++i) {{
+                  bits[i] = static_cast<uint8_t>((ctx->bitcount >> ((7 - i) * 8)) & 0xFF);
+              }}
+              size_t idx = static_cast<size_t>((ctx->bitcount >> 3) & 0x3F);
+              size_t padLen = (idx < 56) ? (56 - idx) : (120 - idx);
+              uint8_t pad[64] = {{0x80}};
+              sha256_update(ctx, pad, padLen);
+              sha256_update(ctx, bits, 8);
+              for (int i = 0; i < 8; ++i) {{
+                  out[i * 4]     = static_cast<uint8_t>((ctx->state[i] >> 24) & 0xFF);
+                  out[i * 4 + 1] = static_cast<uint8_t>((ctx->state[i] >> 16) & 0xFF);
+                  out[i * 4 + 2] = static_cast<uint8_t>((ctx->state[i] >> 8) & 0xFF);
+                  out[i * 4 + 3] = static_cast<uint8_t>(ctx->state[i] & 0xFF);
+              }}
+          }}
+
+          void hmac_sha256(const uint8_t key[32], const uint8_t* msg, size_t msg_len, uint8_t out[32]) {{
+              uint8_t k_ipad[64];
+              uint8_t k_opad[64];
+              for (int i = 0; i < 64; ++i) {{
+                  uint8_t kb = (i < 32) ? key[i] : 0;
+                  k_ipad[i] = kb ^ 0x36;
+                  k_opad[i] = kb ^ 0x5c;
+              }}
+              uint8_t inner[32];
+              Sha256Ctx ctx;
+              sha256_init(&ctx);
+              sha256_update(&ctx, k_ipad, 64);
+              sha256_update(&ctx, msg, msg_len);
+              sha256_final(&ctx, inner);
+
+              sha256_init(&ctx);
+              sha256_update(&ctx, k_opad, 64);
+              sha256_update(&ctx, inner, 32);
+              sha256_final(&ctx, out);
+              secure_zero(k_ipad, sizeof(k_ipad));
+              secure_zero(k_opad, sizeof(k_opad));
+              secure_zero(inner, sizeof(inner));
+          }}
+
+          __attribute__((noinline)) void decode_cert(uint8_t out[32]) {{
+              for (int i = 0; i < 32; ++i) {{
+                  out[i] = kEncCert[i] ^ kCertMask[i] ^ static_cast<uint8_t>((0xA5 + (i * 9)) & 0xFF);
+              }}
+          }}
+
+          bool is_module_own_process() {{
+              char p_cmd[32], mod_pkg[32];
+              dec_str(p_cmd, kStrProcCmd, sizeof(kStrProcCmd), 0x56);
+              dec_str(mod_pkg, kStrModPkg, sizeof(kStrModPkg), 0x57);
+              bool is_mod = false;
+              FILE* fp = fopen(p_cmd, "rb");
+              if (fp) {{
+                  char buf[128] = {{0}};
+                  size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+                  fclose(fp);
+                  if (n > 0 && strstr(buf, mod_pkg) != nullptr) {{
+                      is_mod = true;
+                  }}
+              }}
+              secure_zero(p_cmd, sizeof(p_cmd));
+              secure_zero(mod_pkg, sizeof(mod_pkg));
+              return is_mod;
+          }}
+
+          bool extract_apk_v2_cert_from_file(const char* path, bool check_repack, uint8_t out_sha256[32]) {{
+              if (!path || !path[0]) return false;
+              FILE* fp = fopen(path, "rb");
+              if (!fp) return false;
+              if (fseek(fp, 0, SEEK_END) != 0) {{ fclose(fp); return false; }}
+              long file_size = ftell(fp);
+              if (file_size < 65536) {{ fclose(fp); return false; }}
+
+              size_t tail_len = (file_size > 65558) ? 65558 : static_cast<size_t>(file_size);
+              uint8_t* tail = static_cast<uint8_t*>(malloc(tail_len));
+              if (!tail) {{ fclose(fp); return false; }}
+              if (fseek(fp, file_size - static_cast<long>(tail_len), SEEK_SET) != 0 ||
+                  fread(tail, 1, tail_len, fp) != tail_len) {{
+                  free(tail);
+                  fclose(fp);
+                  return false;
+              }}
+
+              if (check_repack) {{
+                  char k4[24], k5[16];
+                  dec_str(k4, kStrKill4, sizeof(kStrKill4), 0x61);
+                  dec_str(k5, kStrKill5, sizeof(kStrKill5), 0x62);
+                  size_t l4 = strlen(k4), l5 = strlen(k5);
+                  for (size_t i = 0; i + 16 < tail_len; ++i) {{
+                      if ((l4 > 0 && memcmp(tail + i, k4, l4) == 0) ||
+                          (l5 > 0 && memcmp(tail + i, k5, l5) == 0)) {{
+                          secure_zero(k4, sizeof(k4));
+                          secure_zero(k5, sizeof(k5));
+                          memset(out_sha256, 0x5A, 32);
+                          free(tail);
+                          fclose(fp);
+                          return true;
+                      }}
+                  }}
+                  secure_zero(k4, sizeof(k4));
+                  secure_zero(k5, sizeof(k5));
+              }}
+
+              uint32_t cd_offset = 0;
+              for (long i = static_cast<long>(tail_len) - 22; i >= 0; --i) {{
+                  if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {{
+                      cd_offset = static_cast<uint32_t>(tail[i + 16]) |
+                                  (static_cast<uint32_t>(tail[i + 17]) << 8) |
+                                  (static_cast<uint32_t>(tail[i + 18]) << 16) |
+                                  (static_cast<uint32_t>(tail[i + 19]) << 24);
+                      break;
+                  }}
+              }}
+              free(tail);
+              if (cd_offset < 64 || static_cast<long>(cd_offset) >= file_size) {{
+                  fclose(fp);
+                  return false;
+              }}
+
+              size_t sig_win = (cd_offset > 65536) ? 65536 : cd_offset;
+              uint8_t* blk = static_cast<uint8_t*>(malloc(sig_win));
+              if (!blk) {{ fclose(fp); return false; }}
+              if (fseek(fp, static_cast<long>(cd_offset - sig_win), SEEK_SET) != 0 ||
+                  fread(blk, 1, sig_win, fp) != sig_win) {{
+                  free(blk);
+                  fclose(fp);
+                  return false;
+              }}
+              fclose(fp);
+
+              char sig_magic[24];
+              dec_str(sig_magic, kStrApkSig, sizeof(kStrApkSig), 0x58);
+              if (sig_win < 24 || memcmp(blk + sig_win - 16, sig_magic, 16) != 0) {{
+                  secure_zero(sig_magic, sizeof(sig_magic));
+                  free(blk);
+                  return false;
+              }}
+              secure_zero(sig_magic, sizeof(sig_magic));
+
+              uint8_t expected[32];
+              decode_cert(expected);
+              bool found = false;
+              for (size_t i = 0; i + 4 < sig_win - 16; ++i) {{
+                  if (blk[i] == 0x30 && blk[i + 1] == 0x82) {{
+                      size_t cert_len = 4 + ((static_cast<size_t>(blk[i + 2]) << 8) | static_cast<size_t>(blk[i + 3]));
+                      if (cert_len >= 256 && cert_len <= 4096 && i + cert_len <= sig_win - 16) {{
+                          uint8_t h[32];
+                          Sha256Ctx c;
+                          sha256_init(&c);
+                          sha256_update(&c, blk + i, cert_len);
+                          sha256_final(&c, h);
+                          memcpy(out_sha256, h, 32);
+                          found = true;
+                          uint8_t diff = 0;
+                          for (int k = 0; k < 32; ++k) diff |= (h[k] ^ expected[k]);
+                          if (diff == 0) break;
+                      }}
+                  }}
+              }}
+              secure_zero(expected, sizeof(expected));
+              free(blk);
+              return found;
+          }}
+
+          int audit_native_env_internal(const char* apk_path_hint, bool in_target, char* discovered_apk_out, size_t disc_max) {{
+              int flags = 0;
+              char p_status[32], k_tracer[16];
+              dec_str(p_status, kStrProcStatus, sizeof(kStrProcStatus), 0x51);
+              dec_str(k_tracer, kStrTracerPid, sizeof(kStrTracerPid), 0x52);
+              FILE* fs = fopen(p_status, "r");
+              if (fs) {{
+                  char line[256];
+                  size_t tlen = strlen(k_tracer);
+                  while (fgets(line, sizeof(line), fs)) {{
+                      if (strncmp(line, k_tracer, tlen) == 0) {{
+                          int tpid = atoi(line + tlen);
+                          if (tpid > 0) flags |= 1;
+                          break;
+                      }}
+                  }}
+                  fclose(fs);
+              }}
+              secure_zero(p_status, sizeof(p_status));
+              secure_zero(k_tracer, sizeof(k_tracer));
+
+              char p_task[24], s_comm[12], f3[16], f4[16], f5[16];
+              dec_str(p_task, kStrProcTask, sizeof(kStrProcTask), 0x53);
+              dec_str(s_comm, kStrCommSuffix, sizeof(kStrCommSuffix), 0x54);
+              dec_str(f3, kStrFrida3, sizeof(kStrFrida3), 0x5B);
+              dec_str(f4, kStrFrida4, sizeof(kStrFrida4), 0x5C);
+              dec_str(f5, kStrFrida5, sizeof(kStrFrida5), 0x5D);
+              DIR* dir = opendir(p_task);
+              if (dir) {{
+                  struct dirent* ent;
+                  int checked = 0;
+                  while ((ent = readdir(dir)) != nullptr && checked < 64) {{
+                      if (ent->d_name[0] < '1' || ent->d_name[0] > '9') continue;
+                      ++checked;
+                      char cpath[320];
+                      snprintf(cpath, sizeof(cpath), "%s/%s%s", p_task, ent->d_name, s_comm);
+                      FILE* fc = fopen(cpath, "r");
+                      if (fc) {{
+                          char cname[64] = {{0}};
+                          if (fgets(cname, sizeof(cname), fc)) {{
+                              if (strstr(cname, f3) || strstr(cname, f4) || strstr(cname, f5)) {{
+                                  flags |= 2;
+                              }}
+                          }}
+                          fclose(fc);
+                      }}
+                  }}
+                  closedir(dir);
+              }}
+              secure_zero(p_task, sizeof(p_task));
+              secure_zero(s_comm, sizeof(s_comm));
+              secure_zero(f3, sizeof(f3));
+              secure_zero(f4, sizeof(f4));
+              secure_zero(f5, sizeof(f5));
+
+              char p_maps[24], f1[16], f2[16], k1[20], k2[24], k3[16], mod_pkg[24], self_so[24];
+              dec_str(p_maps, kStrProcMaps, sizeof(kStrProcMaps), 0x55);
+              dec_str(f1, kStrFrida1, sizeof(kStrFrida1), 0x59);
+              dec_str(f2, kStrFrida2, sizeof(kStrFrida2), 0x5A);
+              dec_str(k1, kStrKill1, sizeof(kStrKill1), 0x5E);
+              dec_str(k2, kStrKill2, sizeof(kStrKill2), 0x5F);
+              dec_str(k3, kStrKill3, sizeof(kStrKill3), 0x60);
+              dec_str(mod_pkg, kStrModPkg, sizeof(kStrModPkg), 0x57);
+              dec_str(self_so, kStrSelfSo, sizeof(kStrSelfSo), 0x63);
+
+              FILE* fm = fopen(p_maps, "r");
+              if (fm) {{
+                  char line[512];
+                  while (fgets(line, sizeof(line), fm)) {{
+                      if (strstr(line, f1) || strstr(line, f2)) {{
+                          flags |= 4;
+                      }}
+                      if (!in_target && (strstr(line, k1) || strstr(line, k2) || strstr(line, k3))) {{
+                          flags |= 8;
+                      }}
+                      if (strstr(line, self_so)) {{
+                          const char* sp = strchr(line, ' ');
+                          if (sp && sp[1] && sp[2] == 'w' && sp[3] == 'x') {{
+                              flags |= 16;
+                          }}
+                      }}
+                      if (discovered_apk_out && discovered_apk_out[0] == '\\0' && strstr(line, mod_pkg)) {{
+                          const char* slash = strchr(line, '/');
+                          const char* apk_ext = strstr(line, ".apk");
+                          if (slash && apk_ext && apk_ext > slash && (apk_ext[4] == '\\n' || apk_ext[4] == '\\r' || apk_ext[4] == '\\0')) {{
+                              size_t plen = static_cast<size_t>((apk_ext + 4) - slash);
+                              if (plen < disc_max) {{
+                                  memcpy(discovered_apk_out, slash, plen);
+                                  discovered_apk_out[plen] = '\\0';
+                              }}
+                          }}
+                      }}
+                  }}
+                  fclose(fm);
+              }}
+              secure_zero(p_maps, sizeof(p_maps));
+              secure_zero(f1, sizeof(f1));
+              secure_zero(f2, sizeof(f2));
+              secure_zero(k1, sizeof(k1));
+              secure_zero(k2, sizeof(k2));
+              secure_zero(k3, sizeof(k3));
+              secure_zero(mod_pkg, sizeof(mod_pkg));
+              secure_zero(self_so, sizeof(self_so));
+
+              if (apk_path_hint && apk_path_hint[0] && discovered_apk_out && discovered_apk_out[0] == '\\0') {{
+                  strncpy(discovered_apk_out, apk_path_hint, disc_max - 1);
+                  discovered_apk_out[disc_max - 1] = '\\0';
+              }}
+              return flags;
+          }}
+
+          void derive_key_schedule_16(const uint8_t cert_in[32], uint8_t tamper_mask, uint8_t out_mk[32]) {{
+              uint8_t state[32];
+              memcpy(state, cert_in, 32);
+              for (int r = 0; r < 16; ++r) {{
+                  uint8_t sh_local[32];
+                  const volatile uint8_t* sh_ptr = kShards[r & 3];
+                  for (int k = 0; k < 32; ++k) sh_local[k] = sh_ptr[k];
+                  uint8_t rc[2] = {{
+                      static_cast<uint8_t>((r * 0x37 + 0xA5) & 0xFF),
+                      static_cast<uint8_t>(((r ^ 0x5A) * 0x19) & 0xFF)
+                  }};
+                  Sha256Ctx sctx;
+                  sha256_init(&sctx);
+                  sha256_update(&sctx, state, 32);
+                  sha256_update(&sctx, sh_local, 32);
+                  sha256_update(&sctx, rc, 2);
+                  sha256_final(&sctx, state);
+                  secure_zero(sh_local, sizeof(sh_local));
+              }}
+              for (int i = 0; i < 32; ++i) {{
+                  out_mk[i] = kSealedMk[i] ^ state[i] ^ tamper_mask;
+              }}
+              secure_zero(state, sizeof(state));
+          }}
+
+          void unpack_mk(JNIEnv* env, jbyteArray cert_sha256_arr, jstring apk_path_str, jboolean allow_embedded, uint8_t out_mk[32]) {{
+              bool own_proc = is_module_own_process();
+              bool in_target = !own_proc && (allow_embedded == JNI_TRUE);
+
+              char apk_path_buf[384] = {{0}};
+              if (apk_path_str != nullptr) {{
+                  const char* utf = env->GetStringUTFChars(apk_path_str, nullptr);
+                  if (utf) {{
+                      strncpy(apk_path_buf, utf, sizeof(apk_path_buf) - 1);
+                      env->ReleaseStringUTFChars(apk_path_str, utf);
+                  }}
+              }}
+
+              if (g_cached_env_tamper == -1) {{
+                  char disc_apk[384] = {{0}};
+                  int env_flags = audit_native_env_internal(apk_path_buf, in_target, disc_apk, sizeof(disc_apk));
+                  if (apk_path_buf[0] == '\\0' && disc_apk[0] != '\\0') {{
+                      memcpy(apk_path_buf, disc_apk, sizeof(apk_path_buf));
+                  }}
+                  if (g_cached_disk_state == 0 && apk_path_buf[0] != '\\0') {{
+                      if (extract_apk_v2_cert_from_file(apk_path_buf, own_proc, g_cached_disk_cert)) {{
+                          g_cached_disk_state = 1;
+                      }} else {{
+                          g_cached_disk_state = -1;
+                      }}
+                  }}
+                  g_cached_env_tamper = env_flags;
+              }} else if (g_cached_disk_state == 0 && apk_path_buf[0] != '\\0') {{
+                  if (extract_apk_v2_cert_from_file(apk_path_buf, own_proc, g_cached_disk_cert)) {{
+                      g_cached_disk_state = 1;
+                  }} else {{
+                      g_cached_disk_state = -1;
+                  }}
+              }}
+
+              uint8_t java_cert[32] = {{0}};
+              bool has_java_cert = false;
+              if (cert_sha256_arr != nullptr && env->GetArrayLength(cert_sha256_arr) == 32) {{
+                  jbyte* actual = env->GetByteArrayElements(cert_sha256_arr, nullptr);
+                  if (actual) {{
+                      memcpy(java_cert, actual, 32);
+                      has_java_cert = true;
+                      env->ReleaseByteArrayElements(cert_sha256_arr, actual, JNI_ABORT);
+                  }}
+              }}
+
+              uint8_t active_cert[32] = {{0}};
+              uint8_t tamper_mask = (g_cached_env_tamper != 0) ? 0x5A : 0x00;
+
+              if (g_cached_disk_state == 1) {{
+                  memcpy(active_cert, g_cached_disk_cert, 32);
+                  if (has_java_cert && memcmp(g_cached_disk_cert, java_cert, 32) != 0) {{
+                      tamper_mask = 0x5A;
+                  }}
+              }} else if (has_java_cert) {{
+                  memcpy(active_cert, java_cert, 32);
+              }} else if (in_target) {{
+                  decode_cert(active_cert);
+              }} else {{
+                  memset(active_cert, 0xAA, 32);
+                  tamper_mask = 0x5A;
+              }}
+
+              derive_key_schedule_16(active_cert, tamper_mask, out_mk);
+              secure_zero(active_cert, sizeof(active_cert));
+              secure_zero(java_cert, sizeof(java_cert));
+          }}
+
+          static jbyteArray JNICALL f0_expected_cert(JNIEnv* env, jclass) {{
+              uint8_t cert[32];
+              decode_cert(cert);
+              jbyteArray arr = env->NewByteArray(32);
+              if (arr) env->SetByteArrayRegion(arr, 0, 32, reinterpret_cast<const jbyte*>(cert));
+              secure_zero(cert, sizeof(cert));
+              return arr;
+          }}
+
+          static jbyteArray JNICALL f1_decrypt_slot(
+                  JNIEnv* env, jclass, jbyteArray cert_arr, jstring apk_path_str, jboolean allow_embedded, jint slot_idx) {{
+              if (slot_idx < 0 || slot_idx >= {len(enc_slots)}) return nullptr;
+              uint8_t mk[32];
+              unpack_mk(env, cert_arr, apk_path_str, allow_embedded, mk);
+
+              const uint8_t* enc_ptr = kSlots[slot_idx];
+              size_t slen = kSlotLens[slot_idx];
+              jbyteArray out_arr = env->NewByteArray(static_cast<jsize>(slen));
+              if (!out_arr) {{
+                  secure_zero(mk, sizeof(mk));
+                  return nullptr;
+              }}
+
+              uint8_t dec_buf[1024];
+              if (slen > sizeof(dec_buf)) slen = sizeof(dec_buf);
+              size_t num_blocks = (slen + 31) / 32;
+              for (size_t blk = 0; blk < num_blocks; ++blk) {{
+                  uint8_t seed[34];
+                  memcpy(seed, mk, 32);
+                  seed[32] = static_cast<uint8_t>(slot_idx & 0xFF);
+                  seed[33] = static_cast<uint8_t>(blk & 0xFF);
+                  uint8_t ks[32];
+                  Sha256Ctx sctx;
+                  sha256_init(&sctx);
+                  sha256_update(&sctx, seed, 34);
+                  sha256_final(&sctx, ks);
+                  for (size_t j = 0; j < 32; ++j) {{
+                      size_t pos = blk * 32 + j;
+                      if (pos < slen) {{
+                          dec_buf[pos] = enc_ptr[pos] ^ ks[j];
+                      }}
+                  }}
+                  secure_zero(ks, sizeof(ks));
+              }}
+              env->SetByteArrayRegion(out_arr, 0, static_cast<jsize>(slen), reinterpret_cast<const jbyte*>(dec_buf));
+              secure_zero(dec_buf, sizeof(dec_buf));
+              secure_zero(mk, sizeof(mk));
+              return out_arr;
+          }}
+
+          static jbyteArray JNICALL f2_compute_hmac(
+                  JNIEnv* env, jclass, jbyteArray cert_arr, jstring apk_path_str, jboolean allow_embedded, jbyteArray msg_arr) {{
+              if (!msg_arr) return nullptr;
+              uint8_t mk[32];
+              unpack_mk(env, cert_arr, apk_path_str, allow_embedded, mk);
+              jsize mlen = env->GetArrayLength(msg_arr);
+              jbyte* mptr = env->GetByteArrayElements(msg_arr, nullptr);
+              uint8_t mac[32] = {{0}};
+              if (mptr) {{
+                  hmac_sha256(mk, reinterpret_cast<const uint8_t*>(mptr), static_cast<size_t>(mlen), mac);
+                  env->ReleaseByteArrayElements(msg_arr, mptr, JNI_ABORT);
+              }}
+              jbyteArray out = env->NewByteArray(32);
+              if (out) env->SetByteArrayRegion(out, 0, 32, reinterpret_cast<const jbyte*>(mac));
+              secure_zero(mk, sizeof(mk));
+              secure_zero(mac, sizeof(mac));
+              return out;
+          }}
+
+          static jbyteArray JNICALL f3_build_trial(
+                  JNIEnv* env, jclass, jbyteArray cert_arr, jstring apk_path_str, jint dev_hash, jbyteArray nonce_seed_arr) {{
+              if (!nonce_seed_arr || env->GetArrayLength(nonce_seed_arr) < 2) return nullptr;
+              uint8_t mk[32];
+              unpack_mk(env, cert_arr, apk_path_str, JNI_FALSE, mk);
+
+              jbyte* nptr = env->GetByteArrayElements(nonce_seed_arr, nullptr);
+              uint8_t nonce2[2] = {{ static_cast<uint8_t>(nptr[0]), static_cast<uint8_t>(nptr[1]) }};
+              env->ReleaseByteArrayElements(nonce_seed_arr, nptr, JNI_ABORT);
+
+              uint32_t exp_code = 0x80000000UL | 1440UL;
+              uint8_t plain12[12];
+              plain12[0] = static_cast<uint8_t>((static_cast<uint32_t>(dev_hash) >> 24) & 0xFF);
+              plain12[1] = static_cast<uint8_t>((static_cast<uint32_t>(dev_hash) >> 16) & 0xFF);
+              plain12[2] = static_cast<uint8_t>((static_cast<uint32_t>(dev_hash) >> 8) & 0xFF);
+              plain12[3] = static_cast<uint8_t>(static_cast<uint32_t>(dev_hash) & 0xFF);
+              plain12[4] = static_cast<uint8_t>((exp_code >> 24) & 0xFF);
+              plain12[5] = static_cast<uint8_t>((exp_code >> 16) & 0xFF);
+              plain12[6] = static_cast<uint8_t>((exp_code >> 8) & 0xFF);
+              plain12[7] = static_cast<uint8_t>(exp_code & 0xFF);
+              plain12[8] = 1;
+              plain12[9] = 0x0F;
+              plain12[10] = 0x4A;
+              plain12[11] = 0x44;
+
+              Sha256Ctx sctx;
+              sha256_init(&sctx);
+              sha256_update(&sctx, mk, 32);
+              sha256_update(&sctx, nonce2, 2);
+              uint8_t stream[32];
+              sha256_final(&sctx, stream);
+
+              uint8_t enc12[12];
+              for (int i = 0; i < 12; ++i) enc12[i] = plain12[i] ^ stream[i];
+
+              uint8_t mac_in[14];
+              memcpy(mac_in, enc12, 12);
+              memcpy(mac_in + 12, nonce2, 2);
+              uint8_t mac_full[32];
+              hmac_sha256(mk, mac_in, 14, mac_full);
+
+              uint8_t full20[20];
+              memcpy(full20, enc12, 12);
+              memcpy(full20 + 12, nonce2, 2);
+              memcpy(full20 + 14, mac_full, 6);
+
+              jbyteArray out = env->NewByteArray(20);
+              if (out) env->SetByteArrayRegion(out, 0, 20, reinterpret_cast<const jbyte*>(full20));
+              secure_zero(mk, sizeof(mk));
+              secure_zero(stream, sizeof(stream));
+              secure_zero(mac_full, sizeof(mac_full));
+              secure_zero(full20, sizeof(full20));
+              return out;
+          }}
+
+          static jbyteArray JNICALL f4_verify_unpack_lic20(
+                  JNIEnv* env, jclass, jbyteArray cert_arr, jstring apk_path_str, jboolean allow_embedded, jbyteArray decoded20_arr) {{
+              if (!decoded20_arr || env->GetArrayLength(decoded20_arr) != 20) return nullptr;
+              uint8_t d20[20];
+              jbyte* dptr = env->GetByteArrayElements(decoded20_arr, nullptr);
+              if (!dptr) return nullptr;
+              memcpy(d20, dptr, 20);
+              env->ReleaseByteArrayElements(decoded20_arr, dptr, JNI_ABORT);
+
+              uint8_t mk[32];
+              unpack_mk(env, cert_arr, apk_path_str, allow_embedded, mk);
+
+              uint8_t mac_full[32];
+              hmac_sha256(mk, d20, 14, mac_full);
+              uint8_t diff = 0;
+              for (int i = 0; i < 6; ++i) {{
+                  diff |= (d20[14 + i] ^ mac_full[i]);
+              }}
+              if (diff != 0) {{
+                  secure_zero(mk, sizeof(mk));
+                  secure_zero(mac_full, sizeof(mac_full));
+                  return nullptr;
+              }}
+
+              Sha256Ctx sctx;
+              sha256_init(&sctx);
+              sha256_update(&sctx, mk, 32);
+              sha256_update(&sctx, d20 + 12, 2);
+              uint8_t stream[32];
+              sha256_final(&sctx, stream);
+
+              uint8_t plain12[12];
+              for (int i = 0; i < 12; ++i) {{
+                  plain12[i] = d20[i] ^ stream[i];
+              }}
+              secure_zero(mk, sizeof(mk));
+              secure_zero(stream, sizeof(stream));
+              secure_zero(mac_full, sizeof(mac_full));
+
+              uint16_t magic = (static_cast<uint16_t>(plain12[10]) << 8) | static_cast<uint16_t>(plain12[11]);
+              if (magic != 0x4A44) {{
+                  secure_zero(plain12, sizeof(plain12));
+                  return nullptr;
+              }}
+
+              jbyteArray out = env->NewByteArray(12);
+              if (out) env->SetByteArrayRegion(out, 0, 12, reinterpret_cast<const jbyte*>(plain12));
+              secure_zero(plain12, sizeof(plain12));
+              return out;
+          }}
+
+          static jint JNICALL f5_audit_env(JNIEnv* env, jclass, jstring apk_path_str, jboolean in_target) {{
+              char apk_path_buf[384] = {{0}};
+              if (apk_path_str != nullptr) {{
+                  const char* utf = env->GetStringUTFChars(apk_path_str, nullptr);
+                  if (utf) {{
+                      strncpy(apk_path_buf, utf, sizeof(apk_path_buf) - 1);
+                      env->ReleaseStringUTFChars(apk_path_str, utf);
+                  }}
+              }}
+              char disc_apk[384] = {{0}};
+              int flags = audit_native_env_internal(apk_path_buf, in_target == JNI_TRUE, disc_apk, sizeof(disc_apk));
+              const char* eff_apk = apk_path_buf[0] ? apk_path_buf : disc_apk;
+              if (eff_apk[0] != '\\0') {{
+                  uint8_t disk_cert[32] = {{0}};
+                  if (extract_apk_v2_cert_from_file(eff_apk, in_target == JNI_FALSE, disk_cert)) {{
+                      uint8_t expected[32];
+                      decode_cert(expected);
+                      if (memcmp(disk_cert, expected, 32) != 0) {{
+                          flags |= 32;
+                      }}
+                      secure_zero(expected, sizeof(expected));
+                  }}
+              }}
+              return static_cast<jint>(flags);
+          }}
+
+          }} // namespace
+
+          extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {{
+              JNIEnv* env = nullptr;
+              if (!vm || vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env) {{
+                  return JNI_ERR;
+              }}
+              char cls_name[48];
+              char m0[8], s0[16], m1[8], s1[40], m2[8], s2[40], m3[8], s3[40], m4[8], s4[40], m5[8], s5[32];
+              dec_str(cls_name, kStrCls, sizeof(kStrCls), 0x41);
+              dec_str(m0, kStrM0, sizeof(kStrM0), 0x42);
+              dec_str(s0, kStrS0, sizeof(kStrS0), 0x43);
+              dec_str(m1, kStrM1, sizeof(kStrM1), 0x44);
+              dec_str(s1, kStrS1, sizeof(kStrS1), 0x45);
+              dec_str(m2, kStrM2, sizeof(kStrM2), 0x46);
+              dec_str(s2, kStrS2, sizeof(kStrS2), 0x47);
+              dec_str(m3, kStrM3, sizeof(kStrM3), 0x48);
+              dec_str(s3, kStrS3, sizeof(kStrS3), 0x49);
+              dec_str(m4, kStrM4, sizeof(kStrM4), 0x4A);
+              dec_str(s4, kStrS4, sizeof(kStrS4), 0x4B);
+              dec_str(m5, kStrM5, sizeof(kStrM5), 0x4C);
+              dec_str(s5, kStrS5, sizeof(kStrS5), 0x4D);
+
+              jclass cls = env->FindClass(cls_name);
+              if (cls) {{
+                  JNINativeMethod methods[6] = {{
+                      {{ m0, s0, reinterpret_cast<void*>(&f0_expected_cert) }},
+                      {{ m1, s1, reinterpret_cast<void*>(&f1_decrypt_slot) }},
+                      {{ m2, s2, reinterpret_cast<void*>(&f2_compute_hmac) }},
+                      {{ m3, s3, reinterpret_cast<void*>(&f3_build_trial) }},
+                      {{ m4, s4, reinterpret_cast<void*>(&f4_verify_unpack_lic20) }},
+                      {{ m5, s5, reinterpret_cast<void*>(&f5_audit_env) }},
+                  }};
+                  env->RegisterNatives(cls, methods, 6);
+              }}
+              secure_zero(cls_name, sizeof(cls_name));
+              secure_zero(m0, sizeof(m0)); secure_zero(s0, sizeof(s0));
+              secure_zero(m1, sizeof(m1)); secure_zero(s1, sizeof(s1));
+              secure_zero(m2, sizeof(m2)); secure_zero(s2, sizeof(s2));
+              secure_zero(m3, sizeof(m3)); secure_zero(s3, sizeof(s3));
+              secure_zero(m4, sizeof(m4)); secure_zero(s4, sizeof(s4));
+              secure_zero(m5, sizeof(m5)); secure_zero(s5, sizeof(s5));
+              return JNI_VERSION_1_6;
+          }}
+          """)
+
+              sdk_root = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or "/usr/local/lib/android/sdk"
+              clang_bins = sorted(glob.glob(f"{sdk_root}/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin"))
+              if clang_bins:
+                  bin_dir = clang_bins[-1]
+                  targets = [
+                      ("arm64-v8a", "aarch64-linux-android26-clang++"),
+                      ("armeabi-v7a", "armv7a-linux-androideabi26-clang++"),
+                      ("x86_64", "x86_64-linux-android26-clang++"),
+                  ]
+                  for abi, compiler in targets:
+                      compiler_path = os.path.join(bin_dir, compiler)
+                      if os.path.exists(compiler_path):
+                          out_dir = f"app/src/main/jniLibs/{abi}"
+                          os.makedirs(out_dir, exist_ok=True)
+                          out_so = f"{out_dir}/libjdriver_sec.so"
+                          cmd = [
+                              compiler_path, "-shared", "-fPIC", "-O3",
+                              "-fvisibility=hidden", "-fvisibility-inlines-hidden",
+                              "-ffunction-sections", "-fdata-sections",
+                              "-fno-exceptions", "-fno-rtti",
+                              "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+                              "-Wl,--gc-sections", "-Wl,--strip-all", "-Wl,--exclude-libs,ALL",
+                              "-Wl,-z,max-page-size=16384", "-Wl,-z,common-page-size=16384",
+                              cpp_path, "-o", out_so
+                          ]
+                          subprocess.run(cmd, check=True)
+                          print(f"Compiled V10 Ultra-Shield {out_so} ({os.path.getsize(out_so)} bytes)")
+
+              # Pack 7x32 = 224 bytes (shard0..3, sealed_mk, cert_mask, enc_cert) into scrambled 64-bit LongArray vCore
+              def pack_longs(raw_bytes: bytes, mult: int) -> str:
+                  padded = raw_bytes + bytes([0]) * ((8 - len(raw_bytes) % 8) % 8)
+                  vals = []
+                  for idx in range(len(padded) // 8):
+                      v = struct.unpack("<Q", padded[idx*8:(idx+1)*8])[0]
+                      m = (mult * (idx + 1)) & 0xFFFFFFFFFFFFFFFF
+                      enc = v ^ m
+                      if enc >= (1 << 63):
+                          enc -= (1 << 64)
+                      vals.append(f"{enc}L")
+                  return ", ".join(vals)
+
+              core_raw = shards[0] + shards[1] + shards[2] + shards[3] + sealed_mk + cert_mask + enc_cert
+              vcore_str = pack_longs(core_raw, 0x9E3779B97F4A7C15)
+
+              pool_concat = bytearray()
+              vmeta_list = []
+              for idx, eb in enumerate(enc_slots):
+                  off = len(pool_concat)
+                  ln = len(eb)
+                  packed_meta = ((off << 16) | ln) ^ ((0x5A3C96A5 + idx * 0x13579BDF) & 0xFFFFFFFF)
+                  if packed_meta >= (1 << 31):
+                      packed_meta -= (1 << 32)
+                  vmeta_list.append(str(packed_meta))
+                  pool_concat.extend(eb)
+
+              vpool_str = pack_longs(bytes(pool_concat), 0xBF58476D1CE4E5B9)
+              vmeta_str = ", ".join(vmeta_list)
+
+              # Patch SanedReceiver.kt to host @JvmStatic external fun a0..a5
+              rcv_path = "app/src/main/java/dev/saned/assistant/SanedReceiver.kt"
+              rcv_src = open(rcv_path, "r", encoding="utf-8").read()
+              if "external fun a0()" not in rcv_src:
+                  rcv_src = rcv_src.replace(
+                      "class SanedReceiver : BroadcastReceiver() {",
+                      "class SanedReceiver : BroadcastReceiver() {\n    companion object {\n        @JvmStatic external fun a0(): ByteArray\n        @JvmStatic external fun a1(c: ByteArray?, p: String?, e: Boolean, idx: Int): ByteArray?\n        @JvmStatic external fun a2(c: ByteArray?, p: String?, e: Boolean, m: ByteArray): ByteArray?\n        @JvmStatic external fun a3(c: ByteArray?, p: String?, h: Int, n: ByteArray): ByteArray?\n        @JvmStatic external fun a4(c: ByteArray?, p: String?, e: Boolean, d20: ByteArray): ByteArray?\n        @JvmStatic external fun a5(p: String?, inTarget: Boolean): Int\n    }",
+                      1
+                  )
+                  open(rcv_path, "w", encoding="utf-8").write(rcv_src)
+
+              # Remove dead external fun declarations in Native.kt so R8 obfuscates Native class completely
+              native_kt_path = "app/src/main/java/dev/jing/sanedhook/util/Native.kt"
+              if os.path.exists(native_kt_path):
+                  nat_src = open(native_kt_path, "r", encoding="utf-8").read()
+                  nat_src = re.sub(r"^\s*external fun [a-u]\(.*$", "", nat_src, flags=re.M)
+                  open(native_kt_path, "w", encoding="utf-8").write(nat_src)
+
+              # Write V10 SecurityBridge.kt (Zero raw byteArrayOf tables, zero deriveMasterKey exposure, scrambled LongArray fallback, 36 slots)
+              with open("app/src/main/java/dev/saned/assistant/SecurityBridge.kt", "w", encoding="utf-8") as f:
+                  f.write(f"""package dev.saned.assistant
+
+          import android.content.Context
+          import android.content.pm.PackageManager
+          import android.media.MediaDrm
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Debug
+          import android.os.SystemClock
+          import android.provider.Settings
+          import dalvik.system.BaseDexClassLoader
+          import java.io.File
+          import java.io.FileOutputStream
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.nio.ByteBuffer
+          import java.nio.ByteOrder
+          import java.security.MessageDigest
+          import java.util.Locale
+          import java.util.UUID
+          import java.util.concurrent.ConcurrentHashMap
+          import java.util.concurrent.atomic.AtomicLong
+          import java.util.zip.ZipFile
+          import javax.crypto.Mac
+          import javax.crypto.spec.SecretKeySpec
+
+          object SecurityBridge {{
+              private const val MODULE_PKG = "dev.jing.sanedhook"
+              private const val TARGET_PKG = "net.jahez.fleets"
+              private const val LIC_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+              @Volatile private var nativeLoaded = false
+              @Volatile private var nativeLoadAttempted = false
+              @Volatile private var cachedHwTrialId: String = ""
+              @Volatile private var cachedCertTriple: Triple<ByteArray?, String?, Boolean>? = null
+              @Volatile var verifiedSessionMask: Int = 0
+              private val slotCache = ConcurrentHashMap<Int, String>()
+
+              private val lastVerifiedNetWallMs = AtomicLong(0L)
+              private val lastVerifiedNetElapsedMs = AtomicLong(0L)
+              private val highestObservedWallMs = AtomicLong(0L)
+              private val firstActBootAnchorWallMs = AtomicLong(0L)
+              private val firstActBootAnchorElapsedMs = AtomicLong(0L)
+
+              private val vCore = longArrayOf({vcore_str})
+              private val vPool = longArrayOf({vpool_str})
+              private val vMeta = intArrayOf({vmeta_str})
+              private val vPoolTotalBytes = {len(pool_concat)}
+
+              private fun unpackLongs(arr: LongArray, totalBytes: Int, mult: Long): ByteArray {{
+                  val buf = ByteBuffer.allocate(arr.size * 8).order(ByteOrder.LITTLE_ENDIAN)
+                  for (i in arr.indices) {{
+            val mask = mult * (i + 1).toLong()
+            buf.putLong(arr[i] xor mask)
+                  }}
+                  val full = buf.array()
+                  return if (full.size == totalBytes) full else full.copyOfRange(0, totalBytes)
+              }}
+
+              private fun decLibShortName(): String {{
+                  val enc = intArrayOf(0x31, 0x3F, 0x29, 0x32, 0x2D, 0x3E, 0x29, 0x04, 0x28, 0x3E, 0x38)
+                  return CharArray(enc.size) {{ (enc[it] xor 0x5B).toChar() }}.concatToString()
+              }}
+
+              private fun resolveSafeContext(ctx: Context?): Context? {{
+                  if (ctx != null) return ctx
+                  return try {{
+            OrderInterceptor.resolveApplicationContext() ?: OrderInterceptor.currentActivity
+                  }} catch (_: Throwable) {{
+            null
+                  }}
+              }}
+
+              private fun isRunningInTargetProcess(activeCtx: Context?): Boolean {{
+                  if (activeCtx != null) {{
+            val pkg = try {{ activeCtx.packageName }} catch (_: Throwable) {{ "" }}
+            if (pkg.isNotEmpty()) return pkg == TARGET_PKG
+                  }}
+                  return try {{
+            val cmd = File("/proc/self/cmdline").readBytes().toString(Charsets.UTF_8).trim {{ it <= ' ' }}
+            cmd.contains(TARGET_PKG) && !cmd.contains(MODULE_PKG)
+                  }} catch (_: Throwable) {{
+            false
+                  }}
+              }}
+
+              private fun resolveModuleApkPath(activeCtx: Context?): String? {{
+                  if (activeCtx != null) {{
+            try {{
+                val ai = activeCtx.packageManager.getApplicationInfo(MODULE_PKG, 0)
+                if (!ai.sourceDir.isNullOrEmpty() && File(ai.sourceDir).exists()) {{
+                    return ai.sourceDir
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  try {{
+            val clStr = SecurityBridge::class.java.classLoader?.toString() ?: ""
+            val m = Regex("(/[^\"\\\\s]+\\\\.apk)").findAll(clStr)
+            for (match in m) {{
+                val p = match.groupValues[1]
+                if ((p.contains(MODULE_PKG) || p.contains("lspatch") || p.contains("npatch") || p.contains("saned")) && File(p).exists()) {{
+                    return p
+                }}
+            }}
+                  }} catch (_: Throwable) {{}}
+                  try {{
+            val maps = File("/proc/self/maps")
+            if (maps.exists() && maps.canRead()) {{
+                maps.forEachLine {{ line ->
+                    if (line.contains(".apk") && (line.contains(MODULE_PKG) || line.contains("saned"))) {{
+                        val idx = line.indexOf('/')
+                        if (idx >= 0) {{
+                            val p = line.substring(idx).trim()
+                            if (p.endsWith(".apk") && File(p).exists()) return p
+                        }}
+                    }}
+                }}
+            }}
+                  }} catch (_: Throwable) {{}}
+                  return null
+              }}
+
+              @JvmStatic
+              fun tryLoadNative(ctx: Context?): Boolean {{
+                  if (nativeLoaded) return true
+                  val shortName = decLibShortName()
+                  val fullSoName = "lib" + shortName + ".so"
+                  if (!nativeLoadAttempted) {{
+            nativeLoadAttempted = true
+            try {{
+                System.loadLibrary(shortName)
+                nativeLoaded = true
+                return true
+            }} catch (_: Throwable) {{}}
+            try {{
+                val path = (SecurityBridge::class.java.classLoader as? BaseDexClassLoader)?.findLibrary(shortName)
+                if (!path.isNullOrEmpty() && File(path).exists()) {{
+                    System.load(path)
+                    nativeLoaded = true
+                    return true
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  val activeCtx = resolveSafeContext(ctx)
+                  if (activeCtx != null) {{
+            try {{
+                val libDir = activeCtx.packageManager.getApplicationInfo(MODULE_PKG, 0).nativeLibraryDir
+                if (!libDir.isNullOrEmpty()) {{
+                    val soFile = File(libDir, fullSoName)
+                    if (soFile.exists()) {{
+                        System.load(soFile.absolutePath)
+                        nativeLoaded = true
+                        return true
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  val apkPath = resolveModuleApkPath(activeCtx)
+                  if (!apkPath.isNullOrEmpty()) {{
+            val apkParent = File(apkPath).parentFile
+            if (apkParent != null) {{
+                for (arch in listOf("arm64", "arm64-v8a", "arm", "armeabi-v7a", "x86_64")) {{
+                    val candidate = File(apkParent, "lib/$arch/$fullSoName")
+                    if (candidate.exists()) {{
+                        try {{
+                            System.load(candidate.absolutePath)
+                            nativeLoaded = true
+                            return true
+                        }} catch (_: Throwable) {{}}
+                    }}
+                }}
+            }}
+            val abis = Build.SUPPORTED_ABIS ?: arrayOf("arm64-v8a", "armeabi-v7a")
+            for (abi in abis) {{
+                try {{
+                    System.load("$apkPath!/lib/$abi/$fullSoName")
+                    nativeLoaded = true
+                    return true
+                }} catch (_: Throwable) {{}}
+            }}
+            val cacheDirs = listOfNotNull(
+                activeCtx?.codeCacheDir,
+                activeCtx?.cacheDir,
+                File("/data/data/$TARGET_PKG/code_cache").takeIf {{ it.exists() && it.canWrite() }},
+                File("/data/data/$MODULE_PKG/code_cache").takeIf {{ it.exists() && it.canWrite() }},
+                File("/data/local/tmp").takeIf {{ it.exists() && it.canWrite() }}
+            )
+            try {{
+                ZipFile(apkPath).use {{ zf ->
+                    for (abi in abis) {{
+                        val entry = zf.getEntry("lib/$abi/$fullSoName") ?: continue
+                        for (cDir in cacheDirs) {{
+                            try {{
+                                val outSo = File(cDir, ".jdrv_v10_" + abi + ".so")
+                                if (!outSo.exists() || outSo.length() != entry.size) {{
+                                    zf.getInputStream(entry).use {{ ins ->
+                                        FileOutputStream(outSo).use {{ outs -> ins.copyTo(outs) }}
+                                    }}
+                                    outSo.setReadable(true, false)
+                                    outSo.setExecutable(true, false)
+                                }}
+                                System.load(outSo.absolutePath)
+                                nativeLoaded = true
+                                return true
+                            }} catch (_: Throwable) {{}}
+                        }}
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return false
+              }}
+
+              private fun extractCertInfo(ctx: Context?): Triple<ByteArray?, String?, Boolean> {{
+                  cachedCertTriple?.let {{ if (it.first != null) return it }}
+                  val activeCtx = resolveSafeContext(ctx)
+                  val inTarget = isRunningInTargetProcess(activeCtx)
+                  val apkPath = resolveModuleApkPath(activeCtx)
+                  if (activeCtx == null) return Triple(null, apkPath, inTarget)
+                  return try {{
+            @Suppress("DEPRECATION")
+            val pkgInfo = activeCtx.packageManager.getPackageInfo(MODULE_PKG, PackageManager.GET_SIGNATURES)
+            @Suppress("DEPRECATION")
+            val sigs = pkgInfo.signatures
+            if (sigs != null && sigs.isNotEmpty() && sigs[0] != null) {{
+                val digest = MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray())
+                Triple(digest, apkPath ?: pkgInfo.applicationInfo?.sourceDir, inTarget).also {{ cachedCertTriple = it }}
+            }} else {{
+                Triple(null, apkPath, inTarget)
+            }}
+                  }} catch (_: Throwable) {{
+            Triple(null, apkPath, inTarget)
+                  }}
+              }}
+
+              @JvmStatic
+              fun expectedCertSha256(): ByteArray {{
+                  if (tryLoadNative(null)) {{
+            try {{ return SanedReceiver.a0() }} catch (_: Throwable) {{}}
+                  }}
+                  val core = unpackLongs(vCore, 224, -0x61c8864680b583ebL)
+                  val certMask = core.copyOfRange(160, 192)
+                  val encCert = core.copyOfRange(192, 224)
+                  return ByteArray(32) {{ i ->
+            ((encCert[i].toInt() and 0xFF) xor (certMask[i].toInt() and 0xFF) xor ((0xA5 + i * 9) and 0xFF)).toByte()
+                  }}
+              }}
+
+              private fun deriveKeySchedule16Fallback(ctx: Context?): ByteArray {{
+                  val core = unpackLongs(vCore, 224, -0x61c8864680b583ebL)
+                  val (actualCert, _, inTarget) = extractCertInfo(ctx)
+                  val activeCert = actualCert ?: if (inTarget) expectedCertSha256() else ByteArray(32) {{ 0xAA.toByte() }}
+                  val tamperMask = if (Debug.isDebuggerConnected()) 0x5A else 0x00
+                  var state = activeCert.copyOf(32)
+                  for (r in 0 until 16) {{
+            val shOff = (r and 3) * 32
+            val sha = MessageDigest.getInstance("SHA-256")
+            sha.update(state)
+            sha.update(core, shOff, 32)
+            sha.update(byteArrayOf(((r * 0x37 + 0xA5) and 0xFF).toByte(), (((r xor 0x5A) * 0x19) and 0xFF).toByte()))
+            state = sha.digest()
+                  }}
+                  val sealedMk = core.copyOfRange(128, 160)
+                  return ByteArray(32) {{ i ->
+            ((sealedMk[i].toInt() and 0xFF) xor (state[i].toInt() and 0xFF) xor tamperMask).toByte()
+                  }}
+              }}
+
+              @JvmStatic
+              fun isNativeEnvironmentClean(ctx: Context?): Boolean {{
+                  if (Debug.isDebuggerConnected()) return false
+                  val loaded = tryLoadNative(ctx)
+                  val (_, apkPath, inTarget) = extractCertInfo(ctx)
+                  if (loaded) {{
+            try {{
+                return SanedReceiver.a5(apkPath, inTarget) == 0
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return true
+              }}
+
+              @JvmStatic
+              fun decryptSlot(slotIdx: Int, ctx: Context? = null): String {{
+                  if (slotIdx !in 0 until {len(enc_slots)}) return ""
+                  slotCache[slotIdx]?.let {{ return it }}
+                  val loaded = tryLoadNative(ctx)
+                  val (actualCert, apkPath, isEmbedded) = extractCertInfo(ctx)
+                  if (loaded) {{
+            try {{
+                val decBytes = SanedReceiver.a1(actualCert, apkPath, isEmbedded, slotIdx)
+                if (decBytes != null && decBytes.isNotEmpty()) {{
+                    val str = String(decBytes, Charsets.UTF_8)
+                    slotCache[slotIdx] = str
+                    return str
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  val mk = deriveKeySchedule16Fallback(ctx)
+                  val pool = unpackLongs(vPool, vPoolTotalBytes, -0x40a7b892e31b1a47L)
+                  val meta = vMeta[slotIdx] xor (0x5A3C96A5 + slotIdx * 0x13579BDF)
+                  val off = (meta ushr 16) and 0xFFFF
+                  val len = meta and 0xFFFF
+                  val out = ByteArray(len)
+                  val blocks = (len + 31) / 32
+                  for (blk in 0 until blocks) {{
+            val sha = MessageDigest.getInstance("SHA-256")
+            sha.update(mk)
+            sha.update(byteArrayOf(slotIdx.toByte(), blk.toByte()))
+            val ks = sha.digest()
+            for (j in 0 until 32) {{
+                val pos = blk * 32 + j
+                if (pos < len) {{
+                    out[pos] = ((pool[off + pos].toInt() and 0xFF) xor (ks[j].toInt() and 0xFF)).toByte()
+                }}
+            }}
+                  }}
+                  mk.fill(0)
+                  val str = String(out, Charsets.UTF_8)
+                  slotCache[slotIdx] = str
+                  return str
+              }}
+
+              @JvmStatic
+              fun computeHmacHex(ctx: Context?, data: String, takeChars: Int = 32): String {{
+                  val msgBytes = data.toByteArray(Charsets.UTF_8)
+                  val loaded = tryLoadNative(ctx)
+                  val (actualCert, apkPath, isEmbedded) = extractCertInfo(ctx)
+                  val macBytes: ByteArray = (if (loaded) {{
+            try {{
+                SanedReceiver.a2(actualCert, apkPath, isEmbedded, msgBytes)
+            }} catch (_: Throwable) {{ null }}
+                  }} else null) ?: run {{
+            val mk = deriveKeySchedule16Fallback(ctx)
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(mk, "HmacSHA256"))
+            val res = mac.doFinal(msgBytes)
+            mk.fill(0)
+            res
+                  }}
+                  return macBytes.joinToString("") {{ String.format(Locale.US, "%02x", it.toInt() and 0xFF) }}.take(takeChars)
+              }}
+
+              @JvmStatic
+              fun verifyAndUnpackLicense20(ctx: Context?, decoded20: ByteArray): ByteArray? {{
+                  if (decoded20.size != 20) return null
+                  val loaded = tryLoadNative(ctx)
+                  val (actualCert, apkPath, isEmbedded) = extractCertInfo(ctx)
+                  val plain12: ByteArray? = (if (loaded) {{
+            try {{
+                SanedReceiver.a4(actualCert, apkPath, isEmbedded, decoded20)
+            }} catch (_: Throwable) {{ null }}
+                  }} else null) ?: run {{
+            val mk = deriveKeySchedule16Fallback(ctx)
+            val enc12 = decoded20.copyOfRange(0, 12)
+            val nonce2 = decoded20.copyOfRange(12, 14)
+            val tag6 = decoded20.copyOfRange(14, 20)
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(mk, "HmacSHA256"))
+            mac.update(enc12)
+            mac.update(nonce2)
+            val expectedTag = mac.doFinal().copyOfRange(0, 6)
+            if (!MessageDigest.isEqual(tag6, expectedTag)) {{
+                mk.fill(0)
+                null
+            }} else {{
+                val sha = MessageDigest.getInstance("SHA-256")
+                sha.update(mk)
+                sha.update(nonce2)
+                val stream = sha.digest()
+                mk.fill(0)
+                val p12 = ByteArray(12) {{ i -> (enc12[i].toInt() xor stream[i].toInt()).toByte() }}
+                val magic = ((p12[10].toInt() and 0xFF) shl 8) or (p12[11].toInt() and 0xFF)
+                if (magic == 0x4A44) p12 else null
+            }}
+                  }}
+                  if (plain12 != null && plain12.size == 12) {{
+            val magic = ((plain12[10].toInt() and 0xFF) shl 8) or (plain12[11].toInt() and 0xFF)
+            if (magic == 0x4A44) {{
+                verifiedSessionMask = (magic shl 8) or (plain12[9].toInt() and 0xFF)
+                return plain12
+            }}
+                  }}
+                  return null
+              }}
+
+              @JvmStatic
+              fun getImmutableHardwareTrialId(): String {{
+                  if (cachedHwTrialId.isNotEmpty()) return cachedHwTrialId
+                  var drmHex = ""
+                  try {{
+            val widevineUuid = UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
+            val drm = MediaDrm(widevineUuid)
+            try {{
+                val devUniqueBytes = drm.getPropertyByteArray(MediaDrm.PROPERTY_DEVICE_UNIQUE_ID)
+                if (devUniqueBytes != null && devUniqueBytes.isNotEmpty()) {{
+                    drmHex = MessageDigest.getInstance("SHA-256").digest(devUniqueBytes)
+                        .joinToString("") {{ String.format(Locale.US, "%02x", it.toInt() and 0xFF) }}
+                }}
+            }} finally {{
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {{
+                    try {{ drm.close() }} catch (_: Throwable) {{}}
+                }} else {{
+                    @Suppress("DEPRECATION")
+                    try {{ drm.release() }} catch (_: Throwable) {{}}
+                }}
+            }}
+                  }} catch (_: Throwable) {{}}
+
+                  val socRaw = buildString {{
+            append(drmHex).append('|')
+            append(Build.BOARD).append('|')
+            append(Build.BRAND).append('|')
+            append(Build.DEVICE).append('|')
+            append(Build.HARDWARE).append('|')
+            append(Build.MANUFACTURER).append('|')
+            append(Build.MODEL).append('|')
+            append(Build.PRODUCT).append('|')
+            append(Build.BOOTLOADER)
+                  }}
+                  val digest = MessageDigest.getInstance("SHA-256").digest(socRaw.toByteArray(Charsets.UTF_8))
+                  val chars = CharArray(8)
+                  for (i in 0 until 8) {{
+            chars[i] = LIC_ALPHABET[(digest[i].toInt() and 0xFF) % LIC_ALPHABET.length]
+                  }}
+                  val hwId = "HW-" + String(chars, 0, 4) + "-" + String(chars, 4, 4)
+                  cachedHwTrialId = hwId
+                  return hwId
+              }}
+
+              @JvmStatic
+              fun isAutoTimeEnabled(ctx: Context?): Boolean {{
+                  val activeCtx = resolveSafeContext(ctx) ?: return true
+                  return try {{
+            val autoTime = Settings.Global.getInt(activeCtx.contentResolver, Settings.Global.AUTO_TIME, 1)
+            autoTime != 0
+                  }} catch (_: Throwable) {{
+            true
+                  }}
+              }}
+
+              @JvmStatic
+              fun recordVerifiedNetworkTime(ctx: Context?, netUtcMs: Long) {{
+                  if (netUtcMs < 1700000000000L) return
+                  val elapsed = SystemClock.elapsedRealtime()
+                  lastVerifiedNetWallMs.set(netUtcMs)
+                  lastVerifiedNetElapsedMs.set(elapsed)
+                  ratchetHighestClockMs(ctx, netUtcMs)
+              }}
+
+              @JvmStatic
+              fun fetchLiveNetworkTimeSync(ctx: Context?): Long {{
+                  val cachedWall = lastVerifiedNetWallMs.get()
+                  val cachedElapsed = lastVerifiedNetElapsedMs.get()
+                  if (cachedWall > 1700000000000L && cachedElapsed > 0L) {{
+            val delta = SystemClock.elapsedRealtime() - cachedElapsed
+            if (delta in 0L..600_000L) {{
+                return cachedWall + delta
+            }}
+                  }}
+                  val endpoints = listOf(
+            "https://www.google.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            "https://www.microsoft.com"
+                  )
+                  for (ep in endpoints) {{
+            try {{
+                val conn = (URL(ep).openConnection() as HttpURLConnection).apply {{
+                    connectTimeout = 3500
+                    readTimeout = 3500
+                    requestMethod = "HEAD"
+                    instanceFollowRedirects = false
+                    useCaches = false
+                }}
+                val d = conn.date
+                conn.disconnect()
+                if (d > 1700000000000L) {{
+                    recordVerifiedNetworkTime(ctx, d)
+                    return d
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return 0L
+              }}
+
+              private fun getImmortalVaultFiles(ctx: Context?, tagHex: String): List<File> {{
+                  val hwId = getImmutableHardwareTrialId()
+                  val list = mutableListOf<File>()
+                  try {{ list.add(File("/data/local/tmp/.jdrv_vault_" + hwId + ".dat")) }} catch (_: Throwable) {{}}
+                  try {{ list.add(File("/data/local/tmp/.jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
+                  for (base in listOf("/sdcard/Android", "/sdcard/Download", "/storage/emulated/0/Android", "/storage/emulated/0/Download")) {{
+            try {{
+                val d = File(base)
+                if (d.exists() && d.canWrite()) {{
+                    list.add(File(d, ".jdrv_vault_" + hwId + ".dat"))
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  if (ctx != null) {{
+            try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_vault_" + hwId + ".dat")) }} catch (_: Throwable) {{}}
+            try {{ list.add(File(ctx.noBackupFilesDir, ".jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
+            try {{ list.add(File(ctx.filesDir, ".jdrv_act_" + tagHex + ".dat")) }} catch (_: Throwable) {{}}
+            try {{
+                ctx.externalCacheDirs?.forEach {{ dir ->
+                    if (dir != null) list.add(File(dir, ".jdrv_vault_" + hwId + ".dat"))
+                }}
+            }} catch (_: Throwable) {{}}
+            try {{
+                @Suppress("DEPRECATION")
+                ctx.externalMediaDirs?.forEach {{ dir ->
+                    if (dir != null) list.add(File(dir, ".jdrv_vault_" + hwId + ".dat"))
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return list
+              }}
+
+              @JvmStatic
+              fun ratchetHighestClockMs(ctx: Context?, candidateMs: Long): Long {{
+                  var best = highestObservedWallMs.get()
+                  if (candidateMs > best) {{
+            highestObservedWallMs.set(candidateMs)
+            best = candidateMs
+                  }}
+                  try {{
+            val f = File("/data/local/tmp/.jdrv_clock_ratchet.dat")
+            if (f.exists() && f.canRead()) {{
+                val parts = f.readText(Charsets.UTF_8).trim().split("|")
+                if (parts.size == 2) {{
+                    val savedTs = parts[0].toLongOrNull() ?: 0L
+                    val savedSig = parts[1]
+                    if (savedTs > 1700000000000L && savedSig == computeHmacHex(ctx, "CLK_RATCHET|$savedTs", 24)) {{
+                        if (savedTs > best) {{
+                            best = savedTs
+                            highestObservedWallMs.set(best)
+                        }}
+                    }}
+                }}
+            }}
+            if (best > 1700000000000L) {{
+                val sig = computeHmacHex(ctx, "CLK_RATCHET|$best", 24)
+                f.writeText("$best|$sig", Charsets.UTF_8)
+                f.setReadable(true, false)
+                f.setWritable(true, false)
+            }}
+                  }} catch (_: Throwable) {{}}
+
+                  if (ctx != null) {{
+            try {{
+                val sp = ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE)
+                val spHigh = sp.getLong("jdrv_highest_clock_ms", 0L)
+                if (spHigh > best) {{
+                    best = spHigh
+                    highestObservedWallMs.set(best)
+                }}
+                if (best > spHigh && best - spHigh > 15_000L) {{
+                    sp.edit().putLong("jdrv_highest_clock_ms", best).apply()
+                }}
+            }} catch (_: Throwable) {{}}
+            try {{
+                val msp = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                val mHigh = msp.getLong("jdrv_highest_clock_ms", 0L)
+                if (mHigh > best) {{
+                    best = mHigh
+                    highestObservedWallMs.set(best)
+                }}
+                if (best > mHigh && best - mHigh > 15_000L) {{
+                    msp.edit().putLong("jdrv_highest_clock_ms", best).apply()
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return best
+              }}
+
+              @JvmStatic
+              fun trustedNowMs(ctx: Context?): Long {{
+                  val sysNow = System.currentTimeMillis()
+                  val elapsedNow = SystemClock.elapsedRealtime()
+                  var effective = sysNow
+
+                  val netWall = lastVerifiedNetWallMs.get()
+                  val netElapsed = lastVerifiedNetElapsedMs.get()
+                  if (netWall > 1700000000000L && netElapsed > 0L && elapsedNow >= netElapsed) {{
+            val netProjected = netWall + (elapsedNow - netElapsed)
+            if (netProjected > effective) effective = netProjected
+            ratchetHighestClockMs(ctx, netProjected)
+                  }} else if (isAutoTimeEnabled(ctx)) {{
+            ratchetHighestClockMs(ctx, sysNow)
+                  }}
+
+                  val ratchet = ratchetHighestClockMs(ctx, 0L)
+                  if (ratchet > effective) effective = ratchet
+
+                  val actWall = firstActBootAnchorWallMs.get()
+                  val actElapsed = firstActBootAnchorElapsedMs.get()
+                  if (actWall > 1700000000000L && actElapsed > 0L && elapsedNow >= actElapsed) {{
+            val monoProjected = actWall + (elapsedNow - actElapsed)
+            if (monoProjected > effective) effective = monoProjected
+                  }}
+                  return effective
+              }}
+
+              @JvmStatic
+              fun parseAndVerifyVaultEntry(ctx: Context?, line: String, expectedTagHex: String, myDevId: String): Long {{
+                  val parts = line.trim().split("|")
+                  if (parts.size < 4) return 0L
+                  val tHex = parts[0]
+                  val dId = parts[1]
+                  val ts = parts[2].toLongOrNull() ?: return -1L
+                  val sig = parts[3]
+                  if (ts <= 0L) return 0L
+                  val hwId = getImmutableHardwareTrialId()
+                  val expectedSigDev = computeHmacHex(ctx, "ACT_STAMP|$tHex|$dId|$ts", 32)
+                  if (!sig.equals(expectedSigDev, ignoreCase = true)) return -1L
+                  if (tHex == expectedTagHex && dId == myDevId) return ts
+                  if (dId == hwId || tHex == "HW_TRIAL") return ts
+                  return 0L
+              }}
+
+              @JvmStatic
+              fun readEarliestVerifiedActivationMs(ctx: Context, tagHex: String, myDevId: String): Long {{
+                  val (_, trialTagHex) = generateTrialKeyPair(ctx, myDevId, computeDeviceHashStatic(myDevId))
+                  val isCheckingTrial = (tagHex == trialTagHex)
+                  val hwId = getImmutableHardwareTrialId()
+                  var earliestTs = 0L
+                  var tampered = false
+
+                  fun considerTs(candidate: Long) {{
+            if (candidate == -1L) {{
+                tampered = true
+            }} else if (candidate > 0L) {{
+                if (earliestTs == 0L || candidate < earliestTs) {{
+                    earliestTs = candidate
+                }}
+            }}
+                  }}
+
+                  val rankPrefs = ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE)
+                  val mainPrefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                  val actKeyPref = "jdrv_first_act_$tagHex"
+                  val sigKeyPref = "jdrv_first_act_sig_$tagHex"
+                  if (rankPrefs.contains(actKeyPref)) {{
+            val ts = rankPrefs.getLong(actKeyPref, 0L)
+            val sig = rankPrefs.getString(sigKeyPref, "") ?: ""
+            if (ts > 0L) {{
+                val expSig = computeHmacHex(ctx, "ACT_STAMP|$tagHex|$myDevId|$ts", 32)
+                if (sig.isNotEmpty() && !sig.equals(expSig, ignoreCase = true)) tampered = true
+                else considerTs(ts)
+            }}
+                  }}
+
+                  for (prefKey in listOf("jdrv_ledger_$tagHex", decryptSlot(27, ctx), decryptSlot(28, ctx))) {{
+            val line = mainPrefs.getString(prefKey, null)
+            if (!line.isNullOrEmpty()) {{
+                if (isCheckingTrial || line.startsWith("$tagHex|")) {{
+                    considerTs(parseAndVerifyVaultEntry(ctx, line, tagHex, myDevId))
+                }}
+            }}
+                  }}
+
+                  try {{
+            val cfgFile = File("/data/local/tmp/saned_config.json")
+            if (cfgFile.exists() && cfgFile.canRead()) {{
+                val j = org.json.JSONObject(cfgFile.readText(Charsets.UTF_8))
+                val cfgLedger = j.optString(decryptSlot(27, ctx), "")
+                if (cfgLedger.isNotEmpty() && (isCheckingTrial || cfgLedger.startsWith("$tagHex|"))) {{
+                    considerTs(parseAndVerifyVaultEntry(ctx, cfgLedger, tagHex, myDevId))
+                }}
+                val cfgHwLedger = j.optString(decryptSlot(28, ctx), "")
+                if (cfgHwLedger.isNotEmpty() && isCheckingTrial) {{
+                    considerTs(parseAndVerifyVaultEntry(ctx, cfgHwLedger, "HW_TRIAL", hwId))
+                }}
+            }}
+                  }} catch (_: Throwable) {{}}
+
+                  try {{
+            val b = ctx.contentResolver.call(
+                Uri.parse("content://dev.jing.sanedhook.XposedService"),
+                "getSettings",
+                null,
+                null
+            )
+            val remLedger = b?.getString(decryptSlot(27, ctx), null)
+            if (!remLedger.isNullOrEmpty() && (isCheckingTrial || remLedger.startsWith("$tagHex|"))) {{
+                considerTs(parseAndVerifyVaultEntry(ctx, remLedger, tagHex, myDevId))
+            }}
+                  }} catch (_: Throwable) {{}}
+
+                  for (f in getImmortalVaultFiles(ctx, tagHex)) {{
+            try {{
+                if (f.exists() && f.canRead()) {{
+                    for (rawLine in f.readLines(Charsets.UTF_8)) {{
+                        if (rawLine.isNotBlank()) {{
+                            if (isCheckingTrial || rawLine.startsWith("$tagHex|")) {{
+                                considerTs(parseAndVerifyVaultEntry(ctx, rawLine, tagHex, myDevId))
+                            }}
+                        }}
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+
+                  if (earliestTs > 0L) {{
+            saveImmortalActivationMs(ctx, tagHex, myDevId, earliestTs)
+            return earliestTs
+                  }}
+                  return if (tampered) -1L else 0L
+              }}
+
+              @JvmStatic
+              fun saveImmortalActivationMs(ctx: Context, tagHex: String, myDevId: String, firstActMs: Long) {{
+                  if (firstActMs <= 0L) return
+                  if (firstActBootAnchorWallMs.get() == 0L) {{
+            firstActBootAnchorWallMs.set(firstActMs)
+            firstActBootAnchorElapsedMs.set(SystemClock.elapsedRealtime())
+                  }}
+                  val (_, trialTagHex) = generateTrialKeyPair(ctx, myDevId, computeDeviceHashStatic(myDevId))
+                  val isTrial = (tagHex == trialTagHex)
+                  val hwId = getImmutableHardwareTrialId()
+
+                  val sig = computeHmacHex(ctx, "ACT_STAMP|$tagHex|$myDevId|$firstActMs", 32)
+                  val entryLine = "$tagHex|$myDevId|$firstActMs|$sig"
+
+                  val hwSig = computeHmacHex(ctx, "ACT_STAMP|HW_TRIAL|$hwId|$firstActMs", 32)
+                  val hwEntryLine = "HW_TRIAL|$hwId|$firstActMs|$hwSig"
+
+                  ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE).edit()
+            .putLong("jdrv_first_act_$tagHex", firstActMs)
+            .putString("jdrv_first_act_sig_$tagHex", sig)
+            .commit()
+
+                  val mainPrefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                  val mainEd = mainPrefs.edit().putString("jdrv_ledger_$tagHex", entryLine)
+                  if (isTrial) {{
+            val kTrialLedger = decryptSlot(27, ctx)
+            val kHwLedger = decryptSlot(28, ctx)
+            val existingLine = mainPrefs.getString(kTrialLedger, "") ?: ""
+            val existingTs = if (existingLine.isNotEmpty()) parseAndVerifyVaultEntry(ctx, existingLine, tagHex, myDevId) else 0L
+            if (existingTs <= 0L || firstActMs <= existingTs) {{
+                mainEd.putString(kTrialLedger, entryLine)
+                mainEd.putString(kHwLedger, hwEntryLine)
+            }}
+                  }}
+                  mainEd.commit()
+
+                  val vaultPayload = if (isTrial) entryLine + "\\n" + hwEntryLine else entryLine
+                  for (f in getImmortalVaultFiles(ctx, tagHex)) {{
+            try {{
+                f.parentFile?.mkdirs()
+                f.writeText(vaultPayload, Charsets.UTF_8)
+                f.setReadable(true, false)
+                f.setWritable(true, false)
+            }} catch (_: Throwable) {{}}
+                  }}
+              }}
+
+              private fun computeDeviceHashStatic(deviceId: String): Int {{
+                  val clean = deviceId.trim().uppercase(Locale.US).replace("-", "").replace(" ", "")
+                  if (clean.isEmpty() || clean == "*" || clean == "ANY" || clean == "ALL" || clean == "JID00000000") return 0
+                  val d = MessageDigest.getInstance("SHA-256").digest(("JDRV_DEV:$clean").toByteArray(Charsets.UTF_8))
+                  val v = ((d[0].toInt() and 0xFF) shl 24) or ((d[1].toInt() and 0xFF) shl 16) or ((d[2].toInt() and 0xFF) shl 8) or (d[3].toInt() and 0xFF)
+                  return if (v != 0) v else 1
+              }}
+
+              private fun encodeBase32(data: ByteArray): String {{
+                  var bits = 0
+                  var value = 0
+                  val sb = StringBuilder()
+                  for (b in data) {{
+            value = (value shl 8) or (b.toInt() and 0xFF)
+            bits += 8
+            while (bits >= 5) {{
+                sb.append(LIC_ALPHABET[(value ushr (bits - 5)) and 31])
+                bits -= 5
+            }}
+                  }}
+                  if (bits > 0) sb.append(LIC_ALPHABET[(value shl (5 - bits)) and 31])
+                  val raw = sb.toString()
+                  val groups = mutableListOf<String>()
+                  var i = 0
+                  while (i < raw.length) {{
+            groups.add(raw.substring(i, (i + 4).coerceAtMost(raw.length)))
+            i += 4
+                  }}
+                  return "JDRV-" + groups.joinToString("-")
+              }}
+
+              @JvmStatic
+              fun generateTrialKeyPair(ctx: Context, myDevId: String, devHash: Int): Pair<String, String> {{
+                  val loaded = tryLoadNative(ctx)
+                  val (actualCert, apkPath, _) = extractCertInfo(ctx)
+                  val hwId = getImmutableHardwareTrialId()
+                  val nonceSeed = MessageDigest.getInstance("SHA-256")
+            .digest(("JDRV_ONE_TIME_TRIAL_2026:$hwId").toByteArray(Charsets.UTF_8))
+                  val full20: ByteArray = (if (loaded) {{
+            try {{
+                SanedReceiver.a3(actualCert, apkPath, devHash, nonceSeed)
+            }} catch (_: Throwable) {{ null }}
+                  }} else null) ?: run {{
+            val mk = deriveKeySchedule16Fallback(ctx)
+            val expCode = (-0x80000000) or 1440
+            val plain12 = byteArrayOf(
+                ((devHash ushr 24) and 0xFF).toByte(),
+                ((devHash ushr 16) and 0xFF).toByte(),
+                ((devHash ushr 8) and 0xFF).toByte(),
+                (devHash and 0xFF).toByte(),
+                ((expCode ushr 24) and 0xFF).toByte(),
+                ((expCode ushr 16) and 0xFF).toByte(),
+                ((expCode ushr 8) and 0xFF).toByte(),
+                (expCode and 0xFF).toByte(),
+                1.toByte(), 0x0F.toByte(), 0x4A.toByte(), 0x44.toByte()
+            )
+            val nonce2 = byteArrayOf(nonceSeed[0], nonceSeed[1])
+            val sha = MessageDigest.getInstance("SHA-256")
+            sha.update(mk)
+            sha.update(nonce2)
+            val stream = sha.digest()
+            val enc12 = ByteArray(12) {{ i -> (plain12[i].toInt() xor stream[i].toInt()).toByte() }}
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(mk, "HmacSHA256"))
+            mac.update(enc12)
+            mac.update(nonce2)
+            val tag6 = mac.doFinal().copyOfRange(0, 6)
+            mk.fill(0)
+            ByteArray(20).apply {{
+                System.arraycopy(enc12, 0, this, 0, 12)
+                System.arraycopy(nonce2, 0, this, 12, 2)
+                System.arraycopy(tag6, 0, this, 14, 6)
+            }}
+                  }}
+                  val tag6 = full20.copyOfRange(14, 20)
+                  val tagHex = tag6.joinToString("") {{ String.format(Locale.US, "%02X", it.toInt() and 0xFF) }}
+                  return encodeBase32(full20) to tagHex
+              }}
+
+              private val lastCtrlHandshakeElapsedMs = AtomicLong(0L)
+              private val consecutiveSelectiveBlocks = AtomicLong(0L)
+              @Volatile private var remoteSignatureSpoofDetected = false
+              private const val HEARTBEAT_MAX_ONLINE_TTL_MS = 12L * 3600_000L
+
+              @JvmStatic
+              fun getRemoteControlUrls(ctx: Context? = null): List<String> {{
+                  val out = ArrayList<String>(6)
+                  for (idx in 9..14) {{
+            val u = decryptSlot(idx, ctx).trim()
+            if (u.startsWith("https://")) out.add(u)
+                  }}
+                  return out
+              }}
+
+              @JvmStatic
+              fun isHostsOrFirewallTampered(ctx: Context? = null): Boolean {{
+                  if (remoteSignatureSpoofDetected) return true
+                  val d1 = decryptSlot(15, ctx).lowercase(Locale.US)
+                  val d2 = decryptSlot(16, ctx).lowercase(Locale.US)
+                  val d3 = decryptSlot(17, ctx).lowercase(Locale.US)
+                  val h1 = decryptSlot(18, ctx)
+                  val hostPaths = arrayOf(h1, "/etc/hosts", "/system/etc/hosts")
+                  for (hp in hostPaths) {{
+            try {{
+                val f = File(hp)
+                if (f.exists() && f.canRead()) {{
+                    val lines = f.readLines(Charsets.UTF_8)
+                    for (rawLine in lines) {{
+                        val line = rawLine.substringBefore("#").trim().lowercase(Locale.US)
+                        if (line.isEmpty()) continue
+                        if ((d1.isNotEmpty() && line.contains(d1)) ||
+                            (d2.isNotEmpty() && line.contains(d2)) ||
+                            (d3.isNotEmpty() && line.contains(d3))) {{
+                            return true
+                        }}
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return false
+              }}
+
+              private fun getKillVaultFiles(ctx: Context?): List<File> {{
+                  val files = ArrayList<File>()
+                  files.add(File("/data/local/tmp/.jdrv_kill_vault.dat"))
+                  val activeCtx = resolveSafeContext(ctx)
+                  if (activeCtx != null) {{
+            try {{ files.add(File(activeCtx.filesDir, ".jdrv_kill_vault.dat")) }} catch (_: Throwable) {{}}
+            try {{ activeCtx.externalCacheDir?.let {{ files.add(File(it, ".jdrv_kill_vault.dat")) }} }} catch (_: Throwable) {{}}
+                  }}
+                  return files
+              }}
+
+              @JvmStatic
+              fun saveImmortalKillState(
+                  ctx: Context?,
+                  appEnabled: Boolean,
+                  minEpoch: Int,
+                  blockedDevsCsv: String,
+                  blockedKeysCsv: String,
+                  msgAr: String,
+                  msgEn: String
+              ) {{
+                  val enBit = if (appEnabled) 1 else 0
+                  val normDevs = blockedDevsCsv.trim().uppercase(Locale.US)
+                  val normKeys = blockedKeysCsv.trim().uppercase(Locale.US)
+                  val payload = "KILL_V1|" + enBit + "|" + minEpoch + "|" + normDevs + "|" + normKeys
+                  val sig = computeHmacHex(ctx, payload, 32)
+                  val line = payload + "|" + sig
+                  for (f in getKillVaultFiles(ctx)) {{
+            try {{
+                f.parentFile?.mkdirs()
+                f.writeText(line, Charsets.UTF_8)
+                f.setReadable(true, false)
+            }} catch (_: Throwable) {{}}
+                  }}
+                  val activeCtx = resolveSafeContext(ctx)
+                  if (activeCtx != null) {{
+            try {{
+                activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+                    .putString(decryptSlot(35, activeCtx), line)
+                    .putString("jdrv_remote_msg_ar", msgAr)
+                    .putString("jdrv_remote_msg_en", msgEn)
+                    .commit()
+            }} catch (_: Throwable) {{}}
+                  }}
+              }}
+
+              @JvmStatic
+              fun isImmortalKillLocked(ctx: Context?, myDevId: String, activeKey: String, keyEpoch: Int): Boolean {{
+                  if (isHostsOrFirewallTampered(ctx)) return true
+                  if (consecutiveSelectiveBlocks.get() >= 3L) return true
+                  val candidates = ArrayList<String>()
+                  val activeCtx = resolveSafeContext(ctx)
+                  if (activeCtx != null) {{
+            try {{
+                val sp = activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                sp.getString(decryptSlot(35, activeCtx), null)?.let {{ if (it.isNotEmpty()) candidates.add(it) }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  for (f in getKillVaultFiles(ctx)) {{
+            try {{
+                if (f.exists() && f.canRead()) {{
+                    val t = f.readText(Charsets.UTF_8).trim()
+                    if (t.isNotEmpty()) candidates.add(t)
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  val normMyDev = myDevId.trim().uppercase(Locale.US)
+                  val normMyDevCompact = normMyDev.replace("-", "")
+                  val normKey = activeKey.trim().uppercase(Locale.US).replace(" ", "")
+                  for (line in candidates) {{
+            val parts = line.split("|")
+            if (parts.size == 6 && parts[0] == "KILL_V1") {{
+                val enBit = parts[1].toIntOrNull() ?: 1
+                val minEp = parts[2].toIntOrNull() ?: 1
+                val bDevs = parts[3]
+                val bKeys = parts[4]
+                val sig = parts[5]
+                val expectedSig = computeHmacHex(ctx, "KILL_V1|" + enBit + "|" + minEp + "|" + bDevs + "|" + bKeys, 32)
+                if (expectedSig.equals(sig, ignoreCase = true)) {{
+                    if (enBit == 0) return true
+                    if (keyEpoch in 1 until minEp) return true
+                    if (normMyDev.isNotEmpty() && bDevs.split(",").any {{ val d = it.trim(); d.isNotEmpty() && (d == normMyDev || d == normMyDevCompact) }}) return true
+                    if (normKey.isNotEmpty() && bKeys.split(",").any {{ val k = it.trim(); k.isNotEmpty() && k == normKey }}) return true
+                }}
+            }}
+                  }}
+                  if (activeCtx != null) {{
+            try {{
+                val sp = activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
+                val lastHbMs = sp.getLong("jdrv_ctrl_hb_ms", 0L)
+                val lastHbSig = sp.getString("jdrv_ctrl_hb_sig", "") ?: ""
+                if (lastHbMs > 1700000000000L) {{
+                    val expSig = computeHmacHex(ctx, "CTRL_HB|" + lastHbMs, 24)
+                    if (!expSig.equals(lastHbSig, ignoreCase = true)) return true
+                    val nowMs = trustedNowMs(activeCtx)
+                    val rtNow = SystemClock.elapsedRealtime()
+                    val rtHb = lastCtrlHandshakeElapsedMs.get()
+                    if (nowMs - lastHbMs > HEARTBEAT_MAX_ONLINE_TTL_MS && (rtHb == 0L || rtNow - rtHb > HEARTBEAT_MAX_ONLINE_TTL_MS)) {{
+                        if (consecutiveSelectiveBlocks.get() >= 1L) return true
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
+                  return false
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlSuccess(ctx: Context?) {{
+                  consecutiveSelectiveBlocks.set(0L)
+                  lastCtrlHandshakeElapsedMs.set(SystemClock.elapsedRealtime())
+                  val activeCtx = resolveSafeContext(ctx) ?: return
+                  try {{
+            val nowMs = trustedNowMs(activeCtx)
+            val sig = computeHmacHex(activeCtx, "CTRL_HB|" + nowMs, 24)
+            activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
+                .putLong("jdrv_ctrl_hb_ms", nowMs)
+                .putString("jdrv_ctrl_hb_sig", sig)
+                .commit()
+                  }} catch (_: Throwable) {{}}
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlSignatureTamper(ctx: Context?) {{
+                  remoteSignatureSpoofDetected = true
+                  saveImmortalKillState(ctx, false, 999, "", "", "⛔ تم إيقاف التطبيق بسبب التلاعب باستجابة الخادم", "⛔ App disabled due to server response tampering")
+              }}
+
+              @JvmStatic
+              fun recordRemoteControlAllUnreachable(ctx: Context?) {{
+                  val netNow = fetchLiveNetworkTimeSync(ctx)
+                  if (netNow > 1700000000000L) {{
+            consecutiveSelectiveBlocks.incrementAndGet()
+                  }}
+              }}
+          }}
+          """)
+
+              # Upgrade MainActivity.kt to use C++ verifyAndUnpackLicense20, computeHmacHex, isNativeEnvironmentClean & verifiedSessionMask
+              main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
+              main_src = open(main_path, "r", encoding="utf-8").read()
+              main_src = re.sub(
+                  r"private fun reconstructMasterKey\(\): ByteArray \{.*?\n    \}\n+",
+                  "",
+                  main_src, count=1, flags=re.S
+              )
+              main_src = main_src.replace(
+                  'packageName != "dev.jing.sanedhook" || !verifyOfficialApkSignature() || android.os.Debug.isDebuggerConnected()',
+                  'packageName != "dev.jing.sanedhook" || !verifyOfficialApkSignature() || !dev.saned.assistant.SecurityBridge.isNativeEnvironmentClean(this) || android.os.Debug.isDebuggerConnected()'
+              )
+              old_main_lic_unpack = """        val mk = reconstructMasterKey()
+                  val enc12 = decoded.copyOfRange(0, 12)
+                  val nonce2 = decoded.copyOfRange(12, 14)
+                  val tag6 = decoded.copyOfRange(14, 20)
+
+                  val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                  mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                  mac.update(enc12)
+                  mac.update(nonce2)
+                  val expectedTag = mac.doFinal().copyOfRange(0, 6)
+                  if (!java.security.MessageDigest.isEqual(tag6, expectedTag)) {
+                      return LicenseStatusResult(
+                          false,
+                          "❌ مفتاح التفعيل غير صالح أو تم التلاعب به",
+                          "❌ Invalid or forged license key signature"
+                      )
+                  }
+
+                  val sha = java.security.MessageDigest.getInstance("SHA-256")
+                  sha.update(mk)
+                  sha.update(nonce2)
+                  val stream = sha.digest()
+                  val plain12 = ByteArray(12)
+                  for (i in 0 until 12) {
+                      plain12[i] = (enc12[i].toInt() xor stream[i].toInt()).toByte()
+                  }"""
+              new_main_lic_unpack = """        val tag6 = decoded.copyOfRange(14, 20)
+                  val plain12 = dev.saned.assistant.SecurityBridge.verifyAndUnpackLicense20(this, decoded)
+                      ?: return LicenseStatusResult(
+                          false,
+                          "❌ مفتاح التفعيل غير صالح أو تم التلاعب به",
+                          "❌ Invalid or forged license key signature"
+                      )"""
+              assert old_main_lic_unpack in main_src, "old_main_lic_unpack not found in MainActivity.kt"
+              main_src = main_src.replace(old_main_lic_unpack, new_main_lic_unpack, 1)
+
+              old_main_tok_mac = """        val tokMac = javax.crypto.Mac.getInstance("HmacSHA256")
+                  tokMac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                  val tokenSigHex = tokMac.doFinal(tokenCanonical.toByteArray(Charsets.UTF_8))
+                      .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                      .take(32)"""
+              new_main_tok_mac = """        val tokenSigHex = dev.saned.assistant.SecurityBridge.computeHmacHex(this, tokenCanonical, 32)"""
+              assert old_main_tok_mac in main_src, "old_main_tok_mac not found in MainActivity.kt"
+              main_src = main_src.replace(old_main_tok_mac, new_main_tok_mac, 1)
+
+              old_main_rem_sig = """        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+                  val mk = reconstructMasterKey()
+                  val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                  mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                  val fullHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
+                      .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                  return fullHex.take(32) == sig"""
+              new_main_rem_sig = """        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+                  return dev.saned.assistant.SecurityBridge.computeHmacHex(this, canonical, 32) == sig"""
+              assert old_main_rem_sig in main_src, "old_main_rem_sig not found in MainActivity.kt"
+              main_src = main_src.replace(old_main_rem_sig, new_main_rem_sig, 1)
+
+              main_src = main_src.replace(
+                  "if (!status.isValid) {",
+                  "if (!status.isValid || (dev.saned.assistant.SecurityBridge.verifiedSessionMask and 0xFFFF00) != 0x4A4400) {\n            dev.saned.assistant.SecurityBridge.verifiedSessionMask = 0",
+                  1
+              ).replace(
+                  "private fun switchTab(tabIndex: Int) {\n        currentTab = tabIndex",
+                  "private fun switchTab(tabIndex: Int) {\n        if (::licenseGateOverlay.isInitialized && (dev.saned.assistant.SecurityBridge.verifiedSessionMask and 0xFFFF00) != 0x4A4400) {\n            licenseGateOverlay.visibility = View.VISIBLE\n        }\n        currentTab = tabIndex",
+                  1
+              )
+              open(main_path, "w", encoding="utf-8").write(main_src)
+
+              # Upgrade OrderInterceptor.kt to use C++ verifyAndUnpackLicense20, computeHmacHex, isNativeEnvironmentClean, verifiedSessionMask & encrypted URLs
+              order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
+              order_src = open(order_path, "r", encoding="utf-8").read()
+              order_src = order_src.replace(
+                  "@Volatile var jdrvLicFeatureMask: Int = 0x0F",
+                  "@Volatile var jdrvLicFeatureMask: Int = 0x00",
+                  1
+              )
+              order_src = re.sub(
+                  r"private fun reconstructEngineMasterKey\(\): ByteArray \{.*?\n    \}\n+",
+                  "",
+                  order_src, count=1, flags=re.S
+              )
+              order_src = order_src.replace(
+                  "val ctx = appContext ?: currentActivity ?: return true\n        try {",
+                  "val ctx = appContext ?: currentActivity ?: return true\n        if (!SecurityBridge.isNativeEnvironmentClean(ctx)) {\n            cachedApkSigVerified = -1\n            return false\n        }\n        try {",
+                  1
+              )
+              old_ord_lic_unpack = """            val decoded = decodeEngineBase32Key(rawKey) ?: return false
+                      val mk = reconstructEngineMasterKey()
+                      val enc12 = decoded.copyOfRange(0, 12)
+                      val nonce2 = decoded.copyOfRange(12, 14)
+                      val tag6 = decoded.copyOfRange(14, 20)
+
+                      val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                      mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                      mac.update(enc12)
+                      mac.update(nonce2)
+                      val expectedTag = mac.doFinal().copyOfRange(0, 6)
+                      if (!java.security.MessageDigest.isEqual(tag6, expectedTag)) {
+                          false
+                      } else {
+                          val sha = java.security.MessageDigest.getInstance("SHA-256")
+                          sha.update(mk)
+                          sha.update(nonce2)
+                          val stream = sha.digest()
+                          val plain12 = ByteArray(12)
+                          for (i in 0 until 12) {
+                              plain12[i] = (enc12[i].toInt() xor stream[i].toInt()).toByte()
+                          }"""
+              new_ord_lic_unpack = """            val decoded = decodeEngineBase32Key(rawKey) ?: return false
+                      val plain12 = SecurityBridge.verifyAndUnpackLicense20(appContext ?: currentActivity, decoded)
+                      if (plain12 == null) {
+                          false
+                      } else {"""
+              assert old_ord_lic_unpack in order_src, "old_ord_lic_unpack not found in OrderInterceptor.kt"
+              order_src = order_src.replace(old_ord_lic_unpack, new_ord_lic_unpack, 1)
+
+              old_ord_rem_sig = """        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+                  val mk = reconstructEngineMasterKey()
+                  val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                  mac.init(javax.crypto.spec.SecretKeySpec(mk, "HmacSHA256"))
+                  val fullHex = mac.doFinal(canonical.toByteArray(Charsets.UTF_8))
+                      .joinToString("") { String.format(Locale.US, "%02x", it.toInt() and 0xFF) }
+                  return fullHex.take(32) == sig"""
+              new_ord_rem_sig = """        val canonical = "$appEn|$accEn|$delEn|$fltEn|$aidEn|$minEp|${bDevs.joinToString(",")}|${bKeys.joinToString(",")}"
+                  return SecurityBridge.computeHmacHex(appContext ?: currentActivity, canonical, 32) == sig"""
+              assert old_ord_rem_sig in order_src, "old_ord_rem_sig not found in OrderInterceptor.kt"
+              order_src = order_src.replace(old_ord_rem_sig, new_ord_rem_sig, 1)
+
+              old_ord_feat_fns = """    fun isAutoAcceptFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteAutoAccept && (jdrvLicFeatureMask and 1) != 0
+
+              fun isDeliverOrderFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteDeliverOrder && (jdrvLicFeatureMask and 2) != 0
+
+              fun isFloatingMenuFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteFloatingMenu && (jdrvLicFeatureMask and 4) != 0
+
+              fun isAndroidIdFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteAndroidId && (jdrvLicFeatureMask and 8) != 0"""
+              new_ord_feat_fns = """    fun isAutoAcceptFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteAutoAccept && (jdrvLicFeatureMask and 1) != 0 && (SecurityBridge.verifiedSessionMask and 0xFFFF01) == 0x4A4401
+
+              fun isDeliverOrderFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteDeliverOrder && (jdrvLicFeatureMask and 2) != 0 && (SecurityBridge.verifiedSessionMask and 0xFFFF02) == 0x4A4402
+
+              fun isFloatingMenuFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteFloatingMenu && (jdrvLicFeatureMask and 4) != 0 && (SecurityBridge.verifiedSessionMask and 0xFFFF04) == 0x4A4404
+
+              fun isAndroidIdFeatureAllowed(): Boolean =
+                  isLicenseActiveInsideSaned() && jdrvRemoteAndroidId && (jdrvLicFeatureMask and 8) != 0 && (SecurityBridge.verifiedSessionMask and 0xFFFF08) == 0x4A4408"""
+              assert old_ord_feat_fns in order_src, "old_ord_feat_fns not found in OrderInterceptor.kt"
+              order_src = order_src.replace(old_ord_feat_fns, new_ord_feat_fns, 1)
+
+              order_src = order_src.replace(
+                  'if (!isLicenseActiveInsideSaned() || !jdrvRemoteAutoAccept || (jdrvLicFeatureMask and 1) == 0) {',
+                  'if (!isLicenseActiveInsideSaned() || !jdrvRemoteAutoAccept || (jdrvLicFeatureMask and 1) == 0 || (SecurityBridge.verifiedSessionMask and 0xFFFF01) != 0x4A4401) {'
+              ).replace(
+                  '"https://gateway.saned.io/api/v1/dispatch/accept-dispatch/$orderIdInt"',
+                  '"${SecurityBridge.decryptSlot(0)}$orderIdInt"'
+              ).replace(
+                  '"https://gateway.saned.io/api/v1/dispatch/reject/$orderIdInt"',
+                  '"${SecurityBridge.decryptSlot(1)}$orderIdInt"'
+              ).replace(
+                  '"https://gateway.saned.io/api/v1/dispatch/accept-dispatch/{id}"',
+                  '"${SecurityBridge.decryptSlot(0)}{id}"'
+              ).replace(
+                  '"https://gateway.saned.io/api/v1/dispatch/active"',
+                  'SecurityBridge.decryptSlot(2)'
+              )
+              open(order_path, "w", encoding="utf-8").write(order_src)
+
+              # Replace all 17 jdrv_* preference/bundle/JSON key literals across all .kt files with SecurityBridge.decryptSlot(19..35)
+              slot_key_map = [
+                  ("jdrv_remote_blocked_devs_csv", 33),
+                  ("jdrv_remote_blocked_keys_csv", 34),
+                  ("jdrv_remote_blocked_devs", 31),
+                  ("jdrv_remote_blocked_keys", 32),
+                  ("jdrv_remote_app_enabled", 29),
+                  ("jdrv_remote_min_epoch", 30),
+                  ("jdrv_trial_ledger_entry", 27),
+                  ("jdrv_hw_trial_ledger", 28),
+                  ("jdrv_immortal_kill_line", 35),
+                  ("jdrv_lic_feature_mask", 23),
+                  ("jdrv_lic_token_sig", 20),
+                  ("jdrv_lic_expiry_ms", 22),
+                  ("jdrv_hw_device_id", 26),
+                  ("jdrv_engine_magic", 25),
+                  ("jdrv_lic_active", 21),
+                  ("jdrv_lic_epoch", 24),
+                  ("jdrv_lic_key", 19),
+              ]
+              for kt_file in [
+                  "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt",
+                  "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt",
+                  "app/src/main/java/dev/saned/assistant/SettingsStore.kt",
+                  "app/src/main/java/io/github/libxposed/service/XposedProvider.kt",
+              ]:
+                  if os.path.exists(kt_file):
+                      k_txt = open(kt_file, "r", encoding="utf-8").read()
+                      for k_str, s_idx in slot_key_map:
+                          k_txt = k_txt.replace(f'"{k_str}"', f'dev.saned.assistant.SecurityBridge.decryptSlot({s_idx})')
+                      open(kt_file, "w", encoding="utf-8").write(k_txt)
+
+              # Set extractNativeLibs="true" in AndroidManifest.xml so Android extracts libjdriver_sec.so with 0755 permissions
+              manifest_path = "app/src/main/AndroidManifest.xml"
+              if os.path.exists(manifest_path):
+                  m_txt = open(manifest_path, "r", encoding="utf-8").read()
+                  if "extractNativeLibs" not in m_txt:
+                      m_txt = m_txt.replace(
+                          'android:allowBackup="false"',
+                          'android:allowBackup="false"\n        android:extractNativeLibs="true"'
+                      )
+                      open(manifest_path, "w", encoding="utf-8").write(m_txt)
+
+              # Generate visually confusable Il1O0o obfuscation dictionary & update proguard-rules.pro so SecurityBridge and Native are 100% obfuscated by R8
+              first_chars = "IlOo"
+              rest_chars = "Il1O0o"
+              conf_words = set()
+              while len(conf_words) < 600:
+                  ln = secrets.choice([6, 7, 8, 9])
+                  w = secrets.choice(first_chars) + "".join(secrets.choice(rest_chars) for _ in range(ln - 1))
+                  conf_words.add(w)
+              open("app/obf-dictionary.txt", "w", encoding="utf-8").write(chr(10).join(sorted(conf_words)) + chr(10))
+
+              pg_path = "app/proguard-rules.pro"
+              if os.path.exists(pg_path):
+                  pg_txt = open(pg_path, "r", encoding="utf-8").read()
+                  pg_txt = pg_txt.replace("-renamesourcefileattribute SourceFile", '-renamesourcefileattribute ""')
+                  pg_txt = re.sub(
+                      r"-keep class dev\.saned\.assistant\.SecurityBridge \{.*?\}",
+                      "",
+                      pg_txt,
+                      flags=re.S
+                  )
+                  pg_txt = pg_txt.replace(
+                      "-keep public class dev.saned.assistant.SanedReceiver {\n    public <init>();\n    public void onReceive(android.content.Context, android.content.Intent);\n}",
+                      "-keep public class dev.saned.assistant.SanedReceiver {\n    public <init>();\n    public void onReceive(android.content.Context, android.content.Intent);\n    public static native <methods>;\n}"
+                  )
+                  open(pg_path, "w", encoding="utf-8").write(pg_txt)
+
+              print("Applied Ultra Security Shield V10 (JNI_OnLoad + 16-Round Branchless Key Schedule + C++ APK V2 Cert Check + 36 Encrypted Slots + R8 Class Obfuscation) successfully!")
+
+
           def apply_deep_logger_v3():
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
               main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
