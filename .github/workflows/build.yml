@@ -2451,6 +2451,7 @@ jobs:
               uint8_t expected[32];
               decode_cert(expected);
               bool found = false;
+              bool matched_expected = false;
               for (size_t i = 0; i + 4 < sig_win - 16; ++i) {{
                   if (blk[i] == 0x30 && blk[i + 1] == 0x82) {{
                       size_t cert_len = 4 + ((static_cast<size_t>(blk[i + 2]) << 8) | static_cast<size_t>(blk[i + 3]));
@@ -2464,12 +2465,22 @@ jobs:
                           found = true;
                           uint8_t diff = 0;
                           for (int k = 0; k < 32; ++k) diff |= (h[k] ^ expected[k]);
-                          if (diff == 0) break;
+                          if (diff == 0) {{
+                              matched_expected = true;
+                              break;
+                          }}
                       }}
                   }}
               }}
               secure_zero(expected, sizeof(expected));
               free(blk);
+              if (found && !matched_expected && !check_repack) {{
+                  char mod_pkg[32];
+                  dec_str(mod_pkg, kStrModPkg, sizeof(kStrModPkg), 0x57);
+                  bool is_mod_apk = (strstr(path, mod_pkg) != nullptr);
+                  secure_zero(mod_pkg, sizeof(mod_pkg));
+                  if (!is_mod_apk) return false;
+              }}
               return found;
           }}
 
@@ -2611,7 +2622,7 @@ jobs:
 
           void unpack_mk(JNIEnv* env, jbyteArray cert_sha256_arr, jstring apk_path_str, jboolean allow_embedded, uint8_t out_mk[32]) {{
               bool own_proc = is_module_own_process();
-              bool in_target = !own_proc && (allow_embedded == JNI_TRUE);
+              bool in_target = !own_proc || (allow_embedded == JNI_TRUE);
 
               char apk_path_buf[384] = {{0}};
               if (apk_path_str != nullptr) {{
@@ -2750,7 +2761,7 @@ jobs:
                   JNIEnv* env, jclass, jbyteArray cert_arr, jstring apk_path_str, jint dev_hash, jbyteArray nonce_seed_arr) {{
               if (!nonce_seed_arr || env->GetArrayLength(nonce_seed_arr) < 2) return nullptr;
               uint8_t mk[32];
-              unpack_mk(env, cert_arr, apk_path_str, JNI_FALSE, mk);
+              unpack_mk(env, cert_arr, apk_path_str, is_module_own_process() ? JNI_FALSE : JNI_TRUE, mk);
 
               jbyte* nptr = env->GetByteArrayElements(nonce_seed_arr, nullptr);
               uint8_t nonce2[2] = {{ static_cast<uint8_t>(nptr[0]), static_cast<uint8_t>(nptr[1]) }};
@@ -3036,8 +3047,17 @@ jobs:
               @Volatile private var nativeLoadAttempted = false
               @Volatile private var cachedHwTrialId: String = ""
               @Volatile private var cachedCertTriple: Triple<ByteArray?, String?, Boolean>? = null
+              @Volatile var registeredModuleApkPath: String? = null
+              @JvmField val inInternalPmLookup = ThreadLocal<Boolean>()
               @Volatile var verifiedSessionMask: Int = 0
               private val slotCache = ConcurrentHashMap<Int, String>()
+
+              @JvmStatic
+              fun registerModuleApkPath(path: String?) {{
+                  if (!path.isNullOrEmpty() && File(path).exists()) {{
+                      registeredModuleApkPath = path
+                  }}
+              }}
 
               private val lastVerifiedNetWallMs = AtomicLong(0L)
               private val lastVerifiedNetElapsedMs = AtomicLong(0L)
@@ -3088,20 +3108,27 @@ jobs:
               }}
 
               private fun resolveModuleApkPath(activeCtx: Context?): String? {{
+                  registeredModuleApkPath?.let {{ if (it.isNotEmpty() && File(it).exists()) return it }}
                   if (activeCtx != null) {{
             try {{
+                inInternalPmLookup.set(true)
                 val ai = activeCtx.packageManager.getApplicationInfo(MODULE_PKG, 0)
                 if (!ai.sourceDir.isNullOrEmpty() && File(ai.sourceDir).exists()) {{
+                    registeredModuleApkPath = ai.sourceDir
                     return ai.sourceDir
                 }}
-            }} catch (_: Throwable) {{}}
+            }} catch (_: Throwable) {{
+            }} finally {{
+                inInternalPmLookup.set(false)
+            }}
                   }}
                   try {{
             val clStr = SecurityBridge::class.java.classLoader?.toString() ?: ""
             val m = Regex("(/[^\"\\\\s]+\\\\.apk)").findAll(clStr)
             for (match in m) {{
                 val p = match.groupValues[1]
-                if ((p.contains(MODULE_PKG) || p.contains("lspatch") || p.contains("npatch") || p.contains("saned")) && File(p).exists()) {{
+                if ((p.contains(MODULE_PKG) || p.contains("saned", ignoreCase = true)) && !p.contains("origin") && File(p).exists()) {{
+                    registeredModuleApkPath = p
                     return p
                 }}
             }}
@@ -3110,16 +3137,49 @@ jobs:
             val maps = File("/proc/self/maps")
             if (maps.exists() && maps.canRead()) {{
                 maps.forEachLine {{ line ->
-                    if (line.contains(".apk") && (line.contains(MODULE_PKG) || line.contains("saned"))) {{
+                    if (line.contains(".apk") && (line.contains(MODULE_PKG) || line.contains("saned", ignoreCase = true)) && !line.contains("origin")) {{
                         val idx = line.indexOf('/')
                         if (idx >= 0) {{
                             val p = line.substring(idx).trim()
-                            if (p.endsWith(".apk") && File(p).exists()) return p
+                            if (p.endsWith(".apk") && File(p).exists()) {{
+                                registeredModuleApkPath = p
+                                return p
+                            }}
                         }}
                     }}
                 }}
             }}
                   }} catch (_: Throwable) {{}}
+                  if (activeCtx != null) {{
+            try {{
+                val hostApk = activeCtx.applicationInfo?.sourceDir
+                if (!hostApk.isNullOrEmpty() && File(hostApk).exists()) {{
+                    ZipFile(hostApk).use {{ zf ->
+                        val entries = zf.entries()
+                        while (entries.hasMoreElements()) {{
+                            val entry = entries.nextElement() ?: continue
+                            val name = entry.name ?: ""
+                            if (name.startsWith("assets/") && name.endsWith(".apk") &&
+                                (name.contains("lspatch", ignoreCase = true) || name.contains("npatch", ignoreCase = true) || name.contains("saned", ignoreCase = true) || name.contains(MODULE_PKG)) &&
+                                !name.contains("origin")
+                            ) {{
+                                val outModApk = File(activeCtx.codeCacheDir ?: activeCtx.cacheDir, ".jdrv_mod_v10.apk")
+                                if (!outModApk.exists() || outModApk.length() != entry.size) {{
+                                    zf.getInputStream(entry).use {{ ins ->
+                                        FileOutputStream(outModApk).use {{ outs -> ins.copyTo(outs) }}
+                                    }}
+                                    outModApk.setReadable(true, false)
+                                }}
+                                if (outModApk.exists()) {{
+                                    registeredModuleApkPath = outModApk.absolutePath
+                                    return outModApk.absolutePath
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }} catch (_: Throwable) {{}}
+                  }}
                   return null
               }}
 
@@ -3147,6 +3207,7 @@ jobs:
                   val activeCtx = resolveSafeContext(ctx)
                   if (activeCtx != null) {{
             try {{
+                inInternalPmLookup.set(true)
                 val libDir = activeCtx.packageManager.getApplicationInfo(MODULE_PKG, 0).nativeLibraryDir
                 if (!libDir.isNullOrEmpty()) {{
                     val soFile = File(libDir, fullSoName)
@@ -3156,7 +3217,10 @@ jobs:
                         return true
                     }}
                 }}
-            }} catch (_: Throwable) {{}}
+            }} catch (_: Throwable) {{
+            }} finally {{
+                inInternalPmLookup.set(false)
+            }}
                   }}
                   val apkPath = resolveModuleApkPath(activeCtx)
                   if (!apkPath.isNullOrEmpty()) {{
@@ -3221,6 +3285,7 @@ jobs:
                   val apkPath = resolveModuleApkPath(activeCtx)
                   if (activeCtx == null) return Triple(null, apkPath, inTarget)
                   return try {{
+            inInternalPmLookup.set(true)
             @Suppress("DEPRECATION")
             val pkgInfo = activeCtx.packageManager.getPackageInfo(MODULE_PKG, PackageManager.GET_SIGNATURES)
             @Suppress("DEPRECATION")
@@ -3233,6 +3298,8 @@ jobs:
             }}
                   }} catch (_: Throwable) {{
             Triple(null, apkPath, inTarget)
+                  }} finally {{
+            inInternalPmLookup.set(false)
                   }}
               }}
 
@@ -4267,7 +4334,521 @@ jobs:
                   )
                   open(pg_path, "w", encoding="utf-8").write(pg_txt)
 
-              print("Applied Ultra Security Shield V10 (JNI_OnLoad + 16-Round Branchless Key Schedule + C++ APK V2 Cert Check + 36 Encrypted Slots + R8 Class Obfuscation) successfully!")
+              # Patch PackageCloaker.kt so internal SecurityBridge PackageManager queries are never blocked inside net.jahez.fleets
+              cloaker_path = "app/src/main/java/dev/saned/assistant/PackageCloaker.kt"
+              if os.path.exists(cloaker_path):
+                  clk_src = open(cloaker_path, "r", encoding="utf-8").read()
+                  clk_src = clk_src.replace(
+                      "if (OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg) && formatAppCallStack(4).isNotEmpty()) {",
+                      "if (SecurityBridge.inInternalPmLookup.get() != true && OrderInterceptor.isMasterRunning && pkgArg != null && HIDDEN_PATCH_PACKAGES.contains(pkgArg) && formatAppCallStack(4).isNotEmpty()) {",
+                      1
+                  )
+                  open(cloaker_path, "w", encoding="utf-8").write(clk_src)
+
+              # Patch HookEntry.kt to register module APK path on onModuleLoaded for LSPatch/NPatch
+              hook_entry_path = "app/src/main/java/dev/saned/assistant/HookEntry.kt"
+              if os.path.exists(hook_entry_path):
+                  he_src = open(hook_entry_path, "r", encoding="utf-8").read()
+                  if "registerModuleApkPath" not in he_src:
+                      he_src = he_src.replace(
+                          "DiagnosticLogger.xposedModule = this",
+                          '''DiagnosticLogger.xposedModule = this
+                  try {
+            val modAppInfo = (this.javaClass.methods.firstOrNull { it.name == "getApplicationInfo" && it.parameterCount == 0 }?.invoke(this) as? ApplicationInfo)
+                ?: (this.javaClass.superclass?.declaredFields?.firstOrNull { it.type == ApplicationInfo::class.java }?.apply { isAccessible = true }?.get(this) as? ApplicationInfo)
+            if (modAppInfo != null && !modAppInfo.sourceDir.isNullOrEmpty()) {
+                SecurityBridge.registerModuleApkPath(modAppInfo.sourceDir)
+            }
+                  } catch (_: Throwable) {}''',
+                          1
+                      )
+                      open(hook_entry_path, "w", encoding="utf-8").write(he_src)
+
+              # Build Classic LSPatch v0.6/v0.7 Bridge (assets/xposed_init + assets/lspatch_bridge.jar + LegacyXposedInit.kt)
+              try:
+                  os.makedirs("/tmp/xposed_legacy_stub/de/robv/android/xposed/callbacks", exist_ok=True)
+                  open("/tmp/xposed_legacy_stub/de/robv/android/xposed/IXposedHookZygoteInit.java", "w").write('''package de.robv.android.xposed;
+          public interface IXposedHookZygoteInit {
+              public static final class StartupParam {
+                  public String modulePath;
+                  public boolean startsSystemServer;
+              }
+              void initZygote(StartupParam startupParam) throws Throwable;
+          }
+          ''')
+                  open("/tmp/xposed_legacy_stub/de/robv/android/xposed/IXposedHookLoadPackage.java", "w").write('''package de.robv.android.xposed;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+          public interface IXposedHookLoadPackage {
+              void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable;
+          }
+          ''')
+                  open("/tmp/xposed_legacy_stub/de/robv/android/xposed/callbacks/XC_LoadPackage.java", "w").write('''package de.robv.android.xposed.callbacks;
+          import android.content.pm.ApplicationInfo;
+          public class XC_LoadPackage {
+              public static final class LoadPackageParam {
+                  public String packageName;
+                  public String processName;
+                  public ClassLoader classLoader;
+                  public ApplicationInfo appInfo;
+                  public boolean isFirstApplication;
+              }
+          }
+          ''')
+                  open("/tmp/xposed_legacy_stub/de/robv/android/xposed/XC_MethodHook.java", "w").write('''package de.robv.android.xposed;
+          import java.lang.reflect.Member;
+          public abstract class XC_MethodHook {
+              public static class MethodHookParam {
+                  public Member method;
+                  public Object thisObject;
+                  public Object[] args;
+                  public Object getResult() { return null; }
+                  public void setResult(Object result) {}
+                  public Throwable getThrowable() { return null; }
+                  public void setThrowable(Throwable throwable) {}
+                  public Object getResultOrThrowable() throws Throwable { return null; }
+              }
+              public class Unhook {
+                  public void unhook() {}
+              }
+              protected void beforeHookedMethod(MethodHookParam param) throws Throwable {}
+              protected void afterHookedMethod(MethodHookParam param) throws Throwable {}
+          }
+          ''')
+                  open("/tmp/xposed_legacy_stub/de/robv/android/xposed/XposedBridge.java", "w").write('''package de.robv.android.xposed;
+          import java.lang.reflect.Member;
+          import java.lang.reflect.InvocationTargetException;
+          public final class XposedBridge {
+              public static XC_MethodHook.Unhook hookMethod(Member hookMethod, XC_MethodHook callback) { return null; }
+              public static Object invokeOriginalMethod(Member method, Object thisObject, Object[] args)
+            throws NullPointerException, IllegalAccessException, IllegalArgumentException, InvocationTargetException { return null; }
+              public static void log(String text) {}
+              public static void log(Throwable t) {}
+          }
+          ''')
+                  android_jars = sorted(glob.glob(f"{sdk_root}/platforms/android-*/android.jar"))
+                  d8_bins = sorted(glob.glob(f"{sdk_root}/build-tools/*/d8"))
+                  if android_jars and d8_bins:
+                      android_jar = android_jars[-1]
+                      d8_bin = d8_bins[-1]
+                      os.makedirs("/tmp/xposed_legacy_classes", exist_ok=True)
+                      stub_java_files = glob.glob("/tmp/xposed_legacy_stub/de/robv/android/xposed/**/*.java", recursive=True)
+                      subprocess.run(["javac", "-source", "1.8", "-target", "1.8", "-cp", android_jar, "-d", "/tmp/xposed_legacy_classes"] + stub_java_files, check=True)
+                      os.makedirs("app/libs", exist_ok=True)
+                      subprocess.run(["jar", "cf", "app/libs/xposed-legacy-stub.jar", "-C", "/tmp/xposed_legacy_classes", "."], check=True)
+
+                      # Compile LibXposed API 100 -> Legacy XposedBridge runtime adapter into assets/lspatch_bridge.jar
+                      os.makedirs("/tmp/lspatch_bridge_src/io/github/libxposed/api", exist_ok=True)
+                      open("/tmp/lspatch_bridge_src/io/github/libxposed/api/XposedInterface.java", "w").write('''package io.github.libxposed.api;
+          import java.lang.reflect.Executable;
+          import java.util.List;
+          import android.content.SharedPreferences;
+
+          public interface XposedInterface {
+              interface Chain {
+                  Executable getExecutable();
+                  Object getThisObject();
+                  List<Object> getArgs();
+                  Object getArg(int index);
+                  Object proceed() throws Throwable;
+                  Object proceed(Object[] args) throws Throwable;
+                  Object proceedWith(Object thisObject) throws Throwable;
+                  Object proceedWith(Object thisObject, Object[] args) throws Throwable;
+              }
+              interface Hooker {
+                  Object intercept(Chain chain) throws Throwable;
+              }
+              interface HookHandle {
+                  Executable getExecutable();
+                  void unhook();
+              }
+              interface HookBuilder {
+                  HookBuilder setPriority(int priority);
+                  HookBuilder setExceptionMode(Object mode);
+                  HookHandle intercept(Hooker hooker);
+              }
+              String getFrameworkName();
+              String getFrameworkVersion();
+              long getFrameworkVersionCode();
+              int getFrameworkPrivilege();
+              HookBuilder hook(Executable origin);
+              SharedPreferences getRemotePreferences(String group);
+          }
+          ''')
+                      open("/tmp/lspatch_bridge_src/io/github/libxposed/api/XposedModuleInterface.java", "w").write('''package io.github.libxposed.api;
+          import android.content.pm.ApplicationInfo;
+
+          public interface XposedModuleInterface {
+              interface ModuleLoadedParam {
+                  boolean isSystemServer();
+                  String getProcessName();
+              }
+              interface PackageLoadedParam {
+                  String getPackageName();
+                  ApplicationInfo getApplicationInfo();
+                  boolean isFirstPackage();
+                  ClassLoader getDefaultClassLoader();
+                  ClassLoader getClassLoader();
+              }
+              interface PackageReadyParam extends PackageLoadedParam {}
+              interface SystemServerLoadedParam {
+                  ClassLoader getClassLoader();
+              }
+              default void onModuleLoaded(ModuleLoadedParam param) {}
+              default void onPackageLoaded(PackageLoadedParam param) {}
+              default void onPackageReady(PackageReadyParam param) {}
+              default void onSystemServerLoaded(SystemServerLoadedParam param) {}
+          }
+          ''')
+                      open("/tmp/lspatch_bridge_src/io/github/libxposed/api/XposedModule.java", "w").write('''package io.github.libxposed.api;
+          import android.content.SharedPreferences;
+          import android.content.pm.ApplicationInfo;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import java.lang.reflect.Constructor;
+          import java.lang.reflect.Executable;
+          import java.lang.reflect.InvocationTargetException;
+          import java.util.Arrays;
+          import java.util.Collections;
+          import java.util.List;
+          import java.util.concurrent.ConcurrentHashMap;
+          import java.util.concurrent.CopyOnWriteArrayList;
+
+          public abstract class XposedModule implements XposedInterface, XposedModuleInterface {
+              private static final ConcurrentHashMap<Executable, CopyOnWriteArrayList<Hooker>> HOOK_MAP = new ConcurrentHashMap<>();
+
+              public XposedModule() {}
+
+              @Override
+              public String getFrameworkName() { return "LSPatch"; }
+              @Override
+              public String getFrameworkVersion() { return "0.7"; }
+              @Override
+              public long getFrameworkVersionCode() { return 100L; }
+              @Override
+              public int getFrameworkPrivilege() { return 0; }
+
+              @Override
+              public SharedPreferences getRemotePreferences(String group) {
+                  throw new UnsupportedOperationException("LSPatch uses ContentProvider fallback");
+              }
+
+              @SuppressWarnings("unchecked")
+              private static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+                  throw (T) t;
+              }
+
+              private static final class ChainImpl implements Chain {
+                  private final Executable executable;
+                  private final Object thisObject;
+                  private final Object[] args;
+                  private final List<Hooker> hookers;
+                  private final int index;
+                  private final boolean isCtor;
+                  private final Object ctorResult;
+
+                  ChainImpl(Executable executable, Object thisObject, Object[] args, List<Hooker> hookers, int index, boolean isCtor, Object ctorResult) {
+            this.executable = executable;
+            this.thisObject = thisObject;
+            this.args = args != null ? args : new Object[0];
+            this.hookers = hookers;
+            this.index = index;
+            this.isCtor = isCtor;
+            this.ctorResult = ctorResult;
+                  }
+
+                  @Override
+                  public Executable getExecutable() { return executable; }
+                  @Override
+                  public Object getThisObject() { return thisObject; }
+                  @Override
+                  public List<Object> getArgs() { return Collections.unmodifiableList(Arrays.asList(args)); }
+                  @Override
+                  public Object getArg(int i) { return args[i]; }
+
+                  @Override
+                  public Object proceed() throws Throwable {
+            return proceedWith(thisObject, args);
+                  }
+
+                  @Override
+                  public Object proceed(Object[] newArgs) throws Throwable {
+            return proceedWith(thisObject, newArgs != null ? newArgs : args);
+                  }
+
+                  @Override
+                  public Object proceedWith(Object newThis) throws Throwable {
+            return proceedWith(newThis, args);
+                  }
+
+                  @Override
+                  public Object proceedWith(Object newThis, Object[] newArgs) throws Throwable {
+            Object[] effArgs = newArgs != null ? newArgs : args;
+            if (index < hookers.size()) {
+                Hooker next = hookers.get(index);
+                return next.intercept(new ChainImpl(executable, newThis, effArgs, hookers, index + 1, isCtor, ctorResult));
+            }
+            if (isCtor) {
+                return ctorResult;
+            }
+            try {
+                return XposedBridge.invokeOriginalMethod(executable, newThis, effArgs);
+            } catch (InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause != null) sneakyThrow(cause);
+                throw ite;
+            }
+                  }
+              }
+
+              @Override
+              public HookBuilder hook(final Executable origin) {
+                  return new HookBuilder() {
+            @Override
+            public HookBuilder setPriority(int priority) { return this; }
+            @Override
+            public HookBuilder setExceptionMode(Object mode) { return this; }
+            @Override
+            public HookHandle intercept(final Hooker hooker) {
+                if (origin == null || hooker == null) {
+                    return new HookHandle() {
+                        @Override public Executable getExecutable() { return origin; }
+                        @Override public void unhook() {}
+                    };
+                }
+                try { origin.setAccessible(true); } catch (Throwable ignored) {}
+                final boolean isNewMember = !HOOK_MAP.containsKey(origin);
+                CopyOnWriteArrayList<Hooker> list = HOOK_MAP.computeIfAbsent(origin, k -> new CopyOnWriteArrayList<>());
+                list.add(hooker);
+                if (isNewMember) {
+                    final boolean isCtor = (origin instanceof Constructor);
+                    XposedBridge.hookMethod(origin, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            if (isCtor) return;
+                            List<Hooker> active = HOOK_MAP.get(origin);
+                            if (active == null || active.isEmpty()) return;
+                            ChainImpl chain = new ChainImpl(origin, param.thisObject, param.args, active, 0, false, null);
+                            try {
+                                Object res = chain.proceed();
+                                param.setResult(res);
+                            } catch (Throwable t) {
+                                param.setThrowable(t);
+                            }
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            if (!isCtor) return;
+                            List<Hooker> active = HOOK_MAP.get(origin);
+                            if (active == null || active.isEmpty()) return;
+                            ChainImpl chain = new ChainImpl(origin, param.thisObject, param.args, active, 0, true, param.getResult());
+                            try {
+                                chain.proceed();
+                            } catch (Throwable t) {
+                                param.setThrowable(t);
+                            }
+                        }
+                    });
+                }
+                return new HookHandle() {
+                    @Override public Executable getExecutable() { return origin; }
+                    @Override public void unhook() { list.remove(hooker); }
+                };
+            }
+                  };
+              }
+
+              public static final class BridgeParam implements ModuleLoadedParam, PackageLoadedParam, PackageReadyParam {
+                  private final String packageName;
+                  private final String processName;
+                  private final ClassLoader classLoader;
+                  private final ApplicationInfo appInfo;
+                  private final boolean firstPackage;
+
+                  public BridgeParam(String packageName, String processName, ClassLoader classLoader, ApplicationInfo appInfo, boolean firstPackage) {
+            this.packageName = packageName != null ? packageName : "";
+            this.processName = processName != null ? processName : "";
+            this.classLoader = classLoader;
+            this.appInfo = appInfo;
+            this.firstPackage = firstPackage;
+                  }
+
+                  @Override public boolean isSystemServer() { return false; }
+                  @Override public String getProcessName() { return processName; }
+                  @Override public String getPackageName() { return packageName; }
+                  @Override public ApplicationInfo getApplicationInfo() { return appInfo; }
+                  @Override public boolean isFirstPackage() { return firstPackage; }
+                  @Override public ClassLoader getDefaultClassLoader() { return classLoader; }
+                  @Override public ClassLoader getClassLoader() { return classLoader; }
+              }
+          }
+          ''')
+                      os.makedirs("/tmp/lspatch_bridge_classes", exist_ok=True)
+                      bridge_java_files = glob.glob("/tmp/lspatch_bridge_src/io/github/libxposed/api/*.java")
+                      subprocess.run(["javac", "-source", "1.8", "-target", "1.8", "-cp", f"{android_jar}:app/libs/xposed-legacy-stub.jar", "-d", "/tmp/lspatch_bridge_classes"] + bridge_java_files, check=True)
+                      os.makedirs("app/src/main/assets", exist_ok=True)
+                      bridge_class_files = glob.glob("/tmp/lspatch_bridge_classes/io/github/libxposed/api/*.class")
+                      subprocess.run([d8_bin, "--min-api", "26", "--lib", android_jar, "--output", "app/src/main/assets/lspatch_bridge.jar"] + bridge_class_files, check=True)
+                      open("app/src/main/assets/xposed_init", "w", encoding="utf-8").write("dev.saned.assistant.LegacyXposedInit\\n")
+
+                      # Add compileOnly(files("libs/xposed-legacy-stub.jar")) to app/build.gradle.kts
+                      bg_path = "app/build.gradle.kts"
+                      bg_src = open(bg_path, "r", encoding="utf-8").read()
+                      if "xposed-legacy-stub.jar" not in bg_src:
+                          bg_src = bg_src.replace(
+                              'compileOnly("io.github.libxposed:api:102.0.0")',
+                              'compileOnly("io.github.libxposed:api:102.0.0")\\n    compileOnly(files("libs/xposed-legacy-stub.jar"))'
+                          )
+                          open(bg_path, "w", encoding="utf-8").write(bg_src)
+
+                      # Write LegacyXposedInit.kt
+                      open("app/src/main/java/dev/saned/assistant/LegacyXposedInit.kt", "w", encoding="utf-8").write('''package dev.saned.assistant
+
+          import dalvik.system.BaseDexClassLoader
+          import dalvik.system.InMemoryDexClassLoader
+          import de.robv.android.xposed.IXposedHookLoadPackage
+          import de.robv.android.xposed.IXposedHookZygoteInit
+          import de.robv.android.xposed.callbacks.XC_LoadPackage
+          import java.io.File
+          import java.nio.ByteBuffer
+          import java.util.concurrent.atomic.AtomicBoolean
+          import java.util.zip.ZipFile
+          import java.util.zip.ZipInputStream
+
+          class LegacyXposedInit : IXposedHookZygoteInit, IXposedHookLoadPackage {
+
+              companion object {
+                  private val bridgeInitialized = AtomicBoolean(false)
+                  private val packageDispatched = AtomicBoolean(false)
+                  @Volatile private var moduleApkPath: String? = null
+                  @Volatile private var hookEntryInstance: Any? = null
+
+                  private fun ensureLibXposedBridgeLoaded(cl: ClassLoader, modPath: String?) {
+            try {
+                Class.forName("io.github.libxposed.api.XposedModule", false, cl)
+                return
+            } catch (_: Throwable) {}
+            if (!bridgeInitialized.compareAndSet(false, true)) return
+            try {
+                var dexBytes: ByteArray? = null
+                val stream = cl.getResourceAsStream("assets/lspatch_bridge.jar")
+                    ?: cl.getResourceAsStream("lspatch_bridge.jar")
+                if (stream != null) {
+                    ZipInputStream(stream).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null) {
+                            if (entry.name == "classes.dex") {
+                                dexBytes = zis.readBytes()
+                                break
+                            }
+                            entry = zis.nextEntry
+                        }
+                    }
+                }
+                if (dexBytes == null && !modPath.isNullOrEmpty() && File(modPath).exists()) {
+                    ZipFile(modPath).use { zf ->
+                        val jarEntry = zf.getEntry("assets/lspatch_bridge.jar")
+                        if (jarEntry != null) {
+                            ZipInputStream(zf.getInputStream(jarEntry)).use { zis ->
+                                var entry = zis.nextEntry
+                                while (entry != null) {
+                                    if (entry.name == "classes.dex") {
+                                        dexBytes = zis.readBytes()
+                                        break
+                                    }
+                                    entry = zis.nextEntry
+                                }
+                            }
+                        }
+                    }
+                }
+                val bytes = dexBytes ?: return
+                try {
+                    val parentField = ClassLoader::class.java.getDeclaredField("parent").apply { isAccessible = true }
+                    val origParent = parentField.get(cl) as? ClassLoader ?: cl.parent
+                    val memCl = InMemoryDexClassLoader(ByteBuffer.wrap(bytes), origParent)
+                    parentField.set(cl, memCl)
+                } catch (_: Throwable) {}
+                if (cl is BaseDexClassLoader) {
+                    try {
+                        val tmpJar = File("/data/local/tmp/.jdrv_lspatch_bridge.jar")
+                        tmpJar.writeBytes(bytes)
+                        val addDex = BaseDexClassLoader::class.java.getDeclaredMethod("addDexPath", String::class.java).apply { isAccessible = true }
+                        addDex.invoke(cl, tmpJar.absolutePath)
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
+                  }
+              }
+
+              override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam?) {
+                  val mp = startupParam?.modulePath
+                  if (!mp.isNullOrEmpty()) {
+            moduleApkPath = mp
+            SecurityBridge.registerModuleApkPath(mp)
+                  }
+              }
+
+              override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam?) {
+                  if (lpparam == null || lpparam.packageName != "net.jahez.fleets") return
+                  if (!packageDispatched.compareAndSet(false, true)) return
+                  val cl = LegacyXposedInit::class.java.classLoader ?: return
+                  ensureLibXposedBridgeLoaded(cl, moduleApkPath)
+                  try {
+            val hookEntryCls = Class.forName("dev.saned.assistant.HookEntry", true, cl)
+            val entry = hookEntryInstance ?: hookEntryCls.getDeclaredConstructor().newInstance().also { hookEntryInstance = it }
+            val bridgeParamCls = Class.forName("io.github.libxposed.api.XposedModule\\$BridgeParam", true, cl)
+            val ctor = bridgeParamCls.getDeclaredConstructor(
+                String::class.java,
+                String::class.java,
+                ClassLoader::class.java,
+                android.content.pm.ApplicationInfo::class.java,
+                Boolean::class.javaPrimitiveType
+            )
+            val paramObj = ctor.newInstance(
+                lpparam.packageName,
+                lpparam.processName ?: lpparam.packageName,
+                lpparam.classLoader,
+                lpparam.appInfo,
+                true
+            )
+            for (m in hookEntryCls.methods) {
+                if (m.name == "onModuleLoaded" && m.parameterCount == 1) {
+                    try { m.invoke(entry, paramObj) } catch (_: Throwable) {}
+                }
+            }
+            for (m in hookEntryCls.methods) {
+                if (m.name == "onPackageLoaded" && m.parameterCount == 1) {
+                    try { m.invoke(entry, paramObj) } catch (_: Throwable) {}
+                }
+            }
+            for (m in hookEntryCls.methods) {
+                if (m.name == "onPackageReady" && m.parameterCount == 1) {
+                    try { m.invoke(entry, paramObj) } catch (_: Throwable) {}
+                }
+            }
+                  } catch (_: Throwable) {}
+              }
+          }
+          ''')
+                      pg_txt2 = open(pg_path, "r", encoding="utf-8").read()
+                      if "LegacyXposedInit" not in pg_txt2:
+                          pg_txt2 += '''
+          -keep public class dev.saned.assistant.LegacyXposedInit {
+              public <init>();
+              public void initZygote(...);
+              public void handleLoadPackage(...);
+          }
+          -keep class de.robv.android.xposed.** { *; }
+          -keep interface de.robv.android.xposed.** { *; }
+          -dontwarn de.robv.android.xposed.**
+          '''
+                          open(pg_path, "w", encoding="utf-8").write(pg_txt2)
+                      print("Built Classic LSPatch Bridge (assets/xposed_init + assets/lspatch_bridge.jar + LegacyXposedInit.kt) successfully!")
+              except Exception as e_lsp:
+                  print("LSPatch bridge generation warning:", e_lsp)
+
+              print("Applied Ultra Security Shield V10 (JNI_OnLoad + 16-Round Branchless Key Schedule + C++ APK V2 Cert Check + 36 Encrypted Slots + R8 Class Obfuscation + Full LSPatch/NPatch Support) successfully!")
 
 
 
