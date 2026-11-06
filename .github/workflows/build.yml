@@ -3341,7 +3341,7 @@ jobs:
                       "                if (existingTs <= 0L || (incomingTs in 1L until existingTs)) {\n"
                       "                    jdrvTrialLedgerEntry = incoming\n"
                       "                } else if (existingTs > 0L && jdrvTrialLedgerEntry != incoming) {\n"
-                      "                    (appContext ?: currentActivity)?.let { respondToPing(it) }\n"
+                      "                    respondToPing(intent)\n"
                       "                }\n"
                       "            }\n"
                       "        }"
