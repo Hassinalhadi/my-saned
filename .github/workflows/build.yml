@@ -44,16 +44,14 @@ jobs:
           python3 - << 'PYEOF'
           import os, re, shutil, secrets, hashlib, subprocess, glob
 
-          # 1. Point KeyGen Admin default repository to Hassinalhadi/jdriver_control (Client URLs are C++ encrypted in Slots 9..14)
           keygen_init = True
 
           keygen_path = "keygen/src/main/java/dev/jing/jdriver/keygen/KeyGenActivity.kt"
           if os.path.exists(keygen_path):
               kg_src = open(keygen_path, "r", encoding="utf-8").read()
-              kg_src = kg_src.replace('"Hassinalhadi/my-saned"', '"Hassinalhadi/jdriver_control"')
+              kg_src = kg_src.replace('"Hassinalhadi/my-saned"', '"Hassinalhadi/jdriver_control"').replace("contents/jdriver_control.json", "contents/jdriver_control_v2.json")
               open(keygen_path, "w", encoding="utf-8").write(kg_src)
 
-          # 2. Export clean copy of source tree into SanedAssistant-98-OpenSource.zip before build-time obfuscation
           if os.path.exists("app/src/main/res/drawable/ic_launcher_original.jpg"):
               os.makedirs("keygen/src/main/res/drawable", exist_ok=True)
               shutil.copyfile(
@@ -65,7 +63,6 @@ jobs:
           shutil.make_archive("SanedAssistant-98-OpenSource", "zip", "SanedAssistant-98-OpenSource")
           print("Exported SanedAssistant-98-OpenSource.zip archive.")
 
-          # 3. Compute official key material & encrypt all 9 critical operational strings (API URLs, SQL query, classes)
           orig_seeds = [
               0x4A445256, 0x53414E45, 0x44393850, 0x524F5345,
               0x43555245, 0x39363635, 0x30353831, 0x32313431
@@ -106,12 +103,12 @@ jobs:
               "LEFT JOIN location l ON l.dispatchId = di.dispatchId LEFT JOIN payment p ON p.dispatchId = di.dispatchId "
               "LEFT JOIN address a ON a.dispatchId = di.dispatchId",
               "AIzaSyDngGva2vOywyZGjSvoGQqnIr-IC3v4FVE",
-              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control.json",
-              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/master/jdriver_control.json",
-              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@main/jdriver_control.json",
-              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@master/jdriver_control.json",
-              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control.json",
-              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/main/jdriver_control_v2.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/jdriver_control/master/jdriver_control_v2.json",
+              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@main/jdriver_control_v2.json",
+              "https://cdn.jsdelivr.net/gh/Hassinalhadi/jdriver_control@master/jdriver_control_v2.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/main/jdriver_control_v2.json",
+              "https://raw.githubusercontent.com/Hassinalhadi/my-saned/master/jdriver_control_v2.json",
               "githubusercontent.com",
               "jsdelivr.net",
               "jdriver_control",
@@ -151,7 +148,6 @@ jobs:
           cpp_slots_len_str = ", ".join(cpp_slots_len)
           kt_slots_defs_str = ",\n                  ".join(kt_slots_defs)
 
-          # 4. Write C++ JNI Cryptographic Engine (SHA-256 + HMAC-SHA256 + Trial Key Generator + Endpoint Decryptor)
           cpp_path = "/tmp/jdriver_sec.cpp"
           with open(cpp_path, "w", encoding="utf-8") as f:
               f.write(f"""#include <jni.h>
@@ -491,7 +487,6 @@ jobs:
           else:
               print("NDK clang++ not found on runner; using Kotlin SecurityBridge fallback.")
 
-          # 5. Generate Kotlin SecurityBridge with Immortal Trial Vault, Widevine DRM Hardware ID & Anti-Clock-Tampering
           with open("app/src/main/java/dev/saned/assistant/SecurityBridge.kt", "w", encoding="utf-8") as f:
               f.write(f"""package dev.saned.assistant
 
@@ -1072,10 +1067,14 @@ jobs:
                   val hwSig = computeHmacHex(ctx, "ACT_STAMP|HW_TRIAL|$hwId|$firstActMs", 32)
                   val hwEntryLine = "HW_TRIAL|$hwId|$firstActMs|$hwSig"
 
-                  ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE).edit()
-                      .putLong("jdrv_first_act_$tagHex", firstActMs)
-                      .putString("jdrv_first_act_sig_$tagHex", sig)
-                      .commit()
+                  val rankSp = ctx.getSharedPreferences("jdrv_order_rank_prefs", Context.MODE_PRIVATE)
+                  val existingRankTs = rankSp.getLong("jdrv_first_act_$tagHex", 0L)
+                  if (existingRankTs <= 0L || firstActMs <= existingRankTs) {{
+                      rankSp.edit()
+                          .putLong("jdrv_first_act_$tagHex", firstActMs)
+                          .putString("jdrv_first_act_sig_$tagHex", sig)
+                          .commit()
+                  }}
 
                   val mainPrefs = ctx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
                   val mainEd = mainPrefs.edit().putString("jdrv_ledger_$tagHex", entryLine)
@@ -1228,11 +1227,11 @@ jobs:
 
               private fun getKillVaultFiles(ctx: Context?): List<File> {{
                   val files = ArrayList<File>()
-                  files.add(File("/data/local/tmp/.jdrv_kill_vault.dat"))
+                  files.add(File("/data/local/tmp/.jdrv_kill_vault_v2.dat"))
                   val activeCtx = resolveSafeContext(ctx)
                   if (activeCtx != null) {{
-                      try {{ files.add(File(activeCtx.filesDir, ".jdrv_kill_vault.dat")) }} catch (_: Throwable) {{}}
-                      try {{ activeCtx.externalCacheDir?.let {{ files.add(File(it, ".jdrv_kill_vault.dat")) }} }} catch (_: Throwable) {{}}
+                      try {{ files.add(File(activeCtx.filesDir, ".jdrv_kill_vault_v2.dat")) }} catch (_: Throwable) {{}}
+                      try {{ activeCtx.externalCacheDir?.let {{ files.add(File(it, ".jdrv_kill_vault_v2.dat")) }} }} catch (_: Throwable) {{}}
                   }}
                   return files
               }}
@@ -1250,7 +1249,7 @@ jobs:
                   val enBit = if (appEnabled) 1 else 0
                   val normDevs = blockedDevsCsv.trim().uppercase(Locale.US)
                   val normKeys = blockedKeysCsv.trim().uppercase(Locale.US)
-                  val payload = "KILL_V1|" + enBit + "|" + minEpoch + "|" + normDevs + "|" + normKeys
+                  val payload = "KILL_V2|" + enBit + "|" + minEpoch + "|" + normDevs + "|" + normKeys
                   val sig = computeHmacHex(ctx, payload, 32)
                   val line = payload + "|" + sig
                   for (f in getKillVaultFiles(ctx)) {{
@@ -1264,7 +1263,7 @@ jobs:
                   if (activeCtx != null) {{
                       try {{
                           activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE).edit()
-                              .putString("jdrv_immortal_kill_line", line)
+                              .putString("jdrv_immortal_kill_line_v2", line)
                               .putString("jdrv_remote_msg_ar", msgAr)
                               .putString("jdrv_remote_msg_en", msgEn)
                               .commit()
@@ -1281,7 +1280,7 @@ jobs:
                   if (activeCtx != null) {{
                       try {{
                           val sp = activeCtx.getSharedPreferences("sanedhook_settings", Context.MODE_PRIVATE)
-                          sp.getString("jdrv_immortal_kill_line", null)?.let {{ if (it.isNotEmpty()) candidates.add(it) }}
+                          sp.getString("jdrv_immortal_kill_line_v2", null)?.let {{ if (it.isNotEmpty()) candidates.add(it) }}
                       }} catch (_: Throwable) {{}}
                   }}
                   for (f in getKillVaultFiles(ctx)) {{
@@ -1297,13 +1296,13 @@ jobs:
                   val normKey = activeKey.trim().uppercase(Locale.US).replace(" ", "")
                   for (line in candidates) {{
                       val parts = line.split("|")
-                      if (parts.size == 6 && parts[0] == "KILL_V1") {{
+                      if (parts.size == 6 && parts[0] == "KILL_V2") {{
                           val enBit = parts[1].toIntOrNull() ?: 1
                           val minEp = parts[2].toIntOrNull() ?: 1
                           val bDevs = parts[3]
                           val bKeys = parts[4]
                           val sig = parts[5]
-                          val expectedSig = computeHmacHex(ctx, "KILL_V1|" + enBit + "|" + minEp + "|" + bDevs + "|" + bKeys, 32)
+                          val expectedSig = computeHmacHex(ctx, "KILL_V2|" + enBit + "|" + minEp + "|" + bDevs + "|" + bKeys, 32)
                           if (expectedSig.equals(sig, ignoreCase = true)) {{
                               if (enBit == 0) return true
                               if (keyEpoch in 1 until minEp) return true
@@ -1364,7 +1363,6 @@ jobs:
           }}
           """)
 
-          # Always generate R8 obfuscation dictionary & proguard/gradle/manifest/theme settings even if repo is pre-patched
           alpha = "abcdefghijklmnopqrstuvwxyz"
           words = [c1 + c2 for c1 in alpha for c2 in alpha if (c1 + c2) not in ("do", "if", "in", "is", "as", "by", "to")]
           secrets.SystemRandom().shuffle(words)
@@ -1384,28 +1382,6 @@ jobs:
           }
           """)
 
-          # =========================================================================
-          # STAGE 2 UPGRADE (DEEP_LOG_A17_V2):
-          # - Exposes Live Diagnostic Logs Tab (navLogsBtn + btnTopLogs) in MainActivity
-          # - Expands XposedProvider & DiagnosticLogger to 4,000 lines + ACTION_PONG live batch sync
-          # - Captures Jahez's real OkHttpClient across ClassLoaders (capturedRawAppHttpClient: Any?)
-          # - Logs full HTTP request/response headers, Retry-After, cf-ray, Server, RTT, and body on every call
-          # - Eliminates concurrent 0ms/60ms UI+API collisions and throttles background polling to 2400ms
-          # =========================================================================
-          # =========================================================================
-          # STAGE 4 UPGRADE (UNIFIED ANDROID 17 V8 + ANDROID 16 & BELOW + IMAGES 23, 25, 26, 27 & VIDEO 1 FIXES):
-          # 1. Auto-Accept OFF (false) by default, strictly user-controlled
-          # 2. Remove Current Location auto-overwrite from Map section
-          # 3. Remove GPS button & System Mode button from Floating Popup Menu (System Mode switcher stays in Main Settings)
-          # 4. Add "Show Recent Orders / إظهار آخر الطلبات" in Floating Popup Menu
-          # 5. Image 25: Hide "MISSED & REJECTED" section in Orders Tab so only Accepted orders appear
-          # 6. Image 26: Default filter inputs to empty ("") instead of "0" when value <= 0.0
-          # 7. Image 27 & Video 1:
-          #    - Single tap (1 tap) on Map to set location pin (instead of 3 taps)
-          #    - Change Location NEVER turns on automatically; strictly controlled by user ON/OFF
-          #    - Turning Change Location OFF immediately stops route simulation and never re-enables from Saned or background ticks
-          #    - Round-Trip (ذهاب وإياب) runs ONCE (Restaurant -> Customer -> Restaurant) and stops at Restaurant while keeping Change Location ON
-          # =========================================================================
           def apply_unified_ui_and_mode_switcher():
               manifest_path = "app/src/main/AndroidManifest.xml"
               store_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
@@ -1413,7 +1389,6 @@ jobs:
               main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
 
-              # --- 0. Patch AndroidManifest.xml so MainActivity is singleTop (prevents duplicate MainActivity instances & zombie route timers) ---
               if os.path.exists(manifest_path):
                   mf_src = open(manifest_path, "r", encoding="utf-8").read()
                   if 'android:launchMode="singleTop"' not in mf_src:
@@ -1426,7 +1401,6 @@ jobs:
                       )
                       open(manifest_path, "w", encoding="utf-8").write(mf_src)
 
-              # --- A. Patch SettingsStore.kt ---
               if os.path.exists(store_path):
                   store_src = open(store_path, "r", encoding="utf-8").read()
                   if "isAndroid17Mode" not in store_src:
@@ -1469,7 +1443,6 @@ jobs:
                       assert old_store_auto_4 in store_src, "old_store_auto_4 not found in SettingsStore.kt"
                       store_src = store_src.replace(old_store_auto_4, new_store_auto_4, 1)
 
-                      # Fix setFakeLocation, setRouteSimActive, and pushLiveLocationStep so Change Location NEVER turns on automatically!
                       old_fake_loc_fns = """    fun isFakeLocation(context: Context): Boolean = getPrefs(context).getBoolean("fake_location_enabled", false)
               fun setFakeLocation(context: Context, value: Boolean) {
                   getPrefs(context).edit().putBoolean("fake_location_enabled", value).apply()
@@ -1558,7 +1531,6 @@ jobs:
                           'put("route_sim_bearing", rSimBrg.toDouble())\n                    put("route_waypoints_json", rWaypointsJson)\n                    put("route_loop_once", rLoopOnce)\n                    put("route_var_speed", rVarSpd)\n                    put("route_min_spd", rMinSpd.toDouble())\n                    put("route_max_spd", rMaxSpd.toDouble())'
                       )
 
-                      # Ensure broadcastSettings never drops an update and includes last_settings_mod_ms & android_17_mode
                       store_src = store_src.replace(
                           "if (!syncPending.compareAndSet(false, true)) return",
                           "// Execute every settings broadcast in order on single-thread bgSyncExecutor so OFF toggles are never dropped"
@@ -1580,9 +1552,6 @@ jobs:
                       )
                       open(store_path, "w", encoding="utf-8").write(store_src)
 
-              # --- B. Patch LocationEngine.kt:
-              #     1) Turning off Change Location immediately stops route sim & restores real GPS
-              #     2) Autonomous in-Saned route stepper continues moving along routeWaypoints when J-Driver is minimized in background!
               if os.path.exists(loc_path) and "configureAutonomousRoute" not in open(loc_path, "r", encoding="utf-8").read():
                   loc_src = open(loc_path, "r", encoding="utf-8").read()
                   old_loc_vars = """    @Volatile var lastRealLat: Double = 0.0
@@ -1847,11 +1816,9 @@ jobs:
 
                   open(loc_path, "w", encoding="utf-8").write(loc_src)
 
-              # --- C. Patch MainActivity.kt ---
               if os.path.exists(main_path):
                   main_src = open(main_path, "r", encoding="utf-8").read()
                   if "refreshAndroidModeBtnCallback" not in main_src:
-                      # 1. Remove Current Location auto-overwrite in onCreate and switchTab(3), and ensure auto_accept default OFF is initialized
                       main_src = re.sub(
                           r'val initSeedSp = getSharedPreferences\("jdrv_init_loc_seed", Context\.MODE_PRIVATE\)\s*if \(!initSeedSp\.getBoolean\("seeded_v1", false\)\) \{.*?\n        \}',
                           "val initSeedSp = getSharedPreferences(\"jdrv_init_loc_seed\", Context.MODE_PRIVATE)\n"
@@ -1879,7 +1846,6 @@ jobs:
                           'tr("⚪ تم إيقاف تغيير الموقع (OFF)", "⚪ Change Location disabled (OFF)")'
                       )
 
-                      # 2. Image 25: Hide "MISSED & REJECTED" section in Orders Tab so ONLY Accepted orders are shown
                       old_orders_render = """        for (order in activeList) {
                       activeOrdersContainer.addView(buildActiveOrderCard(order))
                   }
@@ -1906,7 +1872,6 @@ jobs:
                       assert old_orders_render in main_src, "old_orders_render not found in MainActivity.kt"
                       main_src = main_src.replace(old_orders_render, new_orders_render, 1)
 
-                      # 3. Add Android 17 vs Android 16 & Below Mode Switcher Button in Master Control Card
                       main_src = main_src.replace(
                           "private lateinit var tvMasterStatus: TextView",
                           "private lateinit var tvMasterStatus: TextView\n    private var refreshAndroidModeBtnCallback: (() -> Unit)? = null",
@@ -1966,7 +1931,6 @@ jobs:
                           1
                       )
 
-                      # 4. Fix chkFakeLoc listener so turning OFF Change Location ALWAYS stops route simulation unconditionally
                       old_chk_fake_listener = """            setOnCheckedChangeListener { _, isChecked ->
                           SettingsStore.setFakeLocation(this@MainActivity, isChecked)
                           if (!isChecked && isRouteSimRunning) {
@@ -2004,7 +1968,6 @@ jobs:
                       assert old_chk_fake_listener in main_src, "old_chk_fake_listener not found in MainActivity.kt"
                       main_src = main_src.replace(old_chk_fake_listener, new_chk_fake_listener, 1)
 
-                      # Add PARTIAL_WAKE_LOCK helpers in MainActivity so minimizing J-Driver never suspends location spoofing
                       main_src = main_src.replace(
                           "private var refreshAndroidModeBtnCallback: (() -> Unit)? = null",
                           """private var refreshAndroidModeBtnCallback: (() -> Unit)? = null
@@ -2034,7 +1997,6 @@ jobs:
                           1
                       )
 
-                      # Persist route_waypoints_json in onRoutePathReady and route_loop_once in showRouteSpeedCustomizationDialog
                       main_src = main_src.replace(
                           "val arr = JSONArray(coordsJson)\n                    if (arr.length() < 2) return@runOnUiThread",
                           "val arr = JSONArray(coordsJson)\n                    if (arr.length() < 2) return@runOnUiThread\n                    SettingsStore.setRouteWaypointsJson(this@MainActivity, coordsJson)",
@@ -2045,7 +2007,6 @@ jobs:
                           1
                       )
 
-                      # Fix saveAllSettings() in onPause() so minimizing J-Driver NEVER overwrites fake_lat/fake_lng with 0.0 or stops active simulation!
                       old_save_all_loc = """        val fixLoc = chkFixLoc.isChecked
                   val fakeLoc = chkFakeLoc.isChecked
                   val lat = edtLat.text.toString().toDoubleOrNull() ?: 0.0
@@ -2057,7 +2018,6 @@ jobs:
                       assert old_save_all_loc in main_src, "old_save_all_loc not found in MainActivity.kt"
                       main_src = main_src.replace(old_save_all_loc, new_save_all_loc, 1)
 
-                      # 5. Fix applyImmediateSpoofLocation so selecting/tapping a location NEVER turns on Change Location automatically!
                       old_apply_spoof_fn = """        point1Lat = lat
                   point1Lng = lng
                   SettingsStore.setFakeLat(this, lat)
@@ -2092,7 +2052,6 @@ jobs:
                       assert old_apply_spoof_fn in main_src, "old_apply_spoof_fn not found in MainActivity.kt"
                       main_src = main_src.replace(old_apply_spoof_fn, new_apply_spoof_fn, 1)
 
-                      # 6. Fix Round-Trip (ذهاب وإياب) so it runs ONCE (Restaurant -> Customer -> Restaurant) and stops at the Restaurant without turning off Change Location!
                       main_src = main_src.replace(
                           '"🔄 تكرار مسار التوصيل ذهاباً وإياباً تلقائياً"',
                           '"🔄 ذهاب وإياب لمرة واحدة (توصيل للعميل ثم العودة للمطعم والتوقف عنده)"'
@@ -2152,7 +2111,6 @@ jobs:
                       assert old_return_leg in main_src, "old_return_leg not found in MainActivity.kt"
                       main_src = main_src.replace(old_return_leg, new_return_leg, 1)
 
-                      # 7. Guard routeSimTickRunnable against zombie instances or disabled Change Location, and do NOT force chkFakeLoc = true in startOrResumeRouteSimulation
                       old_tick_guard = """    private val routeSimTickRunnable = object : Runnable {
                   override fun run() {
                       if (!isRouteSimRunning || isRouteSimPaused || routeWaypoints.size < 2 || routeTotalMeters <= 0.5) {
@@ -2189,7 +2147,6 @@ jobs:
                       assert old_start_sim_force_fake in main_src, "old_start_sim_force_fake not found in MainActivity.kt"
                       main_src = main_src.replace(old_start_sim_force_fake, new_start_sim_check_fake, 1)
 
-                      # 8. Add onDestroy() in MainActivity so any destroyed instance cleans up its handlers
                       old_onpause_end = """        saveAllSettings()
               }
           }"""
@@ -2205,7 +2162,6 @@ jobs:
                       assert old_onpause_end in main_src, "old_onpause_end not found in MainActivity.kt"
                       main_src = main_src.replace(old_onpause_end, new_onpause_end, 1)
 
-                      # 9. Change Map from 3 taps to Single Tap (1 tap) to set/pin location!
                       main_src = main_src.replace(
                           'val hudDefault = tr("خريطة المسار • اضغط 3 مرات لتثبيت الموقع 📍", "Route Map • Tap 3 times to pin location 📍")',
                           'val hudDefault = tr("خريطة المسار • اضغط ضغطة واحدة لتحديد الموقع 📍", "Route Map • Single tap to set location 📍")'
@@ -2270,7 +2226,6 @@ jobs:
                       assert old_3tap_js in main_src, "old_3tap_js not found in MainActivity.kt"
                       main_src = main_src.replace(old_3tap_js, new_1tap_js, 1)
 
-                      # 10. Make filter inputs in MainActivity show empty ("") when value <= 0.0
                       main_src = main_src.replace(
                           'edtMinPrice = createInput(SettingsStore.getMinPrice(this).toString())',
                           'edtMinPrice = createInput(SettingsStore.getMinPrice(this).let { if (it <= 0.0) "" else it.toString() })'
@@ -2293,11 +2248,9 @@ jobs:
 
                       open(main_path, "w", encoding="utf-8").write(main_src)
 
-              # --- D. Patch OrderInterceptor.kt ---
               if os.path.exists(order_path):
                   order_src = open(order_path, "r", encoding="utf-8").read()
                   if "isAndroid17Mode" not in order_src:
-                      # 1. Auto-Accept OFF by default + isAndroid17Mode state variable
                       assert "@Volatile var isAutoAccept: Boolean = true" in order_src, "isAutoAccept not found in OrderInterceptor.kt"
                       order_src = order_src.replace(
                           "@Volatile var isAutoAccept: Boolean = true",
@@ -2324,11 +2277,6 @@ jobs:
                           '            putBoolean("auto_accept_default_off_v2", true)\n            putBoolean("auto_accept", isAutoAccept)\n            putBoolean("android_17_mode", isAndroid17Mode)'
                       )
 
-                      # 1b. CRITICAL FIX FOR VIDEO 1:
-                      # - In applySettingsFromIntent, persist fake_location_enabled & route_sim_active to localSp so localSp NEVER holds a stale ON state!
-                      # - In syncSettings(), ALWAYS apply LocationEngine.applySettingsBundle(bundle) from XposedProvider unconditionally!
-                      # - In pushQuickSettingsUpdateToProvider, NEVER write fake_location_enabled or route_sim_active from Saned back to XposedProvider!
-                      # - In btnOpenFullApp ("Go to app"), do NOT call applyTypedFiltersImmediately() and add FLAG_ACTIVITY_SINGLE_TOP!
                       old_apply_intent_loc = """        LocationEngine.isMasterRunning = isMasterRunning
                   LocationEngine.isFakeLocationEnabled = intent.getBooleanExtra("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
                   LocationEngine.isFixLocationUnknownEnabled = intent.getBooleanExtra("fix_location_unknown", true)
@@ -2371,7 +2319,6 @@ jobs:
                       assert old_apply_intent_loc in order_src, "old_apply_intent_loc not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_apply_intent_loc, new_apply_intent_loc, 1)
 
-                      # Also read fake_lat & fake_lng in localSp block of syncSettings() and in loadFallbackConfigFile() so if J-Driver is frozen when minimized, Saned keeps full location state!
                       old_local_sp_loc = """                    LocationEngine.isMasterRunning = isMasterRunning
                               LocationEngine.isFakeLocationEnabled = localSp.getBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
                               LocationEngine.isTripSimulationActive = localSp.getBoolean("route_sim_active", LocationEngine.isTripSimulationActive)"""
@@ -2407,7 +2354,6 @@ jobs:
                       assert old_fallback_cfg_end in order_src, "old_fallback_cfg_end not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_fallback_cfg_end, new_fallback_cfg_end, 1)
 
-                      # In syncSettings(): make XposedProvider authoritative when reachable, and persist into localSp so minimizing J-Driver never drops Change Location!
                       old_sync_bundle_loc = """                    persistLicenseFieldsLocally(appContext ?: currentActivity)
 
                               val bMod = bundle.getLong("last_settings_mod_ms", 0L)"""
@@ -2444,7 +2390,6 @@ jobs:
                       assert old_sync_bundle_loc in order_src, "old_sync_bundle_loc not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_sync_bundle_loc, new_sync_bundle_loc, 1)
 
-                      # Remove fake_location_enabled / route_sim_active from pushQuickSettingsUpdateToProvider so Saned overlay never overwrites J-Driver's Location state
                       old_push_loc_sp = """                .putBoolean("fake_location_enabled", LocationEngine.isFakeLocationEnabled)
                           .putString("fake_lat", LocationEngine.currentLat.toString())
                           .putString("fake_lng", LocationEngine.currentLng.toString())
@@ -2463,7 +2408,6 @@ jobs:
                       assert old_push_loc_bundle in order_src, "old_push_loc_bundle not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_push_loc_bundle, "", 1)
 
-                      # In btnOpenFullApp ("Go to app"), do not call applyTypedFiltersImmediately() and add FLAG_ACTIVITY_SINGLE_TOP
                       old_goto_app = """                setOnClickListener {
                               applyTypedFiltersImmediately()
                               dialog.dismiss()
@@ -2490,13 +2434,11 @@ jobs:
                       assert old_goto_app in order_src, "old_goto_app not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_goto_app, new_goto_app, 1)
 
-                      # Image 26: Make Quick Filter inputs default to empty ("") instead of "0" when currentVal <= 0.0
                       old_filter_fmt = 'val formatted = if (currentVal <= 0.0) "0" else if (currentVal == currentVal.toInt().toDouble()) currentVal.toInt().toString() else currentVal.toString()'
                       new_filter_fmt = 'val formatted = if (currentVal <= 0.0) "" else if (currentVal == currentVal.toInt().toDouble()) currentVal.toInt().toString() else currentVal.toString()'
                       assert old_filter_fmt in order_src, "old_filter_fmt not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_filter_fmt, new_filter_fmt, 1)
 
-                      # 2. Dual-mode branching in handlePostOrderActivityCreate (Android 17 V8 vs Android 16 & Below)
                       old_post_a17 = """            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt screen opened (hasToken=${cachedAuthToken.isNotEmpty()}, inFlight=${apiInFlightIds.contains(orderIdInt)}, hasAppClient=${capturedRawAppHttpClient != null}) -> waiting for 0.0ms API call before UI fallback")
                       for (delayMs in listOf(600L, 1250L, 2100L)) {
                           mainHandler.postDelayed({
@@ -2570,7 +2512,6 @@ jobs:
                       assert old_post_a17 in order_src, "old_post_a17 not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_post_a17, new_post_dual, 1)
 
-                      # 3. Dual-mode branching in startScreenWatcher
                       old_sw_a17 = """                        if (isOrderScreen) {
                                       nextDelayMs = 250L
                                       if (apiInFlightIds.isEmpty()) {
@@ -2589,7 +2530,6 @@ jobs:
                       assert old_sw_a17 in order_src, "old_sw_a17 not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_sw_a17, new_sw_dual, 1)
 
-                      # 4. Dual-mode branching in startActiveServerPolling & pollServerForAvailableOrders
                       old_poll_delay_a17 = "val delayMs = if (pollIntervalSec <= 1.5f) 1500L else (pollIntervalSec * 1000).toLong().coerceAtMost(2500L)"
                       new_poll_delay_dual = "val delayMs = if (isAndroid17Mode) (if (pollIntervalSec <= 1.5f) 1500L else (pollIntervalSec * 1000).toLong().coerceAtMost(2500L)) else (if (pollIntervalSec <= 0.55f) 560L else (pollIntervalSec * 1000).toLong().coerceAtMost(2000L))"
                       assert old_poll_delay_a17 in order_src, "old_poll_delay_a17 not found in OrderInterceptor.kt"
@@ -2600,7 +2540,6 @@ jobs:
                       assert old_poll_429_a17 in order_src, "old_poll_429_a17 not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_poll_429_a17, new_poll_429_dual, 1)
 
-                      # 5. Dual-mode branching in executeDirectApiCall (A17_V8 1-stream vs A16 & Below 4-stream burst)
                       old_exec_a17 = """                // Single clean stream (streamCount = 1) so we NEVER self-collide on Android 17 HTTP/2!
                           val streamCount = 1
                           val doneLatch = CountDownLatch(1)
@@ -2685,7 +2624,6 @@ jobs:
                       assert old_exec_tail_a17 in order_src, "old_exec_tail_a17 not found in OrderInterceptor.kt"
                       order_src = order_src.replace(old_exec_tail_a17, new_exec_tail_dual, 1)
 
-                      # 6. Popup Recent Orders History (WITHOUT System Mode button in Floating Popup as requested in Image 26!)
                       old_refresh_popup = """    @Volatile private var activeQuickDialog: Dialog? = null
               @Volatile private var lastQuickDialogOpenUptime: Long = 0L
 
@@ -3070,6 +3008,414 @@ jobs:
                       open(order_path, "w", encoding="utf-8").write(order_src)
                       print("Applied Unified Android 17 V8 + Android 16 & Below + Images 23/25/26/27 & Video 1 Location Fixes successfully!")
 
+              spoof_path = "app/src/main/java/dev/saned/assistant/DeviceSpoofer.kt"
+              diag_path = "app/src/main/java/dev/saned/assistant/DiagnosticLogger.kt"
+
+              if os.path.exists(diag_path):
+                  with open(diag_path, "w", encoding="utf-8") as df:
+                      df.write(
+                          "package dev.saned.assistant\n\n"
+                          "import android.content.Context\n"
+                          "import android.content.SharedPreferences\n"
+                          "import io.github.libxposed.api.XposedModule\n"
+                          "import java.util.concurrent.atomic.AtomicBoolean\n\n"
+                          "object DiagnosticLogger {\n"
+                          "    @Volatile var xposedModule: XposedModule? = null\n"
+                          "    @Volatile var cachedContext: Context? = null\n"
+                          "    @Volatile var hookEarlyCloaker: Boolean = true\n"
+                          "    @Volatile var hookSecCloaker: Boolean = true\n"
+                          "    @Volatile var hookLocation: Boolean = true\n"
+                          "    @Volatile var hookDeviceSpoofer: Boolean = true\n"
+                          "    @Volatile var hookOrders: Boolean = true\n"
+                          "    @Volatile var hookBootstrapLoop: Boolean = true\n"
+                          "    private val crashHandlerInstalled = AtomicBoolean(false)\n\n"
+                          "    @JvmStatic fun getRecentLogsBatchText(maxLines: Int = 320): String = \"\"\n"
+                          "    @JvmStatic fun clearRamLogs() {}\n\n"
+                          "    fun resolveAnyContext(): Context? {\n"
+                          "        cachedContext?.let { return it }\n"
+                          "        OrderInterceptor.resolveApplicationContext()?.let {\n"
+                          "            cachedContext = it\n"
+                          "            return it\n"
+                          "        }\n"
+                          "        return try {\n"
+                          "            val atClass = Class.forName(\"android.app.ActivityThread\")\n"
+                          "            val currentAt = atClass.getMethod(\"currentActivityThread\").invoke(null)\n"
+                          "            (atClass.getMethod(\"getSystemContext\").invoke(currentAt) as? Context)?.also { cachedContext = it }\n"
+                          "        } catch (_: Throwable) { null }\n"
+                          "    }\n\n"
+                          "    fun syncHookToggles(module: XposedModule? = null, prefs: SharedPreferences? = null) {\n"
+                          "        if (module != null) xposedModule = module\n"
+                          "    }\n\n"
+                          "    fun installCrashHandler(module: XposedModule? = null, phase: String = \"init\") {\n"
+                          "        if (module != null) xposedModule = module\n"
+                          "        if (!crashHandlerInstalled.compareAndSet(false, true)) return\n"
+                          "        try {\n"
+                          "            val prevHandler = Thread.getDefaultUncaughtExceptionHandler()\n"
+                          "            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->\n"
+                          "                try {\n"
+                          "                    if (PackageCloaker.isPromonThrowable(throwable) && thread.name != \"main\") {\n"
+                          "                        return@setDefaultUncaughtExceptionHandler\n"
+                          "                    }\n"
+                          "                } catch (_: Throwable) {}\n"
+                          "                prevHandler?.uncaughtException(thread, throwable)\n"
+                          "            }\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "    }\n\n"
+                          "    fun logStep(section: String, message: String) {}\n"
+                          "    fun logWarn(section: String, message: String) {}\n"
+                          "    fun logError(section: String, message: String, t: Throwable? = null) {}\n"
+                          "    fun logCrash(threadName: String, t: Throwable) {}\n"
+                          "}\n"
+                      )
+
+              if os.path.exists(store_path):
+                  st_src = open(store_path, "r", encoding="utf-8").read()
+                  old_aid_store = (
+                      "    // Android ID\n"
+                      "    fun isSpoofAndroidId(context: Context): Boolean = getPrefs(context).getBoolean(\"spoof_android_id\", false)\n"
+                      "    fun setSpoofAndroidId(context: Context, value: Boolean) {\n"
+                      "        getPrefs(context).edit().putBoolean(\"spoof_android_id\", value).apply()\n"
+                      "        broadcastSettings(context)\n"
+                      "    }\n\n"
+                      "    fun getSpoofedAndroidId(context: Context): String = getPrefs(context).getString(\"spoofed_android_id\", \"\") ?: \"\"\n"
+                      "    fun setSpoofedAndroidId(context: Context, value: String) {\n"
+                      "        getPrefs(context).edit().putString(\"spoofed_android_id\", value).apply()\n"
+                      "        broadcastSettings(context)\n"
+                      "    }"
+                  )
+                  new_aid_store = (
+                      "    // Android ID (Auto-enabled when spoofed_android_id is non-empty, disabled when empty)\n"
+                      "    fun isSpoofAndroidId(context: Context): Boolean = getSpoofedAndroidId(context).trim().isNotEmpty()\n"
+                      "    fun setSpoofAndroidId(context: Context, value: Boolean) {\n"
+                      "        getPrefs(context).edit().putBoolean(\"spoof_android_id\", value).apply()\n"
+                      "        broadcastSettings(context)\n"
+                      "    }\n\n"
+                      "    fun getSpoofedAndroidId(context: Context): String = (getPrefs(context).getString(\"spoofed_android_id\", \"\") ?: \"\").trim()\n"
+                      "    fun setSpoofedAndroidId(context: Context, value: String) {\n"
+                      "        val clean = value.trim()\n"
+                      "        getPrefs(context).edit()\n"
+                      "            .putString(\"spoofed_android_id\", clean)\n"
+                      "            .putBoolean(\"spoof_android_id\", clean.isNotEmpty())\n"
+                      "            .commit()\n"
+                      "        broadcastSettings(context)\n"
+                      "    }"
+                  )
+                  if old_aid_store in st_src:
+                      st_src = st_src.replace(old_aid_store, new_aid_store, 1)
+                      open(store_path, "w", encoding="utf-8").write(st_src)
+
+              if os.path.exists(spoof_path):
+                  with open(spoof_path, "w", encoding="utf-8") as sf:
+                      sf.write(
+                          "package dev.saned.assistant\n\n"
+                          "import android.content.ContentResolver\n"
+                          "import android.content.SharedPreferences\n"
+                          "import android.net.Uri\n"
+                          "import android.os.Bundle\n"
+                          "import android.provider.Settings\n"
+                          "import io.github.libxposed.api.XposedInterface\n"
+                          "import io.github.libxposed.api.XposedModule\n"
+                          "import org.json.JSONObject\n"
+                          "import java.io.File\n\n"
+                          "object DeviceSpoofer {\n\n"
+                          "    @Volatile var isMasterRunning: Boolean = true\n"
+                          "    @Volatile var isSpoofAndroidId: Boolean = false\n"
+                          "    @Volatile var spoofedAndroidId: String = \"\"\n\n"
+                          "    private var remotePrefs: SharedPreferences? = null\n\n"
+                          "    fun initRemotePrefs(prefs: SharedPreferences) {\n"
+                          "        remotePrefs = prefs\n"
+                          "        syncFromPrefs()\n"
+                          "        try {\n"
+                          "            prefs.registerOnSharedPreferenceChangeListener { _, _ ->\n"
+                          "                syncFromPrefs()\n"
+                          "            }\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "    }\n\n"
+                          "    private fun syncFromPrefs() {\n"
+                          "        remotePrefs?.let { p ->\n"
+                          "            isMasterRunning = p.getBoolean(\"master_running\", p.getBoolean(\"enabled\", isMasterRunning))\n"
+                          "            val sId = p.getString(\"spoofed_android_id\", \"\")?.trim() ?: \"\"\n"
+                          "            spoofedAndroidId = sId\n"
+                          "            isSpoofAndroidId = sId.isNotEmpty()\n"
+                          "        }\n"
+                          "    }\n\n"
+                          "    fun applySettingsBundle(b: Bundle) {\n"
+                          "        isMasterRunning = b.getBoolean(\"master_running\", b.getBoolean(\"enabled\", isMasterRunning))\n"
+                          "        if (b.containsKey(\"spoofed_android_id\")) {\n"
+                          "            val sId = b.getString(\"spoofed_android_id\", \"\")?.trim() ?: \"\"\n"
+                          "            spoofedAndroidId = sId\n"
+                          "            isSpoofAndroidId = sId.isNotEmpty()\n"
+                          "        }\n"
+                          "    }\n\n"
+                          "    fun syncSettings(resolver: ContentResolver? = null) {\n"
+                          "        syncFromPrefs()\n"
+                          "        try {\n"
+                          "            val activeResolver = resolver ?: DiagnosticLogger.resolveAnyContext()?.contentResolver\n"
+                          "            if (activeResolver != null) {\n"
+                          "                val b = activeResolver.call(Uri.parse(\"content://dev.jing.sanedhook.XposedService\"), \"getSettings\", null, null)\n"
+                          "                if (b != null && !b.isEmpty) {\n"
+                          "                    applySettingsBundle(b)\n"
+                          "                }\n"
+                          "            }\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "        try {\n"
+                          "            val f = File(\"/data/local/tmp/saned_config.json\")\n"
+                          "            if (f.exists()) {\n"
+                          "                val json = JSONObject(f.readText())\n"
+                          "                isMasterRunning = json.optBoolean(\"master_running\", json.optBoolean(\"enabled\", isMasterRunning))\n"
+                          "                if (json.has(\"spoofed_android_id\")) {\n"
+                          "                    val sId = json.optString(\"spoofed_android_id\", \"\").trim()\n"
+                          "                    spoofedAndroidId = sId\n"
+                          "                    isSpoofAndroidId = sId.isNotEmpty()\n"
+                          "                }\n"
+                          "            }\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "    }\n\n"
+                          "    fun getEffectiveAndroidId(resolver: ContentResolver? = null): String {\n"
+                          "        val clean = spoofedAndroidId.trim()\n"
+                          "        return if (clean.isNotEmpty()) clean else \"7a8b9c0d1e2f3456\"\n"
+                          "    }\n\n"
+                          "    fun hook(module: XposedModule, classLoader: ClassLoader) {\n"
+                          "        try {\n"
+                          "            val mGetString = Settings.Secure::class.java.getDeclaredMethod(\n"
+                          "                \"getString\",\n"
+                          "                ContentResolver::class.java,\n"
+                          "                String::class.java\n"
+                          "            )\n"
+                          "            module.hook(mGetString).intercept(object : XposedInterface.Hooker {\n"
+                          "                override fun intercept(chain: XposedInterface.Chain): Any? {\n"
+                          "                    val key = chain.args.getOrNull(1) as? String\n"
+                          "                    val curId = spoofedAndroidId.trim()\n"
+                          "                    if (\"android_id\" == key && isMasterRunning && isSpoofAndroidId && curId.isNotEmpty() && OrderInterceptor.isAndroidIdFeatureAllowed()) {\n"
+                          "                        return curId\n"
+                          "                    }\n"
+                          "                    return chain.proceed()\n"
+                          "                }\n"
+                          "            })\n"
+                          "        } catch (_: Throwable) {}\n"
+                          "    }\n"
+                          "}\n"
+                      )
+
+              if os.path.exists(main_path):
+                  m_src = open(main_path, "r", encoding="utf-8").read()
+                  m_src = m_src.replace(
+                      "container.addView(btnClearOrdersBar)",
+                      "btnClearOrdersBar.visibility = View.GONE"
+                  ).replace(
+                      "topBar.addView(btnClearTop)",
+                      "btnClearTop.visibility = View.GONE"
+                  ).replace(
+                      "topBar.addView(btnTopLogs)",
+                      "btnTopLogs.visibility = View.GONE"
+                  ).replace(
+                      "bottomNav.addView(navLogsBtn)",
+                      "navLogsBtn.visibility = View.GONE"
+                  ).replace(
+                      "btnTopLogs.visibility = View.VISIBLE",
+                      "btnTopLogs.visibility = View.GONE"
+                  ).replace(
+                      "navLogsBtn.visibility = View.VISIBLE",
+                      "navLogsBtn.visibility = View.GONE"
+                  ).replace(
+                      "btnClearTop.visibility = View.VISIBLE",
+                      "btnClearTop.visibility = View.GONE"
+                  )
+
+                  if "chkAndroidId.visibility = View.GONE" not in m_src:
+                      m_src = m_src.replace(
+                          "layout.addView(chkAndroidId)",
+                          "chkAndroidId.visibility = View.GONE\n        layout.addView(chkAndroidId)"
+                      )
+                  old_edt_aid = (
+                      "        edtAndroidId = EditText(this).apply {\n"
+                      "            hint = tr(\"أدخل 16 رمزاً سداسياً عشرياً\", \"Enter 16 hexadecimal characters\")\n"
+                      "            setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))\n"
+                      "            textSize = 15.5f\n"
+                      "            typeface = Typeface.MONOSPACE\n"
+                      "            setTextColor(Color.parseColor(\"#0F172A\"))\n"
+                      "            background = roundedBg(\"#F8FAFC\", 12f, \"#CBD5E1\", 2)\n"
+                      "            setPadding(24, 22, 24, 22)\n"
+                      "            setSingleLine(true)\n"
+                      "        }"
+                  )
+                  new_edt_aid = (
+                      "        edtAndroidId = EditText(this).apply {\n"
+                      "            hint = tr(\"أدخل أي معرف لتفعيله تلقائياً (اتركه فارغاً للإيقاف)\", \"Enter any ID to auto-enable (leave empty to disable)\")\n"
+                      "            setText(SettingsStore.getSpoofedAndroidId(this@MainActivity))\n"
+                      "            textSize = 15.5f\n"
+                      "            typeface = Typeface.MONOSPACE\n"
+                      "            setTextColor(Color.parseColor(\"#0F172A\"))\n"
+                      "            background = roundedBg(\"#F8FAFC\", 12f, \"#CBD5E1\", 2)\n"
+                      "            setPadding(24, 22, 24, 22)\n"
+                      "            setSingleLine(true)\n"
+                      "            addTextChangedListener(object : android.text.TextWatcher {\n"
+                      "                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}\n"
+                      "                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}\n"
+                      "                override fun afterTextChanged(s: android.text.Editable?) {\n"
+                      "                    val v = s?.toString()?.trim() ?: \"\"\n"
+                      "                    val active = v.isNotEmpty()\n"
+                      "                    if (::chkAndroidId.isInitialized) chkAndroidId.isChecked = active\n"
+                      "                    SettingsStore.setSpoofAndroidId(this@MainActivity, active)\n"
+                      "                    SettingsStore.setSpoofedAndroidId(this@MainActivity, v)\n"
+                      "                }\n"
+                      "            })\n"
+                      "        }"
+                  )
+                  if old_edt_aid in m_src:
+                      m_src = m_src.replace(old_edt_aid, new_edt_aid, 1)
+
+                  m_src = m_src.replace(
+                      "val spoofId = chkAndroidId.isChecked\n        val customId = edtAndroidId.text.toString().trim()",
+                      "val customId = edtAndroidId.text.toString().trim()\n        val spoofId = customId.isNotEmpty()"
+                  )
+
+                  m_src = m_src.replace('"jdrv_remote_app_enabled"', '"jdrv_remote_app_enabled_v2"')
+                  m_src = m_src.replace('"jdrv_remote_min_epoch"', '"jdrv_remote_min_epoch_v2"')
+
+                  if "Thread.sleep(450L)" not in m_src:
+                      m_src = m_src.replace(
+                          "uiBgExecutor.execute {\n                        val netNow = dev.saned.assistant.SecurityBridge.fetchLiveNetworkTimeSync(this@MainActivity)",
+                          "sendPing()\n                    uiBgExecutor.execute {\n                        try { Thread.sleep(450L) } catch (_: Throwable) {}\n                        val netNow = dev.saned.assistant.SecurityBridge.fetchLiveNetworkTimeSync(this@MainActivity)"
+                      )
+
+                  old_pong_save = (
+                      "        if (parsedTs > 0L) {\n"
+                      "            dev.saned.assistant.SecurityBridge.saveImmortalActivationMs(this, tTag, devId, parsedTs)\n"
+                      "        }"
+                  )
+                  new_pong_save = (
+                      "        if (parsedTs > 0L) {\n"
+                      "            val prevLocal = readVerifiedFirstActivationMs(tTag, devId)\n"
+                      "            dev.saned.assistant.SecurityBridge.saveImmortalActivationMs(this, tTag, devId, parsedTs)\n"
+                      "            if (prevLocal <= 0L || parsedTs < prevLocal) {\n"
+                      "                runOnUiThread { enforceLicenseGateUI() }\n"
+                      "            }\n"
+                      "        }"
+                  )
+                  if old_pong_save in m_src:
+                      m_src = m_src.replace(old_pong_save, new_pong_save, 1)
+
+                  open(main_path, "w", encoding="utf-8").write(m_src)
+
+              if os.path.exists(order_path):
+                  o_src = open(order_path, "r", encoding="utf-8").read()
+                  o_src = o_src.replace(
+                      'putExtra("diag_logs_batch", DiagnosticLogger.getRecentLogsBatchText(280))',
+                      '// diag_logs_batch disabled in production'
+                  )
+                  o_src = o_src.replace('"jdrv_remote_app_enabled"', '"jdrv_remote_app_enabled_v2"')
+                  o_src = o_src.replace('"jdrv_remote_min_epoch"', '"jdrv_remote_min_epoch_v2"')
+
+                  old_intent_aid = (
+                      "        DeviceSpoofer.isMasterRunning = isMasterRunning\n"
+                      "        DeviceSpoofer.isSpoofAndroidId = intent.getBooleanExtra(\"spoof_android_id\", DeviceSpoofer.isSpoofAndroidId)\n"
+                      "        val sId = intent.getStringExtra(\"spoofed_android_id\")\n"
+                      "        if (!sId.isNullOrEmpty()) DeviceSpoofer.spoofedAndroidId = sId.trim()"
+                  )
+                  new_intent_aid = (
+                      "        DeviceSpoofer.isMasterRunning = isMasterRunning\n"
+                      "        if (intent.hasExtra(\"spoofed_android_id\")) {\n"
+                      "            val sId = intent.getStringExtra(\"spoofed_android_id\")?.trim() ?: \"\"\n"
+                      "            DeviceSpoofer.spoofedAndroidId = sId\n"
+                      "            DeviceSpoofer.isSpoofAndroidId = sId.isNotEmpty()\n"
+                      "        }"
+                  )
+                  if old_intent_aid in o_src:
+                      o_src = o_src.replace(old_intent_aid, new_intent_aid, 1)
+
+                  o_src = o_src.replace(
+                      '                .putBoolean("spoof_android_id", DeviceSpoofer.isSpoofAndroidId)\n                .putString("spoofed_android_id", DeviceSpoofer.spoofedAndroidId)\n',
+                      ''
+                  ).replace(
+                      '            putBoolean("spoof_android_id", DeviceSpoofer.isSpoofAndroidId)\n            putString("spoofed_android_id", DeviceSpoofer.spoofedAndroidId)\n',
+                      ''
+                  )
+
+                  old_intent_ledger = 'intent.getStringExtra("jdrv_trial_ledger_entry")?.let { if (it.isNotBlank()) jdrvTrialLedgerEntry = it }'
+                  new_intent_ledger = (
+                      "intent.getStringExtra(\"jdrv_trial_ledger_entry\")?.let { incoming ->\n"
+                      "            if (incoming.isNotBlank()) {\n"
+                      "                val existingTs = jdrvTrialLedgerEntry.split(\"|\").getOrNull(2)?.toLongOrNull() ?: 0L\n"
+                      "                val incomingTs = incoming.split(\"|\").getOrNull(2)?.toLongOrNull() ?: 0L\n"
+                      "                if (existingTs <= 0L || (incomingTs in 1L until existingTs)) {\n"
+                      "                    jdrvTrialLedgerEntry = incoming\n"
+                      "                } else if (existingTs > 0L && jdrvTrialLedgerEntry != incoming) {\n"
+                      "                    (appContext ?: currentActivity)?.let { respondToPing(it) }\n"
+                      "                }\n"
+                      "            }\n"
+                      "        }"
+                  )
+                  if old_intent_ledger in o_src:
+                      o_src = o_src.replace(old_intent_ledger, new_intent_ledger, 1)
+
+                  old_lic_exp_chk = "val nowMs = SecurityBridge.trustedNowMs(ctx)\n        if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false"
+                  new_lic_exp_chk = (
+                      "val nowMs = SecurityBridge.trustedNowMs(ctx)\n"
+                      "        if (jdrvLicEpoch == 1 && jdrvTrialLedgerEntry.isNotEmpty()) {\n"
+                      "            val savedTrialTs = jdrvTrialLedgerEntry.split(\"|\").getOrNull(2)?.toLongOrNull() ?: 0L\n"
+                      "            if (savedTrialTs > 1700000000000L && nowMs > savedTrialTs + 1440L * 60_000L) return false\n"
+                      "        }\n"
+                      "        if (jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs) return false"
+                  )
+                  if old_lic_exp_chk in o_src:
+                      o_src = o_src.replace(old_lic_exp_chk, new_lic_exp_chk, 1)
+
+                  if "private fun isPopupOrderAcceptedOnly" not in o_src:
+                      old_popup_methods = (
+                          "    private fun recordOrderForPopupHistory(orderJson: JSONObject) {\n"
+                          "        try {\n"
+                          "            val newId = orderJson.optString(\"id\", \"\").replace(\"#\", \"\").trim()"
+                      )
+                      new_popup_methods = (
+                          "    private fun isPopupOrderAcceptedOnly(m: OrderModel): Boolean {\n"
+                          "        if (m.isMissedOrRejected) return false\n"
+                          "        val st = m.status.lowercase(Locale.US)\n"
+                          "        if (st.contains(\"missed\") || st.contains(\"manual\") || st.contains(\"reject\") ||\n"
+                          "            st.contains(\"fail\") || st.contains(\"skip\") || st.contains(\"dry\") ||\n"
+                          "            st.contains(\"taken\") || st.contains(\"already\") ||\n"
+                          "            st.contains(\"رفض\") || st.contains(\"فائت\") || st.contains(\"تخطي\") ||\n"
+                          "            st.contains(\"فشل\") || st.contains(\"تعذر\") || st.contains(\"سائق آخر\")) {\n"
+                          "            return false\n"
+                          "        }\n"
+                          "        val dr = m.decisionReason.lowercase(Locale.US)\n"
+                          "        if (dr.contains(\"missed\") || dr.contains(\"reject\") || dr.contains(\"fail\") ||\n"
+                          "            dr.contains(\" > max\") || dr.contains(\" < min\") || dr.contains(\"auto-accept off\")) {\n"
+                          "            return false\n"
+                          "        }\n"
+                          "        return true\n"
+                          "    }\n\n"
+                          "    private fun recordOrderForPopupHistory(orderJson: JSONObject) {\n"
+                          "        try {\n"
+                          "            val parsedModel = OrderModel.fromJson(orderJson)\n"
+                          "            if (!isPopupOrderAcceptedOnly(parsedModel)) return\n"
+                          "            val newId = orderJson.optString(\"id\", \"\").replace(\"#\", \"\").trim()"
+                      )
+                      assert old_popup_methods in o_src, "old_popup_methods not found in OrderInterceptor.kt"
+                      o_src = o_src.replace(old_popup_methods, new_popup_methods, 1)
+
+                      old_add_unique = (
+                          "        fun addIfUnique(m: OrderModel) {\n"
+                          "            val mId = if (m.id != 0) m.id.toString() else \"\"\n"
+                          "            val mRef = m.reference.replace(\"#\", \"\").trim()"
+                      )
+                      new_add_unique = (
+                          "        fun addIfUnique(m: OrderModel) {\n"
+                          "            if (!isPopupOrderAcceptedOnly(m)) return\n"
+                          "            val mId = if (m.id != 0) m.id.toString() else \"\"\n"
+                          "            val mRef = m.reference.replace(\"#\", \"\").trim()"
+                      )
+                      assert old_add_unique in o_src, "old_add_unique not found in OrderInterceptor.kt"
+                      o_src = o_src.replace(old_add_unique, new_add_unique, 1)
+
+                      o_src = o_src.replace(
+                          'text = if (isAr) "📭 لا توجد طلبات مسجلة حتى الآن" else "📭 No recent orders recorded yet"',
+                          'text = if (isAr) "📭 لا توجد طلبات مقبولة حتى الآن" else "📭 No accepted orders yet"'
+                      )
+
+                  open(order_path, "w", encoding="utf-8").write(o_src)
+              print("Applied Stage 5 Final Fixes successfully!")
+
           def apply_deep_logger_v3():
               order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
               main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
@@ -3093,7 +3439,6 @@ jobs:
                   print("DEEP_LOG_A17_V8 already applied in repository!")
                   return
 
-              # 0a. Cache extractCert in SecurityBridge.kt so PackageManager.getPackageInfo IPC is never repeated on every order!
               if os.path.exists(sec_path):
                   sec_src = open(sec_path, "r", encoding="utf-8").read()
                   old_ext_cert = """    @JvmStatic
@@ -3116,7 +3461,6 @@ jobs:
                       )
                       open(sec_path, "w", encoding="utf-8").write(sec_src)
 
-              # 0b. Fix PackageCloaker.kt BlockedActivity redirect when launched on virtual/secondary displayId on Android 17 (41.txt line 35)
               if os.path.exists(clk_path):
                   clk_src = open(clk_path, "r", encoding="utf-8").read()
                   old_blk_act = """                                    try {
@@ -3170,7 +3514,6 @@ jobs:
                       clk_src = clk_src.replace(old_blk_v7_str, new_blk_act, 1)
                       open(clk_path, "w", encoding="utf-8").write(clk_src)
 
-              # 1. Fix LocationEngine.kt: always record lastRealLat/lastRealLng and add getEffectiveDriverLat/Lng (fixes 40.txt, 42.txt & 43.txt restDist bug!)
               if os.path.exists(loc_path):
                   loc_src = open(loc_path, "r", encoding="utf-8").read()
                   old_spoof_fn = "fun isSpoofingActive(): Boolean = isMasterRunning && isFakeLocationEnabled && OrderInterceptor.isDeliverOrderFeatureAllowed()"
@@ -3223,11 +3566,6 @@ jobs:
 
                   open(loc_path, "w", encoding="utf-8").write(loc_src)
 
-              # 2. Fix MainActivity.kt:
-              #    - Never reset fake_location_enabled or overwrite pinned fake_lat/fake_lng when reopening J-Driver (fixes 43.txt!)
-              #    - Automatically enable chkFakeLoc when user pins a location with 3 taps on the Map
-              #    - Throttle requestOrderDetailsRefresh so buildActiveOrderCard NEVER triggers a ContactFetch storm (fixes 42.txt lines 2..10!)
-              #    - Smart prioritized Copy Logs (< 45 KB) without truncating top header
               if os.path.exists(main_path):
                   main_src = open(main_path, "r", encoding="utf-8").read()
                   old_copy_click = """            setOnClickListener {
@@ -3337,7 +3675,6 @@ jobs:
                           '"[CipherHook]", "[TokenDiag]", "[LocationEngine]", "[EdgeRoute]",'
                       )
 
-                  # Throttle requestOrderDetailsRefresh in MainActivity.kt (at most once per 45s per order, single broadcast)
                   old_req_refresh = """    private fun requestOrderDetailsRefresh(order: OrderModel) {
                   val rawId = if (order.id != 0) order.id.toString() else order.reference.replace("#", "").trim()
                   val rawRef = order.reference.replace("#", "").trim()
@@ -3391,7 +3728,6 @@ jobs:
                   if old_auto_card_ref in main_src:
                       main_src = main_src.replace(old_auto_card_ref, new_auto_card_ref, 1)
 
-                  # Fix MainActivity.onCreate so it ONLY seeds real GPS & fake_location=false ONCE on first install, NEVER wiping user's pinned restaurant location when reopening J-Driver!
                   old_oncreate_seed = """        SettingsStore.setFakeLocation(this, false)
                   SettingsStore.setRouteSimActive(this, false)
                   try {
@@ -3439,7 +3775,6 @@ jobs:
                   if old_oncreate_seed in main_src:
                       main_src = main_src.replace(old_oncreate_seed, new_oncreate_seed, 1)
 
-                  # When user taps 3 times on Map to pin a location (applyImmediateSpoofLocation), automatically enable chkFakeLoc so the pinned location is immediately active in Saned!
                   old_apply_spoof_v2 = """        point1Lat = lat
                   point1Lng = lng
                   SettingsStore.setFakeLat(this, lat)
@@ -3476,18 +3811,15 @@ jobs:
 
                   open(main_path, "w", encoding="utf-8").write(main_src)
 
-              # 3. Upgrade OrderInterceptor.kt to DEEP_LOG_A17_V5 (with all 4 fixes from 44.txt & SanedAssistant-98-7bac1ec.apk!)
               order_src = open(order_path, "r", encoding="utf-8").read()
               order_src = re.sub(r"// DEEP_LOG_A17_V2(?:\s*// DEEP_LOG_A17_V[3-8])*", "// DEEP_LOG_A17_V2\n    // DEEP_LOG_A17_V3\n    // DEEP_LOG_A17_V4\n    // DEEP_LOG_A17_V5\n    // DEEP_LOG_A17_V6\n    // DEEP_LOG_A17_V7\n    // DEEP_LOG_A17_V8", order_src, count=1)
 
-              # 3a. Use LocationEngine.getEffectiveDriverLat() / getEffectiveDriverLng() everywhere
               order_src = re.sub(
                   r"val drvLat = if \(LocationEngine\.isFakeLocationEnabled && LocationEngine\.currentLat != 0\.0\) LocationEngine\.currentLat else LocationEngine\.lastRealLat\s*\n\s*val drvLng = if \(LocationEngine\.isFakeLocationEnabled && LocationEngine\.currentLng != 0\.0\) LocationEngine\.currentLng else LocationEngine\.lastRealLng",
                   "val drvLat = LocationEngine.getEffectiveDriverLat()\n                        val drvLng = LocationEngine.getEffectiveDriverLng()",
                   order_src
               )
 
-              # 3b. Stop ContactFetch storm in ACTION_REFRESH_ORDER_DETAILS and fetchOrderCustomerDetailsAsync (42.txt lines 2..10)!
               old_rcv_refresh = """                        if (oid.isNotEmpty()) fetchOrderCustomerDetailsAsync(oid, force = true)
                                   if (oref.isNotEmpty() && oref != oid) fetchOrderCustomerDetailsAsync(oref, force = true)"""
               new_rcv_refresh = """                        val targetId = oid.ifEmpty { oref }
@@ -3518,7 +3850,6 @@ jobs:
               if old_fetch_guard in order_src:
                   order_src = order_src.replace(old_fetch_guard, new_fetch_guard, 1)
 
-              # 3c. In startBootstrapLoop: stop 2.5s EncryptedPrefs spam once hasLiveProcessToken is true, and pre-warm license cache
               old_boot_read_v2 = """              if (!hasLiveProcessToken || cachedAuthToken.isEmpty()) {
                             readExactJahezEncryptedPrefs(ctx)
                         }"""
@@ -3532,7 +3863,6 @@ jobs:
               elif old_boot_read_v1 in order_src:
                   order_src = order_src.replace(old_boot_read_v1, new_boot_read, 1)
 
-              # 3d. Fix logTokenDiagOnce per-signature deduplication so [TokenDiag] never floods the 64 KB log buffer
               old_tok_diag = """    @Volatile private var lastTokenDiagSignature: String = ""
               @Volatile private var lastTokenDiagTimeMs: Long = 0L
 
@@ -3557,19 +3887,16 @@ jobs:
               if old_tok_diag in order_src:
                   order_src = order_src.replace(old_tok_diag, new_tok_diag, 1)
 
-              # 3e. Log driver coordinates & fakeLocation state in OrderDecision so it is 100% visible in Logs
               old_dec_log = 'hasCipher=${capturedDriverCipherB64.isNotEmpty()} (len=${capturedDriverCipherB64.length})"'
               new_dec_log = 'hasCipher=${capturedDriverCipherB64.isNotEmpty()} (len=${capturedDriverCipherB64.length}), fakeLoc=${LocationEngine.isFakeLocationEnabled}, drv=(${LocationEngine.getEffectiveDriverLat()},${LocationEngine.getEffectiveDriverLng()})"'
               if old_dec_log in order_src:
                   order_src = order_src.replace(old_dec_log, new_dec_log, 1)
 
-              # 3f. Fix 44.txt Bug #1: Remove hookJsonConstructors(module) from hook() (matches SanedAssistant-98-7bac1ec.apk, removes 13ms FCM JSONObject hook overhead, and stops Firebase JsonJwt from poisoning secondaryAltJwt!)
               order_src = order_src.replace(
                   "try { hookJsonConstructors(module) } catch (t: Throwable) {}",
                   "// hookJsonConstructors disabled to match SanedAssistant-98 (zero FCM JSONObject overhead & no Firebase JsonJwt interference)"
               )
 
-              # 3g. Fix 44.txt Bug #1b: In checkAndSetToken, NEVER accept or store a non-Saned JWT (e.g. Firebase fid token len=306) in secondaryAltJwt or cachedAuthToken!
               old_non_saned_jwt = """                if (!info.isSanedDriverToken && !isAuthoritativeSource) {
                               // Store as secondary fallback JWT without overwriting a verified Saned Driver token!
                               secondaryAltJwt = normBearer
@@ -3586,7 +3913,6 @@ jobs:
               if old_non_saned_jwt in order_src:
                   order_src = order_src.replace(old_non_saned_jwt, new_non_saned_jwt, 1)
 
-              # 3h. Fix 44.txt Bug #1c: In readExactJahezEncryptedPrefs, check SANED_PREFERENCES ('token') FIRST in 0.05ms (since vCode=40104 stores the live 5-min JWT in SANED_PREFERENCES!)
               old_read_exact_hdr = """    fun readExactJahezEncryptedPrefs(context: Context) {
                   val prefFileName = Native.safeH().ifEmpty { "ENCRYPTED_SANED_PREFERENCES" }"""
               new_read_exact_hdr = """    fun readExactJahezEncryptedPrefs(context: Context) {
@@ -3609,7 +3935,6 @@ jobs:
               if old_read_exact_hdr in order_src:
                   order_src = order_src.replace(old_read_exact_hdr, new_read_exact_hdr, 1)
 
-              # 3i. Fix 44.txt Bug #2: Cache verified license state in RAM for 8s so evaluateOrderDecision runs in 0.01ms (zero disk I/O or Binder IPC on the FCM order hot path!)
               old_lic_inside = """    fun isLicenseActiveInsideSaned(): Boolean {
                   val ctx = appContext ?: currentActivity"""
               new_lic_inside = """    @Volatile private var cachedLicenseOk: Boolean = false
@@ -3633,7 +3958,6 @@ jobs:
               if old_lic_inside in order_src:
                   order_src = order_src.replace(old_lic_inside, new_lic_inside, 1)
 
-              # 3j. Fix 44.txt Bug #3: In executeDirectApiCall, DO NOT retry on HTTP 400 (Order is already accepted), use initialFastReq directly on attempt 1, and log HTTP-TRACE after firing!
               old_retry_400 = 'if ((code == 401 || code == 403 || code == 400 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401) {'
               new_retry_400 = 'if ((code == 401 || code == 403 || bodyStr.contains("TokenExpired", ignoreCase = true)) && !retried401) {'
               if old_retry_400 in order_src:
@@ -3662,7 +3986,6 @@ jobs:
                       1
                   )
 
-              # 3k. Keep Cloudflare HTTP/2 connection + 4G/5G radio RRC state hot with 1.5s active polling & 4.5s HEAD keep-alive
               order_src = order_src.replace(
                   "val delayMs = if (pollIntervalSec <= 2.4f) 2400L else (pollIntervalSec * 1000).toLong().coerceAtMost(4000L)",
                   "val delayMs = if (pollIntervalSec <= 1.5f) 1500L else (pollIntervalSec * 1000).toLong().coerceAtMost(2500L)"
@@ -3672,14 +3995,11 @@ jobs:
                   "if ((nowRt - lastSocketTouchRealtime) >= 4_500L) {"
               )
 
-              # 3l. Fix triggerIncomingDispatchAcceptUi UI snapshot condition so it logs on +600ms as well
               order_src = order_src.replace(
                   "if (delayTagMs == 60L || delayTagMs == 160L || delayTagMs == 700L) {",
                   "if (delayTagMs <= 700L) {"
               )
 
-              # 3m. Fix 45.txt & 46.txt Root Cause (cfRay=-MRS Marseille detour vs -RUH Riyadh + 3s HTTP/2 PING keep-alive):
-              # Declare fastIpv4Dns locally inside createUnsafeOkHttpClient() before OkHttpClient.Builder() so it is 100% initialized when httpClient = createUnsafeOkHttpClient() runs!
               order_src = re.sub(
                   r'\s*private val preferIpv4FastDns = object : okhttp3\.Dns \{.*?\n    \}\n',
                   '\n',
@@ -3838,7 +4158,6 @@ jobs:
                   flags=re.S
               )
 
-              # Also self-heal any V4/V5/V6 artifacts and upgrade startBootstrapLoop with checkAndAutoRestartOnModuleUpdate + EdgeRoute POP monitor
               order_src = order_src.replace(
                   "val delayMs = 45_000L",
                   "val delayMs = if (pollIntervalSec <= 1.5f) 1500L else (pollIntervalSec * 1000).toLong().coerceAtMost(2500L)"
@@ -3889,7 +4208,6 @@ jobs:
                   flags=re.S
               )
 
-              # Also call checkAndAutoRestartOnModuleUpdate inside respondToPing so opening J-Driver immediately reloads Saned if updated!
               if "checkAndAutoRestartOnModuleUpdate(app)" not in order_src:
                   order_src = order_src.replace(
                       'putExtra("diag_logs_batch", DiagnosticLogger.getRecentLogsBatchText(280))',
@@ -3897,7 +4215,6 @@ jobs:
                       1
                   )
 
-              # Fix pollServerForAvailableOrders order-of-execution bug: call findAndParseEmbeddedJson BEFORE reconcileLiveActiveOrdersFromServer!
               order_src = order_src.replace(
                   """              reconcileLiveActiveOrdersFromServer(body)
                         findAndParseEmbeddedJson(body, "Server Polling (POLL) ⚡")""",
@@ -3905,7 +4222,6 @@ jobs:
                         reconcileLiveActiveOrdersFromServer(body)"""
               )
 
-              # And in reconcileLiveActiveOrdersFromServer: do NOT mark an unaccepted DISPATCHED offer (which has deliveryPrice/pickup) as already accepted!
               old_reconcile_check = """                val isTerminal = st.contains("DELIVER") || st.contains("CANCEL") || st.contains("REJECT") || st.contains("EXPIR") || st.contains("COMPLET") || st.contains("FAIL")
                           val isAssignedActive = !isTerminal && (st.contains("DISPATCH") || st.contains("ACCEPT") || st.contains("PICKED") || st.contains("ARRIV") || st.contains("PROGRESS") || st.contains("COLLECT"))"""
               new_reconcile_check = """                val idValCheck = item.optInt("requestId", item.optInt("dispatchId", item.optInt("id", 0)))
@@ -3930,7 +4246,6 @@ jobs:
               if old_ls20_no_post in order_src:
                   order_src = order_src.replace(old_ls20_no_post, new_ls20_with_post, 1)
 
-              # 3n. Eliminate nested fastApiExecutor double-hop in executeDirectApiCall so stream#0 runs synchronously on the first fastApiExecutor thread!
               old_nested_exec = """                fun runSingleStream(streamIdx: Int, delayMs: Long) {
                               fastApiExecutor.execute {
                                   try { processThreadPriorityBoost() } catch (_: Throwable) {}
@@ -3991,209 +4306,6 @@ jobs:
                   print("DEEP_LOG_A17_V2 already applied in repository!")
                   return
 
-              # 1. Upgrade DiagnosticLogger.kt with 1000-line RAM ring buffer + /data/local/tmp/saned_diag.log + PONG batch export
-              with open(diag_path, "w", encoding="utf-8") as df:
-                  df.write("""package dev.saned.assistant
-
-          import android.content.ComponentName
-          import android.content.Context
-          import android.content.Intent
-          import android.content.SharedPreferences
-          import android.net.Uri
-          import android.os.Bundle
-          import android.util.Log
-          import io.github.libxposed.api.XposedModule
-          import java.io.File
-          import java.io.PrintWriter
-          import java.io.StringWriter
-          import java.text.SimpleDateFormat
-          import java.util.ArrayDeque
-          import java.util.Date
-          import java.util.Locale
-          import java.util.concurrent.Executors
-          import java.util.concurrent.atomic.AtomicBoolean
-
-          object DiagnosticLogger {
-
-              @Volatile var xposedModule: XposedModule? = null
-              @Volatile var cachedContext: Context? = null
-
-              // Per-Hook Group Toggles (Always TRUE by default)
-              @Volatile var hookEarlyCloaker: Boolean = true
-              @Volatile var hookSecCloaker: Boolean = true
-              @Volatile var hookLocation: Boolean = true
-              @Volatile var hookDeviceSpoofer: Boolean = true
-              @Volatile var hookOrders: Boolean = true
-              @Volatile var hookBootstrapLoop: Boolean = true
-
-              private const val MAX_RAM_LINES = 1000
-              private val recentRamLines = ArrayDeque<String>(MAX_RAM_LINES + 32)
-              private val crashHandlerInstalled = AtomicBoolean(false)
-              private val providerUri: Uri = Uri.parse("content://dev.jing.sanedhook.XposedService")
-              private val logExecutor = Executors.newSingleThreadExecutor { r ->
-                  Thread(r, "Saned-DiagLogger").apply {
-                      isDaemon = true
-                      priority = Thread.MIN_PRIORITY + 2
-                  }
-              }
-
-              @JvmStatic
-              fun getRecentLogsBatchText(maxLines: Int = 320): String {
-                  synchronized(recentRamLines) {
-                      if (recentRamLines.isEmpty()) return ""
-                      val list = recentRamLines.toList()
-                      val slice = if (list.size > maxLines) list.takeLast(maxLines) else list
-                      return slice.joinToString("\\n")
-                  }
-              }
-
-              @JvmStatic
-              fun clearRamLogs() {
-                  synchronized(recentRamLines) {
-                      recentRamLines.clear()
-                  }
-                  try {
-                      val f = File("/data/local/tmp/saned_diag.log")
-                      if (f.exists()) f.writeText("")
-                  } catch (_: Throwable) {}
-              }
-
-              fun resolveAnyContext(): Context? {
-                  cachedContext?.let { return it }
-                  OrderInterceptor.resolveApplicationContext()?.let {
-                      cachedContext = it
-                      return it
-                  }
-                  return try {
-                      val atClass = Class.forName("android.app.ActivityThread")
-                      val currentAt = atClass.getMethod("currentActivityThread").invoke(null)
-                      val sysCtx = atClass.getMethod("getSystemContext").invoke(currentAt) as? Context
-                      if (sysCtx != null) cachedContext = sysCtx
-                      sysCtx
-                  } catch (_: Throwable) { null }
-              }
-
-              fun syncHookToggles(module: XposedModule? = null, prefs: SharedPreferences? = null) {
-                  if (module != null) xposedModule = module
-                  if (prefs != null) {
-                      try {
-                          hookEarlyCloaker = prefs.getBoolean("hook_early_cloaker", true)
-                          hookSecCloaker = prefs.getBoolean("hook_sec_cloaker", true)
-                          hookLocation = prefs.getBoolean("hook_location", true)
-                          hookDeviceSpoofer = prefs.getBoolean("hook_device_spoofer", true)
-                          hookOrders = prefs.getBoolean("hook_orders", true)
-                          hookBootstrapLoop = prefs.getBoolean("hook_bootstrap_loop", true)
-                      } catch (_: Throwable) {}
-                  }
-              }
-
-              fun installCrashHandler(module: XposedModule? = null, phase: String = "init") {
-                  if (module != null) xposedModule = module
-                  if (!crashHandlerInstalled.compareAndSet(false, true)) return
-                  try {
-                      val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
-                      Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-                          try {
-                              if (PackageCloaker.isPromonThrowable(throwable) && thread.name != "main") {
-                                  deliverLogLineSync(
-                                      "WARN",
-                                      "CRASH-GUARD",
-                                      "Suppressed Promon background exception on ${thread.name}: ${throwable.javaClass.name}: ${throwable.message}"
-                                  )
-                                  return@setDefaultUncaughtExceptionHandler
-                              }
-                              deliverLogLineSync("CRASH", "Thread:${thread.name}", "Uncaught exception ($phase)", throwable, maxTraceLines = 24)
-                          } catch (_: Throwable) {}
-                          prevHandler?.uncaughtException(thread, throwable)
-                      }
-                      logStep("CRASH-GUARD", "UncaughtExceptionHandler active ($phase) pid=${android.os.Process.myPid()} sdk=${android.os.Build.VERSION.SDK_INT}")
-                  } catch (_: Throwable) {}
-              }
-
-              private fun deliverLogLineSync(level: String, section: String, message: String, t: Throwable? = null, maxTraceLines: Int = 14, callTimeMs: Long = System.currentTimeMillis()) {
-                  try {
-                      val timeStr = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(callTimeMs))
-                      val errSuffix = if (t != null) {
-                          val sw = StringWriter()
-                          t.printStackTrace(PrintWriter(sw))
-                          val trace = sw.toString().lines().take(maxTraceLines).joinToString("\\n  ")
-                          "\\n  ↳ ${t.javaClass.name}: ${t.message ?: ""}\\n  $trace"
-                      } else {
-                          ""
-                      }
-                      val line = "[$timeStr] [$level] [$section] $message$errSuffix"
-                      synchronized(recentRamLines) {
-                          for (subLine in line.lines()) {
-                              if (subLine.isNotEmpty()) {
-                                  recentRamLines.addLast(subLine)
-                                  while (recentRamLines.size > MAX_RAM_LINES) {
-                                      recentRamLines.removeFirst()
-                                  }
-                              }
-                          }
-                      }
-                      try {
-                          Log.d("SanedDiag", line)
-                      } catch (_: Throwable) {}
-
-                      try {
-                          val tmpFile = File("/data/local/tmp/saned_diag.log")
-                          tmpFile.appendText(line + "\\n")
-                          tmpFile.setReadable(true, false)
-                          tmpFile.setWritable(true, false)
-                      } catch (_: Throwable) {}
-
-                      val ctx = resolveAnyContext() ?: return
-                      var delivered = false
-                      try {
-                          val extras = Bundle().apply {
-                              putString("log_line", line)
-                          }
-                          val res = ctx.contentResolver.call(providerUri, "appendDiagLog", line, extras)
-                          if (res != null && res.getBoolean("ok", false)) {
-                              delivered = true
-                          }
-                      } catch (_: Throwable) {}
-
-                      if (!delivered) {
-                          try {
-                              val intent = Intent("dev.saned.assistant.ACTION_DIAG_LOG").apply {
-                                  component = ComponentName("dev.jing.sanedhook", "dev.saned.assistant.SanedReceiver")
-                                  addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
-                                  putExtra("log_line", line)
-                              }
-                              ctx.sendBroadcast(intent)
-                          } catch (_: Throwable) {}
-                      }
-                  } catch (_: Throwable) {}
-              }
-
-              private fun dispatchLogAsync(level: String, section: String, message: String, t: Throwable? = null) {
-                  val nowMs = System.currentTimeMillis()
-                  logExecutor.execute {
-                      deliverLogLineSync(level, section, message, t, maxTraceLines = 14, callTimeMs = nowMs)
-                  }
-              }
-
-              fun logStep(section: String, message: String) {
-                  dispatchLogAsync("STEP", section, message, null)
-              }
-
-              fun logWarn(section: String, message: String) {
-                  dispatchLogAsync("WARN", section, message, null)
-              }
-
-              fun logError(section: String, message: String, t: Throwable? = null) {
-                  dispatchLogAsync("ERR", section, message, t)
-              }
-
-              fun logCrash(threadName: String, t: Throwable) {
-                  deliverLogLineSync("CRASH", "Thread:$threadName", "Uncaught exception", t, maxTraceLines = 24)
-              }
-          }
-          """)
-
-              # 2. Upgrade XposedProvider.kt: MAX_DIAG_LINES = 4000 + mergeDiagLogsBatch()
               xp_src = open(xp_path, "r", encoding="utf-8").read()
               xp_src = xp_src.replace("private const val MAX_DIAG_LINES = 300", "private const val MAX_DIAG_LINES = 4000")
               old_append_diag = """        @Synchronized
@@ -4237,7 +4349,6 @@ jobs:
               xp_src = xp_src.replace(old_append_diag, new_append_diag, 1)
               open(xp_path, "w", encoding="utf-8").write(xp_src)
 
-              # 3. Upgrade SanedReceiver.kt so ACTION_PONG also merges diag_logs_batch immediately
               rcv_src = open(rcv_path, "r", encoding="utf-8").read()
               old_rcv_pong = """  "dev.saned.assistant.ACTION_PONG" -> {
                 try {"""
@@ -4251,12 +4362,10 @@ jobs:
                   rcv_src = rcv_src.replace(old_rcv_pong, new_rcv_pong, 1)
                   open(rcv_path, "w", encoding="utf-8").write(rcv_src)
 
-              # 4. Upgrade MainActivity.kt: Show Logs tab (navLogsBtn) + Top Logs button (btnTopLogs) + sync diag_logs_batch + show Order ID on missed cards
               main_src = open(main_path, "r", encoding="utf-8").read()
               main_src = main_src.replace("btnTopLogs.visibility = View.GONE", "btnTopLogs.visibility = View.VISIBLE")
               main_src = main_src.replace("navLogsBtn.visibility = View.GONE", "navLogsBtn.visibility = View.VISIBLE")
 
-              # Align navLogsBtn padding and font size with Orders, Map, Settings
               main_src = main_src.replace(
                   """        navLogsIconBg = TextView(this).apply {
                       text = "📋"
@@ -4283,14 +4392,12 @@ jobs:
                       textSize = 13.5f"""
               )
 
-              # Show Order ID (#id) on Missed/Rejected cards in Orders tab
               old_missed_rest = 'text = order.restaurant.ifEmpty { tr("مطعم", "Restaurant") }'
               new_missed_rest = """val idTag = if (order.id > 0) " #${order.id}" else if (order.reference.isNotEmpty()) " #${order.reference}" else ""
                       text = order.restaurant.ifEmpty { tr("مطعم", "Restaurant") } + idTag"""
               assert old_missed_rest in main_src, "old_missed_rest not found in MainActivity.kt"
               main_src = main_src.replace(old_missed_rest, new_missed_rest, 1)
 
-              # Expand log filter modes in refreshDiagLogsUI to include [HTTP-TRACE], [429-DIAG], [OkHttp-Hook], [AppOkHttp], [UiAcceptDiag]
               old_order_evt_cnt = 'it.contains("[OrderCatch]") || it.contains("[OrderDecision]") || it.contains("[DirectApi]") || it.contains("[FCM]") || it.contains("[IncomingDispatchActivity]")'
               new_order_evt_cnt = 'it.contains("[OrderCatch]") || it.contains("[OrderDecision]") || it.contains("[DirectApi]") || it.contains("[HTTP-TRACE]") || it.contains("[429-DIAG]") || it.contains("[OkHttp-Hook]") || it.contains("[AppOkHttp]") || it.contains("[UiAcceptDiag]") || it.contains("[FCM]") || it.contains("[IncomingDispatchActivity]")'
               main_src = main_src.replace(old_order_evt_cnt, new_order_evt_cnt)
@@ -4312,7 +4419,6 @@ jobs:
               new_filter2_list = 'includeContinuation = line.contains("[CRASH]") || line.contains("[ERR]") || line.contains("[WARN]") || line.contains("[429-DIAG]") || line.contains("HTTP 429") || line.contains("[HTTP-TRACE]")'
               main_src = main_src.replace(old_filter2_list, new_filter2_list)
 
-              # Merge diag_logs_batch inside handlePongResponse
               old_pong_handler = 'val pongLedger = intent.getStringExtra("jdrv_trial_ledger_entry") ?: ""'
               new_pong_handler = (
                   'val pongDiagBatch = intent.getStringExtra("diag_logs_batch") ?: ""\n'
@@ -4329,7 +4435,6 @@ jobs:
               assert old_pong_handler in main_src, "old_pong_handler not found in MainActivity.kt"
               main_src = main_src.replace(old_pong_handler, new_pong_handler, 1)
 
-              # Also clear remote RAM logs when Clear Logs button is tapped
               old_clear_logs_btn = "SettingsStore.clearDiagLogs(this@MainActivity)"
               new_clear_logs_btn = """SettingsStore.clearDiagLogs(this@MainActivity)
                           try {
@@ -4341,10 +4446,8 @@ jobs:
 
               open(main_path, "w", encoding="utf-8").write(main_src)
 
-              # 5. Upgrade OrderInterceptor.kt with DEEP_LOG_A17_V2 + cross-classloader capturedRawAppHttpClient + zero-collision accept
               order_src = open(order_path, "r", encoding="utf-8").read()
 
-              # 5a. Add capturedRawAppHttpClient & executeViaRawAppClient helper
               old_client_decl = "@Volatile var capturedAppHttpClient: OkHttpClient? = null"
               new_client_decl = """// DEEP_LOG_A17_V2
               @Volatile var capturedAppHttpClient: OkHttpClient? = null
@@ -4469,7 +4572,6 @@ jobs:
               assert old_client_decl in order_src, "old_client_decl not found in OrderInterceptor.kt"
               order_src = order_src.replace(old_client_decl, new_client_decl, 1)
 
-              # 5b. Fix handlePostOrderActivityCreate so it NEVER fires competing accept calls at 0ms/60ms while executeDirectApiCall is in-flight!
               old_post_create = """            DiagnosticLogger.logStep("UiAcceptDiag", "Order #$orderIdInt screen opened while API accept pending (hasToken=${cachedAuthToken.isNotEmpty()}, inFlight=${apiInFlightIds.contains(orderIdInt)}) -> scheduling 0ms..1700ms API+UI auto-accept")
                       for (delayMs in listOf(0L, 60L, 160L, 350L, 700L, 1200L, 1700L)) {
                           mainHandler.postDelayed({
@@ -4515,7 +4617,6 @@ jobs:
               assert old_post_create in order_src, "old_post_create not found in OrderInterceptor.kt"
               order_src = order_src.replace(old_post_create, new_post_create, 1)
 
-              # 5c. Wire ACTION_CLEAR_REMOTE_LOGS and attach diag_logs_batch inside respondToPing (ACTION_PONG)
               old_refresh_details_case = '"dev.saned.assistant.ACTION_REFRESH_ORDER_DETAILS" -> {'
               new_refresh_details_case = (
                   '"dev.saned.assistant.ACTION_CLEAR_REMOTE_LOGS" -> {\n'
@@ -4531,7 +4632,6 @@ jobs:
                   'putExtra("jdrv_highest_clock_ms", SecurityBridge.trustedNowMs(app))\n                    putExtra("diag_logs_batch", DiagnosticLogger.getRecentLogsBatchText(280))'
               )
 
-              # 5d. Capture capturedRawAppHttpClient in hookOkHttp (newCall + RealCall.execute + RealCall.enqueue)
               old_hook_newcall = """                            val client = chain.thisObject as? OkHttpClient
                                       if (client != null) {
                                           capturedAppHttpClient = client
@@ -4564,7 +4664,6 @@ jobs:
                                                   val mReq = callObj.javaClass.getMethod("request")"""
               order_src = order_src.replace(old_realcall_enq, new_realcall_enq, 1)
 
-              # 5e. In startScreenWatcher: skip scanAllRoots when apiInFlightIds is not empty so it never collides with 0.0ms API accept
               old_screen_watcher = """                        if (isOrderScreen) {
                                       nextDelayMs = 80L
                                       scanAllRoots()"""
@@ -4576,7 +4675,6 @@ jobs:
               assert old_screen_watcher in order_src, "old_screen_watcher not found"
               order_src = order_src.replace(old_screen_watcher, new_screen_watcher, 1)
 
-              # 5f. In startActiveServerPolling & pollServerForAvailableOrders: throttle to safe 2400ms (~25 req/min) & log any 429
               old_poll_delay = "val delayMs = if (pollIntervalSec <= 0.55f) 560L else (pollIntervalSec * 1000).toLong().coerceAtMost(2000L)"
               new_poll_delay = "val delayMs = if (pollIntervalSec <= 2.4f) 2400L else (pollIntervalSec * 1000).toLong().coerceAtMost(4000L)"
               assert old_poll_delay in order_src, "old_poll_delay not found"
@@ -4594,7 +4692,6 @@ jobs:
               assert old_poll_429 in order_src, "old_poll_429 not found"
               order_src = order_src.replace(old_poll_429, new_poll_429, 1)
 
-              # 5g. In processHttpResponse: log all /dispatch/ HTTP responses & confirm orders accepted via Jahez OkHttp
               old_proc_resp = """            val urlMethod = request.javaClass.getMethod("url")
                       val url = urlMethod.invoke(request).toString()
 
@@ -4635,7 +4732,6 @@ jobs:
               assert old_proc_end in order_src, "old_proc_end not found"
               order_src = order_src.replace(old_proc_end, new_proc_end, 1)
 
-              # 5h. In executeDirectApiCall: use single clean stream (streamCount = 1), try capturedRawAppHttpClient first, and log full forensic diagnostics!
               old_exec_v1 = """                val wonAtom = AtomicBoolean(false)
                           val rateLimitedAtom = AtomicBoolean(false)
                           val winCodeRef = AtomicReference<Int?>(null)
@@ -4946,7 +5042,6 @@ jobs:
               assert old_exec_v1 in order_src, "old_exec_v1 not found in OrderInterceptor.kt"
               order_src = order_src.replace(old_exec_v1, new_exec_v2, 1)
 
-              # 5i. Include diagnostic metadata in failReason so even the Order Card shows why HTTP 429 occurred!
               old_fail_reason = 'val failReason = if (lastErrCode > 0) "HTTP $lastErrCode: $errMsg" else errMsg'
               new_fail_reason = """val diagMetaStr = lastDiagMetaRef.get() ?: ""
                                   val cleanErrMsg = if (errMsg == "HTTP $lastErrCode") "" else " ($errMsg)"
@@ -4968,7 +5063,6 @@ jobs:
               print("Detected pre-patched Android 17 repository; upgraded to DEEP_LOG_A17_V2 & generated C++ NDK SecurityBridge!")
               raise SystemExit(0)
 
-          # 6. Replace plaintext strings in Native.kt with encrypted SecurityBridge.decryptSlot(0..8) calls
           native_kt_path = "app/src/main/java/dev/jing/sanedhook/util/Native.kt"
           native_src = open(native_kt_path, "r", encoding="utf-8").read()
           native_src = re.sub(
@@ -5011,7 +5105,6 @@ jobs:
           )
           open(native_kt_path, "w", encoding="utf-8").write(native_src)
 
-          # 7. Patch MainActivity.kt: wire Immortal Trial Vault, Live Network Time Gate, AUTO_TIME check & PONG ledger sync
           main_path = "app/src/main/java/dev/saned/assistant/ui/MainActivity.kt"
           main_src = open(main_path, "r", encoding="utf-8").read()
           main_src = re.sub(
@@ -5070,7 +5163,6 @@ jobs:
               }""",
               main_src, count=1, flags=re.S
           )
-          # Enforce AUTO_TIME and clock tampering check inside evaluateLicenseKey when a time-limited/trial key is used
           main_src = main_src.replace(
               "val expiryMs: Long = when {",
               """if (expCode != -1 && !dev.saned.assistant.SecurityBridge.isAutoTimeEnabled(this)) {
@@ -5082,12 +5174,10 @@ jobs:
                   }
                   val expiryMs: Long = when {"""
           )
-          # Record verified network time inside syncRemoteKillSwitchAsync
           main_src = main_src.replace(
               "if (dateHdr > 1700000000000L) {",
               "if (dateHdr > 1700000000000L) {\n                        dev.saned.assistant.SecurityBridge.recordVerifiedNetworkTime(this@MainActivity, dateHdr)"
           )
-          # Harden btnOneDayTrial click listener to require Live HTTPS Network Time match (±3 mins) & check Immortal Vault
           old_trial_click = """            setOnClickListener {
                           val devId = getHardwareDeviceId()
                           val (trialKey, trialTagHex) = deriveDeterministicDeviceTrialKey(devId)
@@ -5182,7 +5272,6 @@ jobs:
               count=1,
               flags=re.S
           )
-          # Also heal trial ledger & clock ratchet immediately in handlePongResponse when Saned replies to PING after a J-Driver reinstall!
           main_src = main_src.replace(
               'val pingTime = intent.getLongExtra("ping_timestamp", 0L)',
               """val pongLedger = intent.getStringExtra("jdrv_trial_ledger_entry") ?: ""
@@ -5200,7 +5289,6 @@ jobs:
               }
               val pingTime = intent.getLongExtra("ping_timestamp", 0L)"""
           )
-          # Replace plaintext REMOTE_CONTROL_URLS in MainActivity.kt with encrypted C++ slots (9..14)
           main_src, n_urls = re.subn(
               r"private val REMOTE_CONTROL_URLS = listOf\(.*?\)",
               "private val REMOTE_CONTROL_URLS: List<String> get() = dev.saned.assistant.SecurityBridge.getRemoteControlUrls(this)",
@@ -5208,7 +5296,6 @@ jobs:
           )
           assert n_urls == 1, "REMOTE_CONTROL_URLS replacement failed"
 
-          # Check hosts/firewall tamper & Immortal Kill Vault inside evaluateLicenseKey
           old_gate_hdr = "// 1. Check Remote Kill-Switch & Device Blocklist"
           new_gate_hdr = (
               "// 1. Check Remote Kill-Switch, Anti-DNS/Hosts Shield & Immortal Kill Vault\n"
@@ -5237,7 +5324,6 @@ jobs:
           assert old_epoch_chk in main_src, "old_epoch_chk not found"
           main_src = main_src.replace(old_epoch_chk, new_epoch_chk, 1)
 
-          # Upgrade syncRemoteKillSwitchAsync to record heartbeat, detect spoofed responses & persist Immortal Kill State
           assert "for (baseUrl in urls) {" in main_src, "baseUrl loop not found"
           main_src = main_src.replace(
               "for (baseUrl in urls) {",
@@ -5293,7 +5379,6 @@ jobs:
           assert n_sync2 == 1, "n_sync2 replacement failed"
           open(main_path, "w", encoding="utf-8").write(main_src)
 
-          # 8. Patch OrderInterceptor.kt: use trustedNowMs(), enforce AUTO_TIME, never overwrite older trial ledger, and send trial ledger in ACTION_PONG
           order_path = "app/src/main/java/dev/saned/assistant/OrderInterceptor.kt"
           order_src = open(order_path, "r", encoding="utf-8").read()
           order_src = re.sub(
@@ -5306,7 +5391,6 @@ jobs:
               "private fun reconstructExpectedCertSha256(): ByteArray {\n        return SecurityBridge.expectedCertSha256()\n    }",
               order_src, count=1, flags=re.S
           )
-          # Replace raw System.currentTimeMillis() in isLicenseActiveInsideSaned() with SecurityBridge.trustedNowMs + AUTO_TIME + ImmortalKillLocked
           order_src, n_lic_act = re.subn(
               r"fun isLicenseActiveInsideSaned\(\): Boolean \{\s+if \(!jdrvRemoteAppEnabled\) return false\s+if \(!jdrvLicActive \|\| jdrvEngineMagic != 0x4A44 \|\| jdrvLicKey\.isBlank\(\)\) return false\s+val nowMs = System\.currentTimeMillis\(\)\s+if \(jdrvLicExpiryMs > 0L && nowMs > jdrvLicExpiryMs\) return false",
               (
@@ -5323,7 +5407,6 @@ jobs:
           )
           assert n_lic_act == 1, "n_lic_act replacement failed"
 
-          # Enforce expCode consistency & HMAC token signature in OrderInterceptor
           order_src = re.sub(
               r"jdrvLicFeatureMask = featureMask\s+jdrvLicEpoch = keyEpoch\s+if \(sigTok\.isNotEmpty\(\)\) \{.*?\n\s+\} else \{\s+true\s+\}",
               (
@@ -5347,7 +5430,6 @@ jobs:
               ),
               order_src, count=1, flags=re.S
           )
-          # Never allow a newer bLedger from a reinstalled J-Driver to overwrite an older jdrvTrialLedgerEntry inside net.jahez.fleets!
           order_src, n_bledger = re.subn(
               r'val bLedger = bundle\.getString\("jdrv_trial_ledger_entry", ""\) \?: ""\s+if \(bLedger\.isNotEmpty\(\)\) \{\s+jdrvTrialLedgerEntry = bLedger',
               (
@@ -5368,12 +5450,10 @@ jobs:
           )
           assert n_bledger == 1, "n_bledger replacement failed"
 
-          # Include jdrv_trial_ledger_entry and jdrv_highest_clock_ms in ACTION_PONG
           order_src = order_src.replace(
               'putExtra("okhttp_hooked", isOkHttpHooked)',
               'putExtra("okhttp_hooked", isOkHttpHooked)\n                    putExtra("jdrv_trial_ledger_entry", jdrvTrialLedgerEntry)\n                    putExtra("jdrv_highest_clock_ms", SecurityBridge.trustedNowMs(app))'
           )
-          # Replace plaintext URLs in OrderInterceptor.checkRemoteKillSwitchFromSaned() with encrypted C++ slots & anti-firewall probe
           order_src, n_ord_urls = re.subn(
               r'val urls = listOf\(\s*"https://raw\.githubusercontent\.com/.*?\)',
               'val urls = SecurityBridge.getRemoteControlUrls(appContext ?: currentActivity)',
@@ -5426,7 +5506,6 @@ jobs:
           assert n_ord_kill == 1, "n_ord_kill replacement failed"
           open(order_path, "w", encoding="utf-8").write(order_src)
 
-          # 9. Patch SettingsStore.kt so /data/local/tmp/saned_config.json preserves any older trial ledger before writing
           store_path = "app/src/main/java/dev/saned/assistant/SettingsStore.kt"
           store_src = open(store_path, "r", encoding="utf-8").read()
           store_src = store_src.replace(
@@ -5447,14 +5526,12 @@ jobs:
           )
           open(store_path, "w", encoding="utf-8").write(store_src)
 
-          # 10. Set allowBackup="false" in AndroidManifest.xml
           manifest_path = "app/src/main/AndroidManifest.xml"
           manifest_src = open(manifest_path, "r", encoding="utf-8").read()
           open(manifest_path, "w", encoding="utf-8").write(
               manifest_src.replace('android:allowBackup="true"', 'android:allowBackup="false"')
           )
 
-          # 11. Add R8 obfuscation dictionary & keep JNI bridge in app/proguard-rules.pro
           alpha = "abcdefghijklmnopqrstuvwxyz"
           words = [c1 + c2 for c1 in alpha for c2 in alpha if (c1 + c2) not in ("do", "if", "in", "is", "as", "by", "to")]
           secrets.SystemRandom().shuffle(words)
@@ -5473,7 +5550,6 @@ jobs:
           }
           """)
 
-          # 12. Update app/build.gradle.kts to strip metadata files cleanly
           gradle_path = "app/build.gradle.kts"
           gradle_src = open(gradle_path, "r", encoding="utf-8").read()
           if "DebugProbesKt.bin" not in gradle_src:
@@ -5489,8 +5565,6 @@ jobs:
               )
               open(gradle_path, "w", encoding="utf-8").write(gradle_src)
 
-          # 13. Apply all 8 UI & UX fixes requested by the user (100% precision)
-          # Fix themes.xml so Dark Mode never turns CheckBox/Switch text white on white cards (Image 16)
           theme_path = "app/src/main/res/values/themes.xml"
           if os.path.exists(theme_path):
               t_src = open(theme_path, "r", encoding="utf-8").read()
@@ -5499,7 +5573,6 @@ jobs:
 
           main_src = open(main_path, "r", encoding="utf-8").read()
 
-          # Ensure Change Location / Direct Order Delivery starts OFF by default on app launch (Images 10 & 19)
           old_oncreate_pts = 'routeSimSpeedKmh = SettingsStore.getRouteSimSpeedKmh(this)'
           new_oncreate_pts = (
               'SettingsStore.setFakeLocation(this, false)\n'
@@ -5527,7 +5600,6 @@ jobs:
           assert old_oncreate_pts in main_src, "old_oncreate_pts not found"
           main_src = main_src.replace(old_oncreate_pts, new_oncreate_pts, 1)
 
-          # Fix #1 (Image 9): Bottom Navigation Bar alignment (center labels directly beneath icons) & distinct colors for Orders, Map, Settings
           old_bottom_nav = """        navOrdersIconBg = TextView(this).apply {
                       text = "🏠"
                       textSize = 20f
@@ -5754,7 +5826,6 @@ jobs:
           assert old_map_tab_open in main_src, "old_map_tab_open not found"
           main_src = main_src.replace(old_map_tab_open, new_map_tab_open, 1)
 
-          # Fix #4 (Image 13): Replace Generate New ID & Copy ID with Paste IMEI & Force Stop Saned
           old_aid_btns = """        val btnGen = Button(this).apply {
                       text = tr("🎲 توليد معرف جديد", "🎲 Generate New ID")
                       textSize = 14f
@@ -5875,9 +5946,6 @@ jobs:
           assert old_aid_btns in main_src, "old_aid_btns not found"
           main_src = main_src.replace(old_aid_btns, new_aid_btns, 1)
 
-          # Fix #8 (Image 19) & Fix #2 (Image 10):
-          # Image 19: Convert chkFakeLoc checkbox into a centered small-to-medium toggle button (OFF by default) bound to original function
-          # Image 10: Replace the 3 complex button rows (modeRow, twoPtBox, layerRow) with a single Change Location toggle button (OFF by default)
           old_chk_fakeloc = """        // Toggles Row (Pure Arabic or Pure English — NO mixed text!)
                   chkFakeLoc = CheckBox(this).apply {
                       text = tr("تفعيل وضع توصيل الطلب المباشر (DELIVER ORDER)", "Enable Direct Order Delivery (DELIVER ORDER)")
@@ -6040,7 +6108,6 @@ jobs:
           assert old_layer_add in main_src, "old_layer_add not found"
           main_src = main_src.replace(old_layer_add, new_layer_add, 1)
 
-          # In applyImmediateSpoofLocation, do NOT force chkFakeLoc.isChecked = true if the user has Change Location turned OFF!
           old_apply_spoof = """        if (::chkFakeLoc.isInitialized && !chkFakeLoc.isChecked) {
                       chkFakeLoc.isChecked = true
                   }
@@ -6070,7 +6137,6 @@ jobs:
           assert old_apply_spoof in main_src, "old_apply_spoof not found"
           main_src = main_src.replace(old_apply_spoof, new_apply_spoof, 1)
 
-          # Fix #5 (Image 15): Replace car emoji marker with Google Maps small sky-blue circular dot & show current location
           old_car_css = """                    .car-marker-icon {
                                   display: flex; align-items: center; justify-content: center;
                                   width: 36px; height: 36px; border-radius: 50%;
@@ -6102,7 +6168,6 @@ jobs:
           assert old_driver_icon in main_src, "old_driver_icon not found"
           main_src = main_src.replace(old_driver_icon, new_driver_icon, 1)
 
-          # Fix #6 & #7 (Images 16 & 17): Fix horizontal alignment, explicit dark text color, and bold typeface on all switches & checkboxes
           old_sw_master = """        swMaster = Switch(this).apply {
                       text = tr("تفعيل جميع ميزات J-Driver (تشغيل / إيقاف شامل)", "Enable All J-Driver Functions (Master ON / OFF)")
                       textSize = 15.5f
@@ -6292,7 +6357,6 @@ jobs:
 
           open(main_path, "w", encoding="utf-8").write(main_src)
 
-          # Fix #3 (Image 11) & Fix #4 (Force Stop Saned receiver) in OrderInterceptor.kt
           order_src = open(order_path, "r", encoding="utf-8").read()
           old_deliver_box = """            val tvDeliverHdr = TextView(activity).apply {
                           text = if (isAr) "📦 DELIVER ORDER (توصيل الطلب)" else "📦 DELIVER ORDER"
@@ -6367,7 +6431,6 @@ jobs:
           assert old_deliver_box in order_src, "old_deliver_box not found"
           order_src = order_src.replace(old_deliver_box, new_deliver_box, 1)
 
-          # Wire ACTION_FORCE_STOP_SANED inside OrderInterceptor.kt so Force Stop Saned works even without root!
           old_rcv_when = '"dev.saned.assistant.ACTION_CLEAR_TOKEN" -> {'
           new_rcv_when = (
               '"dev.saned.assistant.ACTION_FORCE_STOP_SANED" -> {\n'
@@ -6389,10 +6452,8 @@ jobs:
           open(order_path, "w", encoding="utf-8").write(order_src)
 
 
-          # 14. Fix Orders Tab Restaurant Name, Customer Details, Call Customer & WhatsApp buttons (Images 20 & 21)
           main_src = open(main_path, "r", encoding="utf-8").read()
 
-          # Always show Call Customer & WhatsApp buttons on active order cards (as in Image 20) and auto-refresh missing restaurant/phone details
           old_call_wa_block = """        // 5. Call & WhatsApp Buttons Row
                   val cleanPhone = NotificationHelper.formatPhoneForWhatsApp(order.customerPhone)
                   if (cleanPhone.isNotEmpty()) {
@@ -6532,7 +6593,6 @@ jobs:
           assert old_call_wa_block in main_src, "old_call_wa_block not found"
           main_src = main_src.replace(old_call_wa_block, new_call_wa_block, 1)
 
-          # Also show customer phone inside dropoffDetailTv when available
           old_dropoff_parts = 'if (order.customerName.isNotEmpty() && order.customerName != "Customer") parts.add(order.customerName)'
           new_dropoff_parts = (
               'if (order.customerName.isNotEmpty() && order.customerName != "Customer") parts.add(order.customerName)\n'
@@ -6543,10 +6603,8 @@ jobs:
 
           open(main_path, "w", encoding="utf-8").write(main_src)
 
-          # Patch OrderInterceptor.kt to guarantee Restaurant Name (vendorName) & Customer Phone (clientPhone) extraction from SQLite & API
           order_src = open(order_path, "r", encoding="utf-8").read()
 
-          # 1. Add vendorNameCache in OrderInterceptor
           old_cust_cache_decl = "private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()"
           new_cust_cache_decl = (
               "private val customerDetailsCache = ConcurrentHashMap<String, Triple<String, String, Double>>()\n"
@@ -6555,7 +6613,6 @@ jobs:
           assert old_cust_cache_decl in order_src, "old_cust_cache_decl not found"
           order_src = order_src.replace(old_cust_cache_decl, new_cust_cache_decl, 1)
 
-          # 2. In parseCursorRowWithLnzW, fallback to vendorNameCache and include restName & finalCustPhone in syncSignature
           old_rest_calc = """        val restName = when {
                       !posRestAr.isNullOrEmpty() && !posRestEn.isNullOrEmpty() && posRestAr != posRestEn -> "$posRestEn - $posRestAr"
                       !posRestAr.isNullOrEmpty() -> posRestAr
@@ -6587,7 +6644,6 @@ jobs:
           assert old_sync_sig in order_src, "old_sync_sig not found"
           order_src = order_src.replace(old_sync_sig, new_sync_sig, 1)
 
-          # 3. In scanJahezDatabases, add schema-independent SELECT * FROM vendor, SELECT * FROM client, and SELECT * FROM dispatch_info pre-scanners!
           old_exact_sql_exec = """                val c = openedDb.rawQuery(exactSql, null)
                           exactCursor = c
                           while (c.moveToNext()) {
@@ -6723,7 +6779,6 @@ jobs:
           assert old_exact_sql_exec in order_src, "old_exact_sql_exec not found"
           order_src = order_src.replace(old_exact_sql_exec, new_exact_sql_exec, 1)
 
-          # 4. In fetchOrderCustomerDetailsAsync: resolve 10-digit referenceId to true 9-digit dispatchId, and extract restaurant name (vendorName) from API!
           old_fetch_id_line = """        val cleanId = orderId.replace("#", "").trim()
                   val orderIdInt = cleanId.filter { it.isDigit() }.take(9).toIntOrNull() ?: 0"""
 
@@ -6782,7 +6837,6 @@ jobs:
           assert old_fetch_send_rest in order_src, "old_fetch_send_rest not found"
           order_src = order_src.replace(old_fetch_send_rest, new_fetch_send_rest, 1)
 
-          # 5. In extractAndProcessOrderJson: prioritize vendorName/restaurantName/storeName BEFORE subscriberName ("Jahez APP") and check vendor object
           old_json_rest = 'var restaurant = extractFirstString(json, "subscriberName", "vendorName", '
           new_json_rest = 'var restaurant = extractFirstString(json, "vendorName", '
           assert old_json_rest in order_src, "old_json_rest not found"
@@ -6798,7 +6852,6 @@ jobs:
           assert old_dedup_key in order_src, "old_dedup_key not found"
           order_src = order_src.replace(old_dedup_key, new_dedup_key, 1)
 
-          # 6. In sendOrderToLog: check vendorNameCache for mergedRestaurant and include restaurant & customerName in isUnchangedExisting!
           old_merged_rest = 'val mergedRestaurant = restaurant.ifEmpty { prevJson?.optString("restaurant", "") ?: "" }'
           new_merged_rest = 'val mergedRestaurant = restaurant.ifEmpty { vendorNameCache[idKey] ?: vendorNameCache[cacheKey] ?: vendorNameCache[cleanOrderId] ?: prevJson?.optString("restaurant", "") ?: "" }'
           assert old_merged_rest in order_src, "old_merged_rest not found"
@@ -6815,7 +6868,6 @@ jobs:
           assert old_unchanged in order_src, "old_unchanged not found"
           order_src = order_src.replace(old_unchanged, new_unchanged, 1)
 
-          # 7. In respondToPing: throttle SQLite DB scan to once every 10s and skip when an order accept is in-flight
           old_ping_comment = "// Do not scan historical SQLite DB on every ping so old orders never flood or reorder the active list"
           new_ping_scan = """val nowPingRt = SystemClock.elapsedRealtime()
                       if (apiInFlightIds.isEmpty() && (nowPingRt - lastPingDbScanRealtime) >= 10_000L) {
@@ -6825,7 +6877,6 @@ jobs:
           assert old_ping_comment in order_src, "old_ping_comment not found"
           order_src = order_src.replace(old_ping_comment, new_ping_scan, 1)
 
-          # 7b. In processSqliteRow: ONLY call fetchOrderCustomerDetailsAsync for currently active orders (never historical SQLite rows!)
           old_sqlite_fetch = """        if ((finalCustPhone.isEmpty() || effectiveFoodPrice <= 0.0) && !isCompleteOrOld) {
                       fetchOrderCustomerDetailsAsync(idStr)
                   }"""
@@ -6835,7 +6886,6 @@ jobs:
           assert old_sqlite_fetch in order_src, "old_sqlite_fetch not found"
           order_src = order_src.replace(old_sqlite_fetch, new_sqlite_fetch, 1)
 
-          # 7c. In startActiveServerPolling & pollServerForAvailableOrders: pause polling during in-flight accepts & respect HTTP 429 cooldown
           old_polling_block = """    fun startActiveServerPolling() {
                   if (!isPollingRunning.compareAndSet(false, true)) return
                   CoroutineScope(Dispatchers.IO).launch {
@@ -6945,7 +6995,6 @@ jobs:
           assert old_polling_block in order_src, "old_polling_block not found"
           order_src = order_src.replace(old_polling_block, new_polling_block, 1)
 
-          # 7d. In executeDirectApiCall: Android 17 Ultra-Fast 0.0ms Primary Shot + Smart 90ms Hedge + Adaptive HTTP 429 Retry + Compose UI Fallback
           old_exec_api_block = """                val langHeader = cachedLanguage.ifEmpty { "en" }
                           val cipherHeader = capturedDriverCipherB64
 
@@ -7247,7 +7296,6 @@ jobs:
           assert old_exec_api_block in order_src, "old_exec_api_block not found"
           order_src = order_src.replace(old_exec_api_block, new_exec_api_block, 1)
 
-          # 7e. Reduce post-accept detail fetch storm & allow HTTP 429 retry + full Compose UI fallback
           old_post_accept_storm = """                        // Immediately fetch Price Food & customer details from Saned API + SQLite DB so Accepted card always displays Price Food!
                                   fetchOrderCustomerDetailsAsync(orderIdNum, force = true)
                                   for (delayMs in listOf(450L, 1300L, 2800L, 5500L)) {
@@ -7370,7 +7418,6 @@ jobs:
 
           open(order_path, "w", encoding="utf-8").write(order_src)
 
-          # 8. In PackageCloaker.kt: exempt internal SecurityBridge / OrderInterceptor stack frames so native lib & cert checks inside net.jahez.fleets never hit NameNotFoundException
           cloaker_path = "app/src/main/java/dev/saned/assistant/PackageCloaker.kt"
           if os.path.exists(cloaker_path):
               clk_src = open(cloaker_path, "r", encoding="utf-8").read()
